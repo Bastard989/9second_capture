@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from pathlib import Path
 
 
@@ -35,7 +36,5 @@ def exists(key: str) -> bool:
 
 def delete(key: str) -> None:
     p = _key_to_path(key)
-    try:
+    with suppress(FileNotFoundError):
         p.unlink()
-    except FileNotFoundError:
-        pass

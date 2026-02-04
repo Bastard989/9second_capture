@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -72,6 +73,9 @@ class TranscriptSegment(Base):
     """
 
     __tablename__ = "transcript_segments"
+    __table_args__ = (
+        UniqueConstraint("meeting_id", "seq", name="uq_transcript_segments_meeting_seq"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id"), nullable=False)

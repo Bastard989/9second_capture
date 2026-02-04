@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import requests
 
 from interview_analytics_agent.common.config import get_settings
-from interview_analytics_agent.llm.errors import ErrCode, ProviderError
+from interview_analytics_agent.common.errors import ErrCode, ProviderError
 
 log = logging.getLogger(__name__)
 
@@ -28,8 +28,8 @@ class OpenAICompatProvider:
         s = get_settings()
         api_base = getattr(s, "openai_api_base", "") or ""
         api_key = getattr(s, "openai_api_key", "") or ""
-        model = getattr(s, "openai_model", "gpt-4o-mini") or "gpt-4o-mini"
-        timeout_s = int(getattr(s, "openai_timeout_s", 60) or 60)
+        model = getattr(s, "llm_model_id", "gpt-4o-mini") or "gpt-4o-mini"
+        timeout_s = int(getattr(s, "llm_request_timeout_sec", 60) or 60)
 
         if not api_base:
             raise ProviderError(ErrCode.LLM_PROVIDER_ERROR, "OPENAI_API_BASE не задан")

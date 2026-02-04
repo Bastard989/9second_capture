@@ -2,7 +2,7 @@
 Worker Analytics.
 
 Алгоритм (MVP):
-- BLPOP из q:analytics
+- читаем из Redis Stream q:analytics (consumer group)
 - читаем сегменты встречи
 - собираем enhanced_transcript
 - строим report через processing.analytics (LLM orchestrator)
@@ -12,16 +12,16 @@ Worker Analytics.
 
 from __future__ import annotations
 
-import json
 import time
+from contextlib import suppress
 
 from interview_analytics_agent.common.logging import get_project_logger, setup_logging
 from interview_analytics_agent.domain.enums import PipelineStatus
 from interview_analytics_agent.processing.aggregation import build_enhanced_transcript
 from interview_analytics_agent.processing.analytics import build_report
 from interview_analytics_agent.queue.dispatcher import Q_ANALYTICS, enqueue_delivery
-from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.queue.retry import requeue_with_backoff
+from interview_analytics_agent.queue.streams import ack_task, consumer_name, read_task
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import (
     MeetingRepository,
@@ -29,20 +29,21 @@ from interview_analytics_agent.storage.repositories import (
 )
 
 log = get_project_logger()
+GROUP_ANALYTICS = "g:analytics"
 
 
 def run_loop() -> None:
-    r = redis_client()
+    consumer = consumer_name("worker-analytics")
     log.info("worker_analytics_started", extra={"payload": {"queue": Q_ANALYTICS}})
 
     while True:
-        item = r.brpop(Q_ANALYTICS, timeout=5)
-        if not item:
+        msg = read_task(stream=Q_ANALYTICS, group=GROUP_ANALYTICS, consumer=consumer, block_ms=5000)
+        if not msg:
             continue
 
-        _, raw = item
+        should_ack = False
         try:
-            task = json.loads(raw)
+            task = msg.payload
             meeting_id = task["meeting_id"]
 
             with db_session() as session:
@@ -64,18 +65,27 @@ def run_loop() -> None:
                     mrepo.save(m)
 
             enqueue_delivery(meeting_id=meeting_id)
+            should_ack = True
 
         except Exception as e:
             log.error(
-                "worker_analytics_error", extra={"payload": {"err": str(e)[:200], "raw": raw[:300]}}
+                "worker_analytics_error",
+                extra={
+                    "payload": {"err": str(e)[:200], "task": task if "task" in locals() else None}
+                },
             )
             try:
-                task = task if "task" in locals() else {"raw": raw}
+                task = task if "task" in locals() else {}
                 requeue_with_backoff(
                     queue_name=Q_ANALYTICS, task_payload=task, max_attempts=3, backoff_sec=2
                 )
+                should_ack = True
             except Exception:
                 pass
+        finally:
+            if should_ack:
+                with suppress(Exception):
+                    ack_task(stream=Q_ANALYTICS, group=GROUP_ANALYTICS, entry_id=msg.entry_id)
 
 
 def main() -> None:

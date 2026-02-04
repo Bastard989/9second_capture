@@ -2,7 +2,7 @@
 Worker Enhancer.
 
 Алгоритм (MVP):
-- BLPOP из q:enhancer
+- читаем из Redis Stream q:enhancer (consumer group)
 - берём все сегменты встречи
 - прогоняем enhance_text, обновляем enhanced_text
 - публикуем transcript.update (по каждому сегменту)
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import suppress
 
 from interview_analytics_agent.common.logging import get_project_logger, setup_logging
 from interview_analytics_agent.processing.enhancer import enhance_text
@@ -20,10 +21,12 @@ from interview_analytics_agent.processing.quality import quality_score
 from interview_analytics_agent.queue.dispatcher import Q_ENHANCER, enqueue_analytics
 from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.queue.retry import requeue_with_backoff
+from interview_analytics_agent.queue.streams import ack_task, consumer_name, read_task
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import TranscriptSegmentRepository
 
 log = get_project_logger()
+GROUP_ENHANCER = "g:enhancer"
 
 
 def _publish_update(meeting_id: str, payload: dict) -> None:
@@ -31,17 +34,17 @@ def _publish_update(meeting_id: str, payload: dict) -> None:
 
 
 def run_loop() -> None:
-    r = redis_client()
+    consumer = consumer_name("worker-enhancer")
     log.info("worker_enhancer_started", extra={"payload": {"queue": Q_ENHANCER}})
 
     while True:
-        item = r.brpop(Q_ENHANCER, timeout=5)
-        if not item:
+        msg = read_task(stream=Q_ENHANCER, group=GROUP_ENHANCER, consumer=consumer, block_ms=5000)
+        if not msg:
             continue
 
-        _, raw = item
+        should_ack = False
         try:
-            task = json.loads(raw)
+            task = msg.payload
             meeting_id = task["meeting_id"]
 
             with db_session() as session:
@@ -70,18 +73,27 @@ def run_loop() -> None:
                         )
 
             enqueue_analytics(meeting_id=meeting_id)
+            should_ack = True
 
         except Exception as e:
             log.error(
-                "worker_enhancer_error", extra={"payload": {"err": str(e)[:200], "raw": raw[:300]}}
+                "worker_enhancer_error",
+                extra={
+                    "payload": {"err": str(e)[:200], "task": task if "task" in locals() else None}
+                },
             )
             try:
-                task = task if "task" in locals() else {"raw": raw}
+                task = task if "task" in locals() else {}
                 requeue_with_backoff(
                     queue_name=Q_ENHANCER, task_payload=task, max_attempts=3, backoff_sec=1
                 )
+                should_ack = True
             except Exception:
                 pass
+        finally:
+            if should_ack:
+                with suppress(Exception):
+                    ack_task(stream=Q_ENHANCER, group=GROUP_ENHANCER, entry_id=msg.entry_id)
 
 
 def main() -> None:

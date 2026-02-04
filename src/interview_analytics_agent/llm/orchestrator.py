@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from interview_analytics_agent.common.config import get_settings
-from interview_analytics_agent.llm.errors import ErrCode, ProviderError
+from interview_analytics_agent.common.errors import ErrCode, ProviderError
 
 log = logging.getLogger(__name__)
 

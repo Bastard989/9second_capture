@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from alembic import context
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.storage.models import Base
 

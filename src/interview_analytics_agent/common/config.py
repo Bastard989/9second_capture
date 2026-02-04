@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     auth_mode: str = Field(default="api_key", alias="AUTH_MODE")  # api_key|jwt|none
     api_keys: str = Field(default="", alias="API_KEYS")
+    service_api_keys: str = Field(default="", alias="SERVICE_API_KEYS")
+    allow_service_api_key_in_jwt_mode: bool = Field(
+        default=True, alias="ALLOW_SERVICE_API_KEY_IN_JWT_MODE"
+    )
+    oidc_issuer_url: str | None = Field(default=None, alias="OIDC_ISSUER_URL")
+    oidc_jwks_url: str | None = Field(default=None, alias="OIDC_JWKS_URL")
+    oidc_audience: str | None = Field(default=None, alias="OIDC_AUDIENCE")
+    oidc_algorithms: str = Field(default="RS256", alias="OIDC_ALGORITHMS")
+    oidc_discovery_timeout_sec: int = Field(default=5, alias="OIDC_DISCOVERY_TIMEOUT_SEC")
+    jwt_shared_secret: str | None = Field(default=None, alias="JWT_SHARED_SECRET")
+    jwt_clock_skew_sec: int = Field(default=30, alias="JWT_CLOCK_SKEW_SEC")
 
     # -------------------------------------------------------------------------
     # Storage
@@ -41,8 +52,6 @@ class Settings(BaseSettings):
         alias="POSTGRES_DSN",
     )
     redis_url: str = Field(default="redis://redis:6379/0", alias="REDIS_URL")
-
-
 
     chunks_dir: str = Field(default="./data/chunks", alias="CHUNKS_DIR")
     # -------------------------------------------------------------------------

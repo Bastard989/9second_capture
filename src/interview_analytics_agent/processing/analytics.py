@@ -24,9 +24,9 @@ def _build_orchestrator():
         return None
 
     # импортируем только если LLM реально включён
-    from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
     from interview_analytics_agent.llm.mock import MockLLMProvider
     from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
+    from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
 
     # если ключа нет — используем mock
     if not (s.openai_api_key or ""):

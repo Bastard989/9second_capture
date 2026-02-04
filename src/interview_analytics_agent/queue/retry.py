@@ -4,7 +4,7 @@ Retry/DLQ утилиты для очередей.
 Назначение:
 - аккуратно перекидывать задачи обратно в очередь с ограниченным числом попыток
 - делать простой backoff (sleep) между повторными постановками
-- (в MVP) DLQ как отдельная очередь <queue>:dlq
+- DLQ как отдельный stream <queue>:dlq
 
 Важно:
 - это синхронная реализация (подходит для наших воркеров)
@@ -12,18 +12,13 @@ Retry/DLQ утилиты для очередей.
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
 from interview_analytics_agent.common.logging import get_project_logger
-from interview_analytics_agent.queue.redis import redis_client
+from interview_analytics_agent.queue.streams import enqueue, stream_dlq_name
 
 log = get_project_logger()
-
-
-def _dlq_name(queue_name: str) -> str:
-    return f"{queue_name}:dlq"
 
 
 def requeue_with_backoff(
@@ -40,15 +35,13 @@ def requeue_with_backoff(
     - True: задача поставлена обратно в очередь
     - False: задача отправлена в DLQ
     """
-    r = redis_client()
-
     attempts = int(task_payload.get("attempts", 0)) + 1
     task_payload["attempts"] = attempts
 
     if attempts > max_attempts:
         # В DLQ — чтобы не зациклиться
-        dlq = _dlq_name(queue_name)
-        r.lpush(dlq, json.dumps(task_payload, ensure_ascii=False))
+        dlq = stream_dlq_name(queue_name)
+        enqueue(dlq, task_payload)
         log.warning(
             "task_moved_to_dlq",
             extra={
@@ -66,7 +59,7 @@ def requeue_with_backoff(
     if backoff_sec and backoff_sec > 0:
         time.sleep(backoff_sec)
 
-    r.lpush(queue_name, json.dumps(task_payload, ensure_ascii=False))
+    enqueue(queue_name, task_payload)
     log.warning(
         "task_requeued",
         extra={

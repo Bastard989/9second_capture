@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0001_init"
@@ -48,6 +49,7 @@ def upgrade() -> None:
         sa.Column("raw_text", sa.Text(), nullable=False),
         sa.Column("enhanced_text", sa.Text(), nullable=False),
         sa.Column("confidence", sa.Float(), nullable=True),
+        sa.UniqueConstraint("meeting_id", "seq", name="uq_transcript_segments_meeting_seq"),
     )
     op.create_index(
         "ix_transcript_segments_meeting_seq",

@@ -26,8 +26,6 @@ from interview_analytics_agent.common.logging import get_project_logger, setup_l
 from interview_analytics_agent.common.metrics import setup_metrics_endpoint
 from interview_analytics_agent.common.observability import setup_observability
 from interview_analytics_agent.common.otel import maybe_setup_otel
-from interview_analytics_agent.storage.db import engine
-from interview_analytics_agent.storage.models import Base
 
 log = get_project_logger()
 

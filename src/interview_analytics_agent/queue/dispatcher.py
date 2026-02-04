@@ -9,18 +9,17 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 
 from interview_analytics_agent.common.ids import new_event_id
 from interview_analytics_agent.common.logging import get_project_logger
 
-from .redis import redis_client
+from .streams import enqueue
 
 log = get_project_logger()
 
 # =============================================================================
-# ИМЕНА ОЧЕРЕДЕЙ (Redis lists)
+# ИМЕНА ОЧЕРЕДЕЙ (Redis Streams)
 # =============================================================================
 Q_STT = "q:stt"
 Q_ENHANCER = "q:enhancer"
@@ -49,7 +48,7 @@ def enqueue_stt(*, meeting_id: str, chunk_seq: int, blob_key: str) -> str:
         "blob_key": blob_key,
         "timestamp": _now_iso(),
     }
-    redis_client().lpush(Q_STT, json.dumps(payload, ensure_ascii=False))
+    enqueue(Q_STT, payload)
     log.info("enqueue_stt", extra={"meeting_id": meeting_id, "payload": {"chunk_seq": chunk_seq}})
     return event_id
 
@@ -60,7 +59,7 @@ def enqueue_enhancer(*, meeting_id: str) -> str:
     """
     event_id = new_event_id("enh")
     payload = {"schema_version": "v1", "event_id": event_id, "meeting_id": meeting_id}
-    redis_client().lpush(Q_ENHANCER, json.dumps(payload, ensure_ascii=False))
+    enqueue(Q_ENHANCER, payload)
     log.info("enqueue_enhancer", extra={"meeting_id": meeting_id})
     return event_id
 
@@ -71,7 +70,7 @@ def enqueue_analytics(*, meeting_id: str) -> str:
     """
     event_id = new_event_id("anl")
     payload = {"schema_version": "v1", "event_id": event_id, "meeting_id": meeting_id}
-    redis_client().lpush(Q_ANALYTICS, json.dumps(payload, ensure_ascii=False))
+    enqueue(Q_ANALYTICS, payload)
     log.info("enqueue_analytics", extra={"meeting_id": meeting_id})
     return event_id
 
@@ -82,7 +81,7 @@ def enqueue_delivery(*, meeting_id: str) -> str:
     """
     event_id = new_event_id("dlv")
     payload = {"schema_version": "v1", "event_id": event_id, "meeting_id": meeting_id}
-    redis_client().lpush(Q_DELIVERY, json.dumps(payload, ensure_ascii=False))
+    enqueue(Q_DELIVERY, payload)
     log.info("enqueue_delivery", extra={"meeting_id": meeting_id})
     return event_id
 
@@ -99,6 +98,6 @@ def enqueue_retention(*, entity_type: str, entity_id: str, reason: str) -> str:
         "entity_id": entity_id,
         "reason": reason,
     }
-    redis_client().lpush(Q_RETENTION, json.dumps(payload, ensure_ascii=False))
+    enqueue(Q_RETENTION, payload)
     log.info("enqueue_retention", extra={"payload": payload})
     return event_id

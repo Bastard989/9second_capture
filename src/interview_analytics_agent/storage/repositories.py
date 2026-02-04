@@ -27,6 +27,7 @@ class MeetingRepository:
         # Стараемся взять значения из enum'ов, но не ломаемся если их нет/переименованы
         try:
             from interview_analytics_agent.domain.enums import PipelineStatus  # type: ignore
+
             # предпочитаем наиболее "ранний" статус
             for name in ("created", "new", "received", "ingest", "stt", "pending"):
                 if hasattr(PipelineStatus, name):
@@ -40,6 +41,7 @@ class MeetingRepository:
     def _default_consent(self) -> str:
         try:
             from interview_analytics_agent.domain.enums import ConsentStatus  # type: ignore
+
             for name in ("unknown", "unset", "pending", "not_provided", "none"):
                 if hasattr(ConsentStatus, name):
                     v = getattr(ConsentStatus, name)
@@ -82,6 +84,30 @@ class TranscriptSegmentRepository:
 
     def add(self, segment: TranscriptSegment) -> None:
         self.session.add(segment)
+
+    def upsert_by_meeting_seq(self, segment: TranscriptSegment) -> TranscriptSegment:
+        """
+        Идемпотентная запись сегмента по (meeting_id, seq).
+        """
+        existing = (
+            self.session.query(TranscriptSegment)
+            .filter(
+                TranscriptSegment.meeting_id == segment.meeting_id,
+                TranscriptSegment.seq == segment.seq,
+            )
+            .one_or_none()
+        )
+        if existing is None:
+            self.session.add(segment)
+            return segment
+
+        existing.speaker = segment.speaker
+        existing.start_ms = segment.start_ms
+        existing.end_ms = segment.end_ms
+        existing.raw_text = segment.raw_text
+        existing.enhanced_text = segment.enhanced_text
+        existing.confidence = segment.confidence
+        return existing
 
     def list_by_meeting(self, meeting_id: str) -> list[TranscriptSegment]:
         return (

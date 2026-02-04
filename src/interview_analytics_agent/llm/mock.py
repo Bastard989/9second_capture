@@ -10,22 +10,18 @@ from __future__ import annotations
 
 import json
 
-from .base import LLMProvider, LLMResult
+from .base import LLMProvider
 
 
 class MockLLMProvider(LLMProvider):
-    def complete_json(self, *, system: str, user: str) -> LLMResult:
+    def complete_json(self, *, system: str, user: str) -> str:
         payload = {
             "summary": "mock_summary",
             "bullets": ["mock_point_1", "mock_point_2"],
             "risk_flags": [],
+            "recommendation": "",
         }
-        return LLMResult(
-            text=json.dumps(payload, ensure_ascii=False),
-            usage={"mock": True},
-            latency_ms=1,
-            model_id="mock",
-        )
+        return json.dumps(payload, ensure_ascii=False)
 
-    def complete_text(self, *, system: str, user: str) -> LLMResult:
-        return LLMResult(text="mock_text", usage={"mock": True}, latency_ms=1, model_id="mock")
+    def complete_text(self, *, system: str, user: str) -> str:
+        return self.complete_json(system=system, user=user)

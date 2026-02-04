@@ -17,10 +17,12 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
+from interview_analytics_agent.common.errors import UnauthorizedError
 from interview_analytics_agent.common.ids import new_idempotency_key
 from interview_analytics_agent.common.logging import get_project_logger
+from interview_analytics_agent.common.security import require_auth
 from interview_analytics_agent.common.utils import b64_decode, safe_dict
 from interview_analytics_agent.queue.dispatcher import enqueue_stt
 from interview_analytics_agent.queue.idempotency import check_and_set
@@ -70,6 +72,18 @@ async def _forward_pubsub_to_ws(ws: WebSocket, meeting_id: str) -> None:
 
 @ws_router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
+    try:
+        require_auth(
+            authorization=ws.headers.get("authorization"),
+            x_api_key=ws.headers.get("x-api-key"),
+        )
+    except UnauthorizedError as e:
+        await ws.close(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason=f"{e.code}: {e.message}",
+        )
+        return
+
     await ws.accept()
 
     meeting_id: str | None = None
@@ -154,7 +168,11 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                 )
                 await ws.send_text(
                     json.dumps(
-                        {"event_type": "error", "code": "storage_error", "message": "Ошибка записи чанка"}
+                        {
+                            "event_type": "error",
+                            "code": "storage_error",
+                            "message": "Ошибка записи чанка",
+                        }
                     )
                 )
                 continue
