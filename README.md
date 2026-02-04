@@ -86,7 +86,8 @@ Security audit логи:
   `SBERJAZZ_RECONCILE_STALE_SEC`.
 - Также выполняет live pull по активным connector-сессиям:
   `SBERJAZZ_LIVE_PULL_ENABLED`, `SBERJAZZ_LIVE_PULL_BATCH_LIMIT`, `SBERJAZZ_LIVE_PULL_SESSIONS_LIMIT`.
-  Дополнительно: `SBERJAZZ_LIVE_PULL_RETRIES`, `SBERJAZZ_LIVE_PULL_RETRY_BACKOFF_MS`.
+  Дополнительно: `SBERJAZZ_LIVE_PULL_RETRIES`, `SBERJAZZ_LIVE_PULL_RETRY_BACKOFF_MS`,
+  `SBERJAZZ_LIVE_PULL_FAIL_RECONNECT_THRESHOLD` (авто-reconnect после N подряд live-pull ошибок по meeting).
 
 ## Startup readiness (prod guardrail)
 

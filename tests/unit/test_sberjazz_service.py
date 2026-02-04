@@ -359,3 +359,59 @@ def test_pull_live_chunks_retries_fetch(monkeypatch) -> None:
     finally:
         s.sberjazz_live_pull_retries = snapshot_retries
         s.sberjazz_live_pull_retry_backoff_ms = snapshot_backoff
+
+
+def test_pull_live_chunks_triggers_reconnect_after_threshold(monkeypatch) -> None:
+    fake_redis = _FakeRedis()
+    fake_connector = _FakeConnector()
+    monkeypatch.setattr(sberjazz_service, "redis_client", lambda: fake_redis)
+    monkeypatch.setattr(
+        sberjazz_service,
+        "_resolve_connector",
+        lambda: ("sberjazz_mock", fake_connector),
+    )
+
+    s = get_settings()
+    snapshot_threshold = s.sberjazz_live_pull_fail_reconnect_threshold
+    try:
+        s.sberjazz_live_pull_fail_reconnect_threshold = 2
+        sberjazz_service._SESSIONS.clear()
+        sberjazz_service._CIRCUIT_BREAKER = None
+        sberjazz_service._SESSIONS["m-live-th"] = sberjazz_service.SberJazzSessionState(
+            meeting_id="m-live-th",
+            provider="sberjazz_mock",
+            connected=True,
+            attempts=1,
+            last_error=None,
+            updated_at="2020-01-01T00:00:00+00:00",
+        )
+
+        monkeypatch.setattr(
+            fake_connector,
+            "fetch_live_chunks",
+            lambda meeting_id, cursor=None, limit=20: (_ for _ in ()).throw(RuntimeError("down")),
+        )
+
+        reconnect_calls: list[str] = []
+        monkeypatch.setattr(
+            sberjazz_service,
+            "reconnect_sberjazz_meeting",
+            lambda meeting_id: (reconnect_calls.append(meeting_id) or True),
+        )
+
+        # 1-й сбой: ниже порога, reconnect не должен сработать.
+        result_1 = sberjazz_service.pull_sberjazz_live_chunks(limit_sessions=10, batch_limit=10)
+        assert result_1.failed == 1
+        assert reconnect_calls == []
+
+        # 2-й сбой: достигнут порог, reconnect должен сработать.
+        result_2 = sberjazz_service.pull_sberjazz_live_chunks(limit_sessions=10, batch_limit=10)
+        assert result_2.failed == 1
+        assert reconnect_calls == ["m-live-th"]
+
+        # Счетчик сбрасывается после попытки reconnect: следующий сбой снова "первый".
+        result_3 = sberjazz_service.pull_sberjazz_live_chunks(limit_sessions=10, batch_limit=10)
+        assert result_3.failed == 1
+        assert reconnect_calls == ["m-live-th"]
+    finally:
+        s.sberjazz_live_pull_fail_reconnect_threshold = snapshot_threshold

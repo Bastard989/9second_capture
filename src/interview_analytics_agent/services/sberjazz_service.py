@@ -45,6 +45,7 @@ _CIRCUIT_BREAKER_KEY = "connector:sberjazz:circuit_breaker"
 _OP_LOCK_KEY_PREFIX = "connector:sberjazz:op_lock:"
 _LIVE_CURSOR_KEY_PREFIX = "connector:sberjazz:live_cursor:"
 _LIVE_SEQ_KEY_PREFIX = "connector:sberjazz:live_seq:"
+_LIVE_FAIL_COUNT_KEY_PREFIX = "connector:sberjazz:live_fail_count:"
 
 
 @dataclass
@@ -124,6 +125,10 @@ def _live_cursor_key(meeting_id: str) -> str:
 
 def _live_seq_key(meeting_id: str) -> str:
     return f"{_LIVE_SEQ_KEY_PREFIX}{meeting_id}"
+
+
+def _live_fail_count_key(meeting_id: str) -> str:
+    return f"{_LIVE_FAIL_COUNT_KEY_PREFIX}{meeting_id}"
 
 
 def _op_lock_key(meeting_id: str) -> str:
@@ -226,6 +231,22 @@ def _save_live_cursor(meeting_id: str, cursor: str) -> None:
 
 def _next_live_seq(meeting_id: str) -> int:
     return int(redis_client().incr(_live_seq_key(meeting_id)))
+
+
+def _live_pull_fail_reconnect_threshold() -> int:
+    return max(1, int(getattr(get_settings(), "sberjazz_live_pull_fail_reconnect_threshold", 3)))
+
+
+def _inc_live_pull_fail_count(meeting_id: str) -> int:
+    r = redis_client()
+    count = int(r.incr(_live_fail_count_key(meeting_id)))
+    # Refresh TTL, чтобы stale счетчики не жили вечно.
+    r.set(_live_fail_count_key(meeting_id), str(count), ex=_session_ttl_sec())
+    return count
+
+
+def _reset_live_pull_fail_count(meeting_id: str) -> None:
+    redis_client().delete(_live_fail_count_key(meeting_id))
 
 
 def _touch_connected_state(meeting_id: str) -> None:
@@ -798,12 +819,49 @@ def pull_sberjazz_live_chunks(
             pulled += m_pulled
             ingested += m_ingested
             invalid_chunks += m_invalid
+            _reset_live_pull_fail_count(state.meeting_id)
         except Exception as e:
             failed += 1
+            fail_count = _inc_live_pull_fail_count(state.meeting_id)
             log.warning(
                 "sberjazz_live_pull_failed",
-                extra={"payload": {"meeting_id": state.meeting_id, "error": str(e)[:300]}},
+                extra={
+                    "payload": {
+                        "meeting_id": state.meeting_id,
+                        "error": str(e)[:300],
+                        "fail_count": fail_count,
+                    }
+                },
             )
+            threshold = _live_pull_fail_reconnect_threshold()
+            if fail_count >= threshold:
+                try:
+                    reconnect_sberjazz_meeting(state.meeting_id)
+                    log.info(
+                        "sberjazz_live_pull_reconnect_triggered",
+                        extra={
+                            "payload": {
+                                "meeting_id": state.meeting_id,
+                                "fail_count": fail_count,
+                                "threshold": threshold,
+                            }
+                        },
+                    )
+                except Exception as re:
+                    log.warning(
+                        "sberjazz_live_pull_reconnect_failed",
+                        extra={
+                            "payload": {
+                                "meeting_id": state.meeting_id,
+                                "fail_count": fail_count,
+                                "threshold": threshold,
+                                "error": str(re)[:300],
+                            }
+                        },
+                    )
+                finally:
+                    # Анти-флаппинг: после попытки reconnect начинаем окно подсчета заново.
+                    _reset_live_pull_fail_count(state.meeting_id)
 
     return SberJazzLivePullResult(
         scanned=scanned,
