@@ -21,6 +21,8 @@ Production-ориентированный backend для транскрибац�
 - `make storage-smoke` (shared storage failover smoke)
 - `make alerts-smoke` (проверка маршрутизации warning/critical алертов через Alertmanager в webhook sink;
   требует `docker compose --profile observability up -d`)
+- `make load-guardrail` (нагрузочный guardrail по latency/error-rate/throughput; отчет в `reports/realtime_load_guardrail.json`)
+  - для строгой проверки admin-контуров добавь `--strict-admin-checks`.
 
 Сценарий smoke:
 1. `POST /v1/meetings/start`
@@ -142,6 +144,11 @@ GitHub Actions запускает:
 - OpenAPI contract check,
 - alert routing smoke (`warning`/`critical` delivery через Alertmanager -> webhook sink).
 
+Отдельный workflow `Performance Smoke` (nightly + manual):
+- поднимает стек в `STT_PROVIDER=mock`,
+- гоняет `tools/realtime_load_guardrail.py` с порогами,
+- сохраняет артефакт `realtime-load-guardrail-report`.
+
 Release automation:
 - workflow `Release` запускается на тегах формата `v*.*.*`,
 - перед сборкой проверяет release policy (`tag == project.version`, валидный `openapi/openapi.json`),
@@ -155,3 +162,4 @@ Release automation:
 ## Runbooks
 
 - Алерты и действия при инцидентах: `docs/runbooks/alerts.md`
+- Производительность и guardrail-порогы: `docs/runbooks/performance.md`

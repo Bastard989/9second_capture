@@ -34,3 +34,4 @@ venv/
 # Data / runtime
 data/
 tmp/
+reports/*.json
