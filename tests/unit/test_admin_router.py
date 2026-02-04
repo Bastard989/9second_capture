@@ -404,3 +404,29 @@ def test_admin_storage_health(monkeypatch, auth_settings) -> None:
     assert resp.status_code == 200
     assert resp.json()["mode"] == "shared_fs"
     assert resp.json()["healthy"] is True
+
+
+def test_admin_system_readiness(monkeypatch, auth_settings) -> None:
+    auth_settings.auth_mode = "api_key"
+    auth_settings.service_api_keys = "svc-1"
+
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.admin.evaluate_readiness",
+        lambda: SimpleNamespace(
+            ready=False,
+            issues=[
+                SimpleNamespace(
+                    severity="error",
+                    code="oidc_not_configured",
+                    message="AUTH_MODE=jwt требует OIDC",
+                )
+            ],
+        ),
+    )
+
+    client = TestClient(app)
+    resp = client.get("/v1/admin/system/readiness", headers={"X-API-Key": "svc-1"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ready"] is False
+    assert data["issues"][0]["code"] == "oidc_not_configured"

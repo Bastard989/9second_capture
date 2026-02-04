@@ -56,3 +56,10 @@
 2. Убедиться, что `STORAGE_MODE` и путь (`CHUNKS_DIR`/`STORAGE_SHARED_FS_DIR`) корректны.
 3. Для `shared_fs` проверить mount и права записи на shared storage.
 4. После восстановления убедиться, что `agent_storage_health` вернулся в `1`.
+
+## SystemReadinessFailed
+
+1. Проверить endpoint `GET /v1/admin/system/readiness`.
+2. Исправить все `error`-issues (auth/storage/cors/OIDC).
+3. Если есть `warning`-issues — зафиксировать план устранения до прод-релиза.
+4. Убедиться, что метрика `agent_system_readiness` вернулась в `1`.

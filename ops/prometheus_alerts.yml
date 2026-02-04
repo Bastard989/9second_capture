@@ -88,3 +88,15 @@ groups:
           summary: "Blob storage is unhealthy"
           description: "Blob storage healthcheck возвращает ошибку."
           runbook_url: "docs/runbooks/alerts.md#blobstorageunhealthy"
+
+  - name: agent-readiness
+    rules:
+      - alert: SystemReadinessFailed
+        expr: agent_system_readiness == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "System readiness check failed"
+          description: "Runtime readiness-check вернул not ready."
+          runbook_url: "docs/runbooks/alerts.md#systemreadinessfailed"

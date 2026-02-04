@@ -102,6 +102,11 @@ STORAGE_HEALTH = Gauge(
     ["mode"],
 )
 
+SYSTEM_READINESS = Gauge(
+    "agent_system_readiness",
+    "Runtime readiness check status (1=ready, 0=not ready)",
+)
+
 SBERJAZZ_RECONCILE_RUNS_TOTAL = Counter(
     "agent_sberjazz_reconcile_runs_total",
     "Количество запусков reconcile для SberJazz connector",
@@ -224,6 +229,16 @@ def refresh_storage_metrics() -> None:
         METRICS_COLLECTION_ERRORS_TOTAL.labels(source="storage_metrics").inc()
 
 
+def refresh_system_readiness_metrics() -> None:
+    try:
+        from interview_analytics_agent.services.readiness_service import evaluate_readiness
+
+        state = evaluate_readiness()
+        SYSTEM_READINESS.set(1 if state.ready else 0)
+    except Exception:
+        METRICS_COLLECTION_ERRORS_TOTAL.labels(source="readiness_metrics").inc()
+
+
 # =============================================================================
 # ENDPOINT /metrics
 # =============================================================================
@@ -260,4 +275,5 @@ def setup_metrics_endpoint(app: FastAPI) -> None:
         refresh_queue_metrics()
         refresh_connector_metrics()
         refresh_storage_metrics()
+        refresh_system_readiness_metrics()
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

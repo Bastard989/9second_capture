@@ -19,6 +19,7 @@ from interview_analytics_agent.common.metrics import (
 )
 from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.queue.streams import stream_dlq_name
+from interview_analytics_agent.services.readiness_service import evaluate_readiness
 from interview_analytics_agent.services.sberjazz_service import (
     SberJazzCircuitBreakerState,
     SberJazzConnectorHealth,
@@ -31,8 +32,8 @@ from interview_analytics_agent.services.sberjazz_service import (
     leave_sberjazz_meeting,
     list_sberjazz_sessions,
     reconcile_sberjazz_sessions,
-    reset_sberjazz_circuit_breaker,
     reconnect_sberjazz_meeting,
+    reset_sberjazz_circuit_breaker,
 )
 from interview_analytics_agent.services.security_audit_service import list_security_audit_events
 from interview_analytics_agent.storage.blob import check_storage_health
@@ -121,6 +122,17 @@ class StorageHealthResponse(BaseModel):
     base_dir: str
     healthy: bool
     error: str | None = None
+
+
+class ReadinessIssueResponse(BaseModel):
+    severity: str
+    code: str
+    message: str
+
+
+class SystemReadinessResponse(BaseModel):
+    ready: bool
+    issues: list[ReadinessIssueResponse]
 
 
 def _as_response(state: SberJazzSessionState) -> SberJazzSessionResponse:
@@ -215,6 +227,26 @@ def admin_storage_health() -> StorageHealthResponse:
         base_dir=state.base_dir,
         healthy=state.healthy,
         error=state.error,
+    )
+
+
+@router.get(
+    "/admin/system/readiness",
+    response_model=SystemReadinessResponse,
+    dependencies=[Depends(service_auth_read_dep)],
+)
+def admin_system_readiness() -> SystemReadinessResponse:
+    state = evaluate_readiness()
+    return SystemReadinessResponse(
+        ready=state.ready,
+        issues=[
+            ReadinessIssueResponse(
+                severity=i.severity,
+                code=i.code,
+                message=i.message,
+            )
+            for i in state.issues
+        ],
     )
 
 

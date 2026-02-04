@@ -39,6 +39,7 @@ Production-ориентированный backend для транскрибац�
 
 - `GET /v1/admin/queues/health` — состояние queue/DLQ/pending.
 - `GET /v1/admin/storage/health` — healthcheck blob storage (режим, путь, read/write probe).
+- `GET /v1/admin/system/readiness` — runtime readiness-check (prod-policy/конфигурация).
 - `POST /v1/admin/connectors/sberjazz/{meeting_id}/join` — инициировать live-подключение коннектора.
 - `GET /v1/admin/connectors/sberjazz/{meeting_id}/status` — получить текущий статус подключения.
 - `POST /v1/admin/connectors/sberjazz/{meeting_id}/leave` — завершить подключение.
@@ -95,6 +96,7 @@ SberJazz HTTP resilience:
 - `agent_sberjazz_circuit_breaker_resets_total{source,reason}`
 - `agent_sberjazz_sessions_total{state="connected|disconnected"}`
 - `agent_storage_health{mode="local_fs|shared_fs"}`
+- `agent_system_readiness`
 
 ## CI
 

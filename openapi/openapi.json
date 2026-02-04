@@ -388,6 +388,68 @@
         }
       }
     },
+    "/v1/admin/system/readiness": {
+      "get": {
+        "summary": "Admin System Readiness",
+        "operationId": "admin_system_readiness_v1_admin_system_readiness_get",
+        "parameters": [
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemReadinessResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/connectors/sberjazz/{meeting_id}/join": {
       "post": {
         "summary": "Admin Sberjazz Join",
@@ -1381,6 +1443,29 @@
         ],
         "title": "QueueHealthResponse"
       },
+      "ReadinessIssueResponse": {
+        "properties": {
+          "severity": {
+            "type": "string",
+            "title": "Severity"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "severity",
+          "code",
+          "message"
+        ],
+        "title": "ReadinessIssueResponse"
+      },
       "SberJazzCircuitBreakerResponse": {
         "properties": {
           "state": {
@@ -1688,6 +1773,27 @@
           "healthy"
         ],
         "title": "StorageHealthResponse"
+      },
+      "SystemReadinessResponse": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessIssueResponse"
+            },
+            "type": "array",
+            "title": "Issues"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready",
+          "issues"
+        ],
+        "title": "SystemReadinessResponse"
       },
       "ValidationError": {
         "properties": {
