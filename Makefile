@@ -7,7 +7,7 @@ PYTHON ?= python3
 .PHONY: \
 	doctor up down ps logs migrate smoke reset-db \
 	compose-up compose-down \
-	fmt lint fix test \
+	fmt lint fix test storage-smoke \
 	cycle cycle-autofix \
 	openapi-gen openapi-check
 
@@ -60,6 +60,9 @@ fix:
 
 test:
 	$(COMPOSE) exec -T $(API_SERVICE) python -m pytest tests/unit -q
+
+storage-smoke:
+	$(PYTHON) tools/storage_failover_smoke.py
 
 cycle:
 	$(PYTHON) tools/ci_cycle.py

@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://redis:6379/0", alias="REDIS_URL")
 
     chunks_dir: str = Field(default="./data/chunks", alias="CHUNKS_DIR")
+    storage_mode: str = Field(default="local_fs", alias="STORAGE_MODE")  # local_fs|shared_fs
+    storage_shared_fs_dir: str | None = Field(default=None, alias="STORAGE_SHARED_FS_DIR")
+    storage_require_shared_in_prod: bool = Field(default=True, alias="STORAGE_REQUIRE_SHARED_IN_PROD")
     # -------------------------------------------------------------------------
     # PII / Retention
     # -------------------------------------------------------------------------

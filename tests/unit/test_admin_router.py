@@ -44,6 +44,10 @@ def auth_settings():
         "jwt_service_required_scopes_admin_read",
         "jwt_service_required_scopes_admin_write",
         "jwt_service_required_scopes_ws_internal",
+        "storage_mode",
+        "storage_shared_fs_dir",
+        "storage_require_shared_in_prod",
+        "chunks_dir",
     ]
     snapshot = {k: getattr(s, k) for k in keys}
     try:
@@ -355,3 +359,24 @@ def test_admin_security_audit_rejects_bad_outcome(auth_settings) -> None:
     headers = {"X-API-Key": "svc-1"}
     resp = client.get("/v1/admin/security/audit?outcome=weird", headers=headers)
     assert resp.status_code == 422
+
+
+def test_admin_storage_health(monkeypatch, auth_settings) -> None:
+    auth_settings.auth_mode = "api_key"
+    auth_settings.service_api_keys = "svc-1"
+
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.admin.check_storage_health",
+        lambda: SimpleNamespace(
+            mode="shared_fs",
+            base_dir="/mnt/nfs/chunks",
+            healthy=True,
+            error=None,
+        ),
+    )
+
+    client = TestClient(app)
+    resp = client.get("/v1/admin/storage/health", headers={"X-API-Key": "svc-1"})
+    assert resp.status_code == 200
+    assert resp.json()["mode"] == "shared_fs"
+    assert resp.json()["healthy"] is True

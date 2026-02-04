@@ -90,6 +90,12 @@ SBERJAZZ_CIRCUIT_BREAKER_OPEN = Gauge(
     "Состояние circuit breaker SberJazz connector (1=open, 0=closed/half_open)",
 )
 
+STORAGE_HEALTH = Gauge(
+    "agent_storage_health",
+    "Состояние blob storage (1=healthy, 0=unhealthy)",
+    ["mode"],
+)
+
 SBERJAZZ_RECONCILE_RUNS_TOTAL = Counter(
     "agent_sberjazz_reconcile_runs_total",
     "Количество запусков reconcile для SberJazz connector",
@@ -198,6 +204,16 @@ def record_sberjazz_reconcile_result(
     SBERJAZZ_RECONCILE_LAST_RECONNECTED.set(max(0, reconnected))
 
 
+def refresh_storage_metrics() -> None:
+    try:
+        from interview_analytics_agent.storage.blob import check_storage_health_cached
+
+        health = check_storage_health_cached(max_age_sec=30)
+        STORAGE_HEALTH.labels(mode=health.mode).set(1 if health.healthy else 0)
+    except Exception:
+        METRICS_COLLECTION_ERRORS_TOTAL.labels(source="storage_metrics").inc()
+
+
 # =============================================================================
 # ENDPOINT /metrics
 # =============================================================================
@@ -233,4 +249,5 @@ def setup_metrics_endpoint(app: FastAPI) -> None:
     def metrics() -> Response:
         refresh_queue_metrics()
         refresh_connector_metrics()
+        refresh_storage_metrics()
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

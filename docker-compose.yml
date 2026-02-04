@@ -55,7 +55,10 @@ services:
     environment:
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      STORAGE_MODE: ${STORAGE_MODE:-local_fs}
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
+      STORAGE_SHARED_FS_DIR: ${STORAGE_SHARED_FS_DIR:-}
+      STORAGE_REQUIRE_SHARED_IN_PROD: ${STORAGE_REQUIRE_SHARED_IN_PROD:-true}
       AUTH_MODE: ${AUTH_MODE:-none}
       API_KEYS: ${API_KEYS:-}
       SERVICE_API_KEYS: ${SERVICE_API_KEYS:-}
@@ -137,7 +140,10 @@ services:
     environment:
       POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      STORAGE_MODE: ${STORAGE_MODE:-local_fs}
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
+      STORAGE_SHARED_FS_DIR: ${STORAGE_SHARED_FS_DIR:-}
+      STORAGE_REQUIRE_SHARED_IN_PROD: ${STORAGE_REQUIRE_SHARED_IN_PROD:-true}
       STT_PROVIDER: ${STT_PROVIDER:-whisper_local}
       WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
       WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}

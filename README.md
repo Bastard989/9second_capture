@@ -11,6 +11,7 @@ Production-ориентированный backend для транскрибац�
 ## E2E Smoke
 
 - `python3 tools/e2e_local.py`
+- `make storage-smoke` (shared storage failover smoke)
 
 Сценарий smoke:
 1. `POST /v1/meetings/start`
@@ -31,6 +32,7 @@ Production-ориентированный backend для транскрибац�
 ## Внутренний Admin API (только service)
 
 - `GET /v1/admin/queues/health` — состояние queue/DLQ/pending.
+- `GET /v1/admin/storage/health` — healthcheck blob storage (режим, путь, read/write probe).
 - `POST /v1/admin/connectors/sberjazz/{meeting_id}/join` — инициировать live-подключение коннектора.
 - `GET /v1/admin/connectors/sberjazz/{meeting_id}/status` — получить текущий статус подключения.
 - `POST /v1/admin/connectors/sberjazz/{meeting_id}/leave` — завершить подключение.
@@ -56,6 +58,12 @@ Security audit логи:
 - Настройки: `RECONCILIATION_ENABLED`, `RECONCILIATION_INTERVAL_SEC`, `RECONCILIATION_LIMIT`,
   `SBERJAZZ_RECONCILE_STALE_SEC`.
 
+## Storage mode (production)
+
+- `STORAGE_MODE=shared_fs` — production режим (shared POSIX storage, например managed NFS).
+- `STORAGE_MODE=local_fs` — локальный режим для dev.
+- В `APP_ENV=prod` при `STORAGE_REQUIRE_SHARED_IN_PROD=true` local storage запрещён.
+
 ## Стек наблюдаемости (опциональный профиль)
 
 Запуск:
@@ -71,6 +79,7 @@ Security audit логи:
 - `agent_sberjazz_connector_health`
 - `agent_sberjazz_circuit_breaker_open`
 - `agent_sberjazz_sessions_total{state="connected|disconnected"}`
+- `agent_storage_health{mode="local_fs|shared_fs"}`
 
 ## CI
 

@@ -326,6 +326,68 @@
         }
       }
     },
+    "/v1/admin/storage/health": {
+      "get": {
+        "summary": "Admin Storage Health",
+        "operationId": "admin_storage_health_v1_admin_storage_health_get",
+        "parameters": [
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageHealthResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/connectors/sberjazz/{meeting_id}/join": {
       "post": {
         "summary": "Admin Sberjazz Join",
@@ -1530,6 +1592,40 @@
           "events"
         ],
         "title": "SecurityAuditListResponse"
+      },
+      "StorageHealthResponse": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "base_dir": {
+            "type": "string",
+            "title": "Base Dir"
+          },
+          "healthy": {
+            "type": "boolean",
+            "title": "Healthy"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "base_dir",
+          "healthy"
+        ],
+        "title": "StorageHealthResponse"
       },
       "ValidationError": {
         "properties": {

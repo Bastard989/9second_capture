@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from interview_analytics_agent.common import metrics
+from interview_analytics_agent.storage.blob import StorageHealth
 
 
 def test_refresh_connector_metrics_sets_gauges(monkeypatch) -> None:
@@ -51,3 +52,17 @@ def test_record_reconcile_metrics_sets_last_values() -> None:
     assert stale == 4
     assert failed == 1
     assert reconnected == 3
+
+
+def test_refresh_storage_metrics_sets_gauge(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "interview_analytics_agent.storage.blob.check_storage_health_cached",
+        lambda max_age_sec=30: StorageHealth(
+            mode="shared_fs",
+            base_dir="/mnt/nfs/chunks",
+            healthy=True,
+            error=None,
+        ),
+    )
+    metrics.refresh_storage_metrics()
+    assert metrics.STORAGE_HEALTH.labels(mode="shared_fs")._value.get() == 1

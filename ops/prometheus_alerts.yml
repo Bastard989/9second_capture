@@ -76,3 +76,15 @@ groups:
           summary: "SberJazz circuit breaker is open"
           description: "Connector circuit breaker открыт и блокирует операции join/leave."
           runbook_url: "docs/runbooks/alerts.md#sberjazzcircuitbreakeropen"
+
+  - name: agent-storage
+    rules:
+      - alert: BlobStorageUnhealthy
+        expr: agent_storage_health == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Blob storage is unhealthy"
+          description: "Blob storage healthcheck возвращает ошибку."
+          runbook_url: "docs/runbooks/alerts.md#blobstorageunhealthy"

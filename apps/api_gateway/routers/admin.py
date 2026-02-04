@@ -31,6 +31,7 @@ from interview_analytics_agent.services.sberjazz_service import (
     reconnect_sberjazz_meeting,
 )
 from interview_analytics_agent.services.security_audit_service import list_security_audit_events
+from interview_analytics_agent.storage.blob import check_storage_health
 
 router = APIRouter()
 
@@ -111,6 +112,13 @@ class SecurityAuditListResponse(BaseModel):
     events: list[SecurityAuditEventResponse]
 
 
+class StorageHealthResponse(BaseModel):
+    mode: str
+    base_dir: str
+    healthy: bool
+    error: str | None = None
+
+
 def _as_response(state: SberJazzSessionState) -> SberJazzSessionResponse:
     return SberJazzSessionResponse(
         meeting_id=state.meeting_id,
@@ -189,6 +197,21 @@ def admin_queues_health() -> QueueHealthResponse:
         ) from e
 
     return QueueHealthResponse(queues=queues)
+
+
+@router.get(
+    "/admin/storage/health",
+    response_model=StorageHealthResponse,
+    dependencies=[Depends(service_auth_read_dep)],
+)
+def admin_storage_health() -> StorageHealthResponse:
+    state = check_storage_health()
+    return StorageHealthResponse(
+        mode=state.mode,
+        base_dir=state.base_dir,
+        healthy=state.healthy,
+        error=state.error,
+    )
 
 
 @router.post(

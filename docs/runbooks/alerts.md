@@ -48,3 +48,10 @@
 2. Проверить первичную причину в логах `api-gateway` (`sberjazz_cb_failure`, ошибки провайдера).
 3. Проверить доступность SberJazz API и валидность токена (`SBERJAZZ_API_TOKEN`).
 4. После устранения причины дождаться auto-cooldown (`SBERJAZZ_CB_OPEN_SEC`) и повторить reconnect.
+
+## BlobStorageUnhealthy
+
+1. Проверить endpoint `GET /v1/admin/storage/health`.
+2. Убедиться, что `STORAGE_MODE` и путь (`CHUNKS_DIR`/`STORAGE_SHARED_FS_DIR`) корректны.
+3. Для `shared_fs` проверить mount и права записи на shared storage.
+4. После восстановления убедиться, что `agent_storage_health` вернулся в `1`.
