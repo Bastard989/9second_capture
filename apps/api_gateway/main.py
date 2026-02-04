@@ -29,6 +29,7 @@ from interview_analytics_agent.common.logging import get_project_logger, setup_l
 from interview_analytics_agent.common.metrics import setup_metrics_endpoint
 from interview_analytics_agent.common.observability import setup_observability
 from interview_analytics_agent.common.otel import maybe_setup_otel
+from interview_analytics_agent.services.readiness_service import enforce_startup_readiness
 
 log = get_project_logger()
 
@@ -88,6 +89,7 @@ def _create_app() -> FastAPI:
 setup_logging()
 setup_observability()
 maybe_setup_otel()
+enforce_startup_readiness(service_name="api-gateway")
 
 # Автосоздание таблиц в dev (чтобы проект стартовал без ручных миграций)
 log.info("db_ready")

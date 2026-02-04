@@ -7,6 +7,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from interview_analytics_agent.common.config import get_settings
+from interview_analytics_agent.common.logging import get_project_logger
+
+log = get_project_logger()
 
 
 @dataclass
@@ -127,3 +130,34 @@ def evaluate_readiness() -> ReadinessState:
 
     ready = all(i.severity != "error" for i in issues)
     return ReadinessState(ready=ready, issues=issues)
+
+
+def enforce_startup_readiness(*, service_name: str) -> ReadinessState:
+    s = get_settings()
+    state = evaluate_readiness()
+    errors = [i for i in state.issues if i.severity == "error"]
+
+    if errors:
+        log.error(
+            "startup_readiness_failed",
+            extra={
+                "payload": {
+                    "service": service_name,
+                    "app_env": s.app_env,
+                    "error_codes": [e.code for e in errors],
+                }
+            },
+        )
+    else:
+        log.info(
+            "startup_readiness_ok",
+            extra={"payload": {"service": service_name, "app_env": s.app_env}},
+        )
+
+    should_fail_fast = _is_prod_env(s.app_env) and bool(
+        getattr(s, "readiness_fail_fast_in_prod", True)
+    )
+    if should_fail_fast and errors:
+        msg = ", ".join(e.code for e in errors)
+        raise RuntimeError(f"startup readiness failed for {service_name}: {msg}")
+    return state

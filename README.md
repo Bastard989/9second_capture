@@ -66,6 +66,13 @@ Security audit логи:
 - Настройки: `RECONCILIATION_ENABLED`, `RECONCILIATION_INTERVAL_SEC`, `RECONCILIATION_LIMIT`,
   `SBERJAZZ_RECONCILE_STALE_SEC`.
 
+## Startup readiness (prod guardrail)
+
+- На старте `api-gateway` и все воркеры выполняют runtime readiness-check.
+- В `APP_ENV=prod` при наличии readiness errors процесс завершится fail-fast
+  (контролируется `READINESS_FAIL_FAST_IN_PROD=true|false`).
+- Проверить текущее состояние можно через `GET /v1/admin/system/readiness`.
+
 SberJazz HTTP resilience:
 - `SBERJAZZ_HTTP_RETRIES`
 - `SBERJAZZ_HTTP_RETRY_BACKOFF_MS`

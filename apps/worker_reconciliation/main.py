@@ -13,12 +13,14 @@ import time
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.logging import get_project_logger, setup_logging
 from interview_analytics_agent.jobs.reconciliation_job import run as run_reconciliation
+from interview_analytics_agent.services.readiness_service import enforce_startup_readiness
 
 log = get_project_logger()
 
 
 def main() -> None:
     setup_logging()
+    enforce_startup_readiness(service_name="worker-reconciliation")
     settings = get_settings()
     interval_sec = max(5, int(settings.reconciliation_interval_sec))
 

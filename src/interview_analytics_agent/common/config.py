@@ -53,9 +53,7 @@ class Settings(BaseSettings):
     jwt_service_allowed_roles: str = Field(
         default="service,admin", alias="JWT_SERVICE_ALLOWED_ROLES"
     )
-    jwt_service_permission_claim: str = Field(
-        default="scope", alias="JWT_SERVICE_PERMISSION_CLAIM"
-    )
+    jwt_service_permission_claim: str = Field(default="scope", alias="JWT_SERVICE_PERMISSION_CLAIM")
     jwt_service_required_scopes_admin_read: str = Field(
         default="agent.admin.read,agent.admin", alias="JWT_SERVICE_REQUIRED_SCOPES_ADMIN_READ"
     )
@@ -78,7 +76,9 @@ class Settings(BaseSettings):
     chunks_dir: str = Field(default="./data/chunks", alias="CHUNKS_DIR")
     storage_mode: str = Field(default="local_fs", alias="STORAGE_MODE")  # local_fs|shared_fs
     storage_shared_fs_dir: str | None = Field(default=None, alias="STORAGE_SHARED_FS_DIR")
-    storage_require_shared_in_prod: bool = Field(default=True, alias="STORAGE_REQUIRE_SHARED_IN_PROD")
+    storage_require_shared_in_prod: bool = Field(
+        default=True, alias="STORAGE_REQUIRE_SHARED_IN_PROD"
+    )
     # -------------------------------------------------------------------------
     # PII / Retention
     # -------------------------------------------------------------------------
@@ -178,6 +178,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_format: str = Field(default="json", alias="LOG_FORMAT")  # json|text
     security_audit_db_enabled: bool = Field(default=True, alias="SECURITY_AUDIT_DB_ENABLED")
+    readiness_fail_fast_in_prod: bool = Field(default=True, alias="READINESS_FAIL_FAST_IN_PROD")
 
 
 _SETTINGS = Settings()

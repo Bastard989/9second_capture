@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
 from interview_analytics_agent.common.config import get_settings
-from interview_analytics_agent.services.readiness_service import evaluate_readiness
+from interview_analytics_agent.services.readiness_service import (
+    enforce_startup_readiness,
+    evaluate_readiness,
+)
 
 
 def test_readiness_prod_fails_on_none_auth_and_local_storage() -> None:
@@ -57,4 +62,47 @@ def test_readiness_dev_allows_defaults() -> None:
             s.auth_mode,
             s.storage_mode,
             s.api_keys,
+        ) = snapshot
+
+
+def test_startup_readiness_fail_fast_in_prod() -> None:
+    s = get_settings()
+    snapshot = (
+        s.app_env,
+        s.auth_mode,
+        s.readiness_fail_fast_in_prod,
+    )
+    try:
+        s.app_env = "prod"
+        s.auth_mode = "none"
+        s.readiness_fail_fast_in_prod = True
+        with pytest.raises(RuntimeError, match="auth_none_in_prod"):
+            enforce_startup_readiness(service_name="api-gateway")
+    finally:
+        (
+            s.app_env,
+            s.auth_mode,
+            s.readiness_fail_fast_in_prod,
+        ) = snapshot
+
+
+def test_startup_readiness_no_fail_fast_in_prod() -> None:
+    s = get_settings()
+    snapshot = (
+        s.app_env,
+        s.auth_mode,
+        s.readiness_fail_fast_in_prod,
+    )
+    try:
+        s.app_env = "prod"
+        s.auth_mode = "none"
+        s.readiness_fail_fast_in_prod = False
+        state = enforce_startup_readiness(service_name="worker-stt")
+        assert state.ready is False
+        assert any(i.code == "auth_none_in_prod" for i in state.issues)
+    finally:
+        (
+            s.app_env,
+            s.auth_mode,
+            s.readiness_fail_fast_in_prod,
         ) = snapshot

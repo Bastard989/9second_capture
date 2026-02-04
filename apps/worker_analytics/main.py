@@ -23,6 +23,7 @@ from interview_analytics_agent.processing.analytics import build_report
 from interview_analytics_agent.queue.dispatcher import Q_ANALYTICS, enqueue_delivery
 from interview_analytics_agent.queue.retry import requeue_with_backoff
 from interview_analytics_agent.queue.streams import ack_task, consumer_name, read_task
+from interview_analytics_agent.services.readiness_service import enforce_startup_readiness
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import (
     MeetingRepository,
@@ -101,6 +102,7 @@ def run_loop() -> None:
 
 def main() -> None:
     setup_logging()
+    enforce_startup_readiness(service_name="worker-analytics")
     while True:
         try:
             run_loop()
