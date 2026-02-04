@@ -12,7 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from apps.api_gateway.deps import auth_dep
+from apps.api_gateway.deps import auth_dep, service_auth_write_dep
 from interview_analytics_agent.common.ids import new_idempotency_key
 from interview_analytics_agent.common.logging import get_project_logger
 from interview_analytics_agent.common.utils import b64_decode
@@ -41,12 +41,7 @@ class ChunkIngestResponse(BaseModel):
     blob_key: str
 
 
-@router.post(
-    "/meetings/{meeting_id}/chunks",
-    response_model=ChunkIngestResponse,
-    dependencies=[Depends(auth_dep)],
-)
-def ingest_chunk(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestResponse:
+def _ingest_chunk_impl(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestResponse:
     idem_key = req.idempotency_key or new_idempotency_key("http-chunk")
     if not check_and_set("audio_chunk_http", meeting_id, idem_key):
         blob_key = f"meetings/{meeting_id}/chunks/{req.seq}.bin"
@@ -83,3 +78,21 @@ def ingest_chunk(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestRespons
         idempotency_key=idem_key,
         blob_key=blob_key,
     )
+
+
+@router.post(
+    "/meetings/{meeting_id}/chunks",
+    response_model=ChunkIngestResponse,
+    dependencies=[Depends(auth_dep)],
+)
+def ingest_chunk(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestResponse:
+    return _ingest_chunk_impl(meeting_id=meeting_id, req=req)
+
+
+@router.post(
+    "/internal/meetings/{meeting_id}/chunks",
+    response_model=ChunkIngestResponse,
+    dependencies=[Depends(service_auth_write_dep)],
+)
+def ingest_chunk_internal(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestResponse:
+    return _ingest_chunk_impl(meeting_id=meeting_id, req=req)

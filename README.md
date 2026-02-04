@@ -29,6 +29,10 @@ Production-ориентированный backend для транскрибац�
 - `/v1/ws/internal` — сервисный контур (service API key / service JWT claims).
   Для service JWT дополнительно требуется scope из `JWT_SERVICE_REQUIRED_SCOPES_WS_INTERNAL`.
 
+HTTP ingest контуры:
+- `/v1/meetings/{meeting_id}/chunks` — пользовательский/общий ingest.
+- `/v1/internal/meetings/{meeting_id}/chunks` — только service-auth ingest (внутренний контур).
+
 ## Режимы авторизации
 
 - `AUTH_MODE=none` — только для local/dev
