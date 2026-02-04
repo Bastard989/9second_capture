@@ -178,3 +178,84 @@ def test_admin_sberjazz_join_status_leave(monkeypatch, auth_settings) -> None:
     left = client.post("/v1/admin/connectors/sberjazz/m-2/leave", headers=headers)
     assert left.status_code == 200
     assert left.json()["connected"] is False
+
+
+def test_admin_sberjazz_reconnect_and_health(monkeypatch, auth_settings) -> None:
+    auth_settings.auth_mode = "api_key"
+    auth_settings.service_api_keys = "svc-1"
+
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.admin.reconnect_sberjazz_meeting",
+        lambda meeting_id: SimpleNamespace(
+            meeting_id=meeting_id,
+            provider="sberjazz_mock",
+            connected=True,
+            attempts=2,
+            last_error=None,
+            updated_at="2026-02-04T00:00:03+00:00",
+        ),
+    )
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.admin.get_sberjazz_connector_health",
+        lambda: SimpleNamespace(
+            provider="sberjazz_mock",
+            configured=True,
+            healthy=True,
+            details={"mode": "mock"},
+            updated_at="2026-02-04T00:00:04+00:00",
+        ),
+    )
+
+    client = TestClient(app)
+    headers = {"X-API-Key": "svc-1"}
+
+    reconnect = client.post("/v1/admin/connectors/sberjazz/m-3/reconnect", headers=headers)
+    assert reconnect.status_code == 200
+    assert reconnect.json()["attempts"] == 2
+
+    health = client.get("/v1/admin/connectors/sberjazz/health", headers=headers)
+    assert health.status_code == 200
+    assert health.json()["healthy"] is True
+
+
+def test_admin_sberjazz_sessions_and_reconcile(monkeypatch, auth_settings) -> None:
+    auth_settings.auth_mode = "api_key"
+    auth_settings.service_api_keys = "svc-1"
+
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.admin.list_sberjazz_sessions",
+        lambda limit: [
+            SimpleNamespace(
+                meeting_id="m-10",
+                provider="sberjazz_mock",
+                connected=True,
+                attempts=1,
+                last_error=None,
+                updated_at="2026-02-04T00:00:05+00:00",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.admin.reconcile_sberjazz_sessions",
+        lambda limit: SimpleNamespace(
+            scanned=1,
+            stale=1,
+            reconnected=1,
+            failed=0,
+            stale_threshold_sec=900,
+            updated_at="2026-02-04T00:00:06+00:00",
+        ),
+    )
+
+    client = TestClient(app)
+    headers = {"X-API-Key": "svc-1"}
+
+    sessions = client.get("/v1/admin/connectors/sberjazz/sessions?limit=10", headers=headers)
+    assert sessions.status_code == 200
+    data = sessions.json()
+    assert len(data["sessions"]) == 1
+    assert data["sessions"][0]["meeting_id"] == "m-10"
+
+    reconcile = client.post("/v1/admin/connectors/sberjazz/reconcile?limit=50", headers=headers)
+    assert reconcile.status_code == 200
+    assert reconcile.json()["reconnected"] == 1

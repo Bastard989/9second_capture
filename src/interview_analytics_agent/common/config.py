@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     sberjazz_timeout_sec: int = Field(default=10, alias="SBERJAZZ_TIMEOUT_SEC")
     sberjazz_retries: int = Field(default=2, alias="SBERJAZZ_RETRIES")
     sberjazz_retry_backoff_ms: int = Field(default=300, alias="SBERJAZZ_RETRY_BACKOFF_MS")
+    sberjazz_session_ttl_sec: int = Field(default=86_400, alias="SBERJAZZ_SESSION_TTL_SEC")
+    sberjazz_reconcile_stale_sec: int = Field(default=900, alias="SBERJAZZ_RECONCILE_STALE_SEC")
 
     # -------------------------------------------------------------------------
     # LLM (OpenAI-compatible)

@@ -33,6 +33,10 @@ Production-ориентированный backend для транскрибац�
 - `POST /v1/admin/connectors/sberjazz/{meeting_id}/join` — инициировать live-подключение коннектора.
 - `GET /v1/admin/connectors/sberjazz/{meeting_id}/status` — получить текущий статус подключения.
 - `POST /v1/admin/connectors/sberjazz/{meeting_id}/leave` — завершить подключение.
+- `POST /v1/admin/connectors/sberjazz/{meeting_id}/reconnect` — принудительный reconnect.
+- `GET /v1/admin/connectors/sberjazz/health` — health/probe коннектора.
+- `GET /v1/admin/connectors/sberjazz/sessions` — список сохранённых connector-сессий.
+- `POST /v1/admin/connectors/sberjazz/reconcile` — reconcile stale-сессий с авто-reconnect.
 - Требуется service-авторизация (`SERVICE_API_KEYS`) или service JWT claims:
   (`JWT_SERVICE_CLAIM_KEY` / `JWT_SERVICE_CLAIM_VALUES`, `JWT_SERVICE_ROLE_CLAIM` / `JWT_SERVICE_ALLOWED_ROLES`).
 

@@ -69,6 +69,9 @@ class SaluteJazzConnector(MeetingConnector):
         except ValueError:
             return {}
 
+    def health(self) -> dict:
+        return self._request("GET", "/api/v1/health")
+
     def join(self, meeting_id: str) -> MeetingContext:
         data = self._request("POST", f"/api/v1/meetings/{meeting_id}/join")
         participants = data.get("participants")

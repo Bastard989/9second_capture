@@ -538,6 +538,283 @@
           }
         }
       }
+    },
+    "/v1/admin/connectors/sberjazz/{meeting_id}/reconnect": {
+      "post": {
+        "summary": "Admin Sberjazz Reconnect",
+        "operationId": "admin_sberjazz_reconnect_v1_admin_connectors_sberjazz__meeting_id__reconnect_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SberJazzSessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/connectors/sberjazz/health": {
+      "get": {
+        "summary": "Admin Sberjazz Health",
+        "operationId": "admin_sberjazz_health_v1_admin_connectors_sberjazz_health_get",
+        "parameters": [
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SberJazzConnectorHealthResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/connectors/sberjazz/sessions": {
+      "get": {
+        "summary": "Admin Sberjazz Sessions",
+        "operationId": "admin_sberjazz_sessions_v1_admin_connectors_sberjazz_sessions_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SberJazzSessionListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/connectors/sberjazz/reconcile": {
+      "post": {
+        "summary": "Admin Sberjazz Reconcile",
+        "operationId": "admin_sberjazz_reconcile_v1_admin_connectors_sberjazz_reconcile_post",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SberJazzReconcileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -813,6 +1090,95 @@
           "queues"
         ],
         "title": "QueueHealthResponse"
+      },
+      "SberJazzConnectorHealthResponse": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "healthy": {
+            "type": "boolean",
+            "title": "Healthy"
+          },
+          "details": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Details"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "configured",
+          "healthy",
+          "updated_at"
+        ],
+        "title": "SberJazzConnectorHealthResponse"
+      },
+      "SberJazzReconcileResponse": {
+        "properties": {
+          "scanned": {
+            "type": "integer",
+            "title": "Scanned"
+          },
+          "stale": {
+            "type": "integer",
+            "title": "Stale"
+          },
+          "reconnected": {
+            "type": "integer",
+            "title": "Reconnected"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "stale_threshold_sec": {
+            "type": "integer",
+            "title": "Stale Threshold Sec"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scanned",
+          "stale",
+          "reconnected",
+          "failed",
+          "stale_threshold_sec",
+          "updated_at"
+        ],
+        "title": "SberJazzReconcileResponse"
+      },
+      "SberJazzSessionListResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SberJazzSessionResponse"
+            },
+            "type": "array",
+            "title": "Sessions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessions"
+        ],
+        "title": "SberJazzSessionListResponse"
       },
       "SberJazzSessionResponse": {
         "properties": {
