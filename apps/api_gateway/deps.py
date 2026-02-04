@@ -17,6 +17,7 @@ from interview_analytics_agent.common.security import (
     is_service_jwt_claims,
     require_auth,
 )
+from interview_analytics_agent.services.security_audit_service import write_security_audit_event
 
 log = get_project_logger()
 
@@ -50,6 +51,16 @@ def _audit_allow(
             }
         },
     )
+    write_security_audit_event(
+        outcome="allow",
+        endpoint=endpoint,
+        method=method,
+        subject=ctx.subject,
+        auth_type=ctx.auth_type,
+        reason=reason,
+        status_code=200,
+        client_ip=client_ip,
+    )
 
 
 def _audit_deny(
@@ -76,6 +87,17 @@ def _audit_deny(
                 "client_ip": client_ip,
             }
         },
+    )
+    write_security_audit_event(
+        outcome="deny",
+        endpoint=endpoint,
+        method=method,
+        subject=subject or "unknown",
+        auth_type=auth_type or "unknown",
+        reason=reason,
+        status_code=status_code,
+        error_code=error_code,
+        client_ip=client_ip,
     )
 
 

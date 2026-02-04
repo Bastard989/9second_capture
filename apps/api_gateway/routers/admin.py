@@ -28,6 +28,7 @@ from interview_analytics_agent.services.sberjazz_service import (
     reconcile_sberjazz_sessions,
     reconnect_sberjazz_meeting,
 )
+from interview_analytics_agent.services.security_audit_service import list_security_audit_events
 
 router = APIRouter()
 
@@ -80,6 +81,24 @@ class SberJazzReconcileResponse(BaseModel):
     failed: int
     stale_threshold_sec: int
     updated_at: str
+
+
+class SecurityAuditEventResponse(BaseModel):
+    id: int
+    created_at: str
+    outcome: str
+    endpoint: str
+    method: str
+    subject: str
+    auth_type: str
+    reason: str
+    error_code: str | None
+    status_code: int
+    client_ip: str | None
+
+
+class SecurityAuditListResponse(BaseModel):
+    events: list[SecurityAuditEventResponse]
 
 
 def _as_response(state: SberJazzSessionState) -> SberJazzSessionResponse:
@@ -242,3 +261,32 @@ def admin_sberjazz_reconcile(limit: int = 200) -> SberJazzReconcileResponse:
         reconnected=result.reconnected,
     )
     return _as_reconcile_response(result)
+
+
+@router.get(
+    "/admin/security/audit",
+    response_model=SecurityAuditListResponse,
+    dependencies=[Depends(service_auth_dep)],
+)
+def admin_security_audit(
+    limit: int = 100,
+    outcome: str | None = None,
+    subject: str | None = None,
+) -> SecurityAuditListResponse:
+    try:
+        events = list_security_audit_events(limit=limit, outcome=outcome, subject=subject)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": ErrCode.VALIDATION, "message": str(e)},
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": ErrCode.DB_ERROR,
+                "message": "Не удалось загрузить security audit события",
+                "details": {"err": str(e)[:200]},
+            },
+        ) from e
+    return SecurityAuditListResponse(events=[SecurityAuditEventResponse(**event.__dict__) for event in events])

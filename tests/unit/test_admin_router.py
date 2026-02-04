@@ -28,6 +28,7 @@ def auth_settings():
         "auth_mode",
         "api_keys",
         "service_api_keys",
+        "security_audit_db_enabled",
         "allow_service_api_key_in_jwt_mode",
         "oidc_issuer_url",
         "oidc_jwks_url",
@@ -42,6 +43,7 @@ def auth_settings():
     ]
     snapshot = {k: getattr(s, k) for k in keys}
     try:
+        s.security_audit_db_enabled = False
         yield s
     finally:
         for k, v in snapshot.items():
@@ -259,3 +261,44 @@ def test_admin_sberjazz_sessions_and_reconcile(monkeypatch, auth_settings) -> No
     reconcile = client.post("/v1/admin/connectors/sberjazz/reconcile?limit=50", headers=headers)
     assert reconcile.status_code == 200
     assert reconcile.json()["reconnected"] == 1
+
+
+def test_admin_security_audit_list(monkeypatch, auth_settings) -> None:
+    auth_settings.auth_mode = "api_key"
+    auth_settings.service_api_keys = "svc-1"
+
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.admin.list_security_audit_events",
+        lambda limit, outcome, subject: [
+            SimpleNamespace(
+                id=1,
+                created_at="2026-02-04T18:20:00+00:00",
+                outcome="allow",
+                endpoint="/v1/admin/queues/health",
+                method="GET",
+                subject="service",
+                auth_type="service_api_key",
+                reason="service_api_key",
+                error_code=None,
+                status_code=200,
+                client_ip="127.0.0.1",
+            )
+        ],
+    )
+
+    client = TestClient(app)
+    headers = {"X-API-Key": "svc-1"}
+    resp = client.get("/v1/admin/security/audit?limit=20&outcome=allow", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["events"]) == 1
+    assert data["events"][0]["outcome"] == "allow"
+
+
+def test_admin_security_audit_rejects_bad_outcome(auth_settings) -> None:
+    auth_settings.auth_mode = "api_key"
+    auth_settings.service_api_keys = "svc-1"
+    client = TestClient(app)
+    headers = {"X-API-Key": "svc-1"}
+    resp = client.get("/v1/admin/security/audit?outcome=weird", headers=headers)
+    assert resp.status_code == 422

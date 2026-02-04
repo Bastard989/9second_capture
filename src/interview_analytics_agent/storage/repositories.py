@@ -8,9 +8,10 @@
 
 from __future__ import annotations
 
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from .models import Meeting, TranscriptSegment
+from .models import Meeting, SecurityAuditEvent, TranscriptSegment
 
 
 # =============================================================================
@@ -114,5 +115,58 @@ class TranscriptSegmentRepository:
             self.session.query(TranscriptSegment)
             .filter(TranscriptSegment.meeting_id == meeting_id)
             .order_by(TranscriptSegment.seq)
+            .all()
+        )
+
+
+class SecurityAuditRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def add_event(
+        self,
+        *,
+        outcome: str,
+        endpoint: str,
+        method: str,
+        subject: str,
+        auth_type: str,
+        reason: str,
+        status_code: int,
+        error_code: str | None = None,
+        client_ip: str | None = None,
+    ) -> SecurityAuditEvent:
+        event = SecurityAuditEvent(
+            outcome=outcome,
+            endpoint=endpoint,
+            method=method,
+            subject=subject,
+            auth_type=auth_type,
+            reason=reason,
+            status_code=status_code,
+            error_code=error_code,
+            client_ip=client_ip,
+        )
+        self.session.add(event)
+        return event
+
+    def list_recent(
+        self,
+        *,
+        limit: int = 100,
+        outcome: str | None = None,
+        subject: str | None = None,
+    ) -> list[SecurityAuditEvent]:
+        query = self.session.query(SecurityAuditEvent)
+        if outcome:
+            query = query.filter(SecurityAuditEvent.outcome == outcome)
+        if subject:
+            query = query.filter(SecurityAuditEvent.subject == subject)
+        return (
+            query.order_by(
+                desc(SecurityAuditEvent.created_at),
+                desc(SecurityAuditEvent.id),
+            )
+            .limit(max(1, min(limit, 500)))
             .all()
         )

@@ -37,11 +37,13 @@ Production-ориентированный backend для транскрибац�
 - `GET /v1/admin/connectors/sberjazz/health` — health/probe коннектора.
 - `GET /v1/admin/connectors/sberjazz/sessions` — список сохранённых connector-сессий.
 - `POST /v1/admin/connectors/sberjazz/reconcile` — reconcile stale-сессий с авто-reconnect.
+- `GET /v1/admin/security/audit` — получить персистентный audit trail (allow/deny).
 - Требуется service-авторизация (`SERVICE_API_KEYS`) или service JWT claims:
   (`JWT_SERVICE_CLAIM_KEY` / `JWT_SERVICE_CLAIM_VALUES`, `JWT_SERVICE_ROLE_CLAIM` / `JWT_SERVICE_ALLOWED_ROLES`).
 
 Security audit логи:
 - `security_audit_allow` и `security_audit_deny` (endpoint, method, subject, auth_type, reason).
+- Персистентный аудит в БД (`security_audit_events`), отключается через `SECURITY_AUDIT_DB_ENABLED=false`.
 
 ## Reconciliation worker
 

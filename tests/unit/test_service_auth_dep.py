@@ -20,6 +20,7 @@ def auth_settings():
         "auth_mode",
         "api_keys",
         "service_api_keys",
+        "security_audit_db_enabled",
         "allow_service_api_key_in_jwt_mode",
         "oidc_issuer_url",
         "oidc_jwks_url",
@@ -34,6 +35,7 @@ def auth_settings():
     ]
     snapshot = {k: getattr(s, k) for k in keys}
     try:
+        s.security_audit_db_enabled = False
         yield s
     finally:
         for k, v in snapshot.items():

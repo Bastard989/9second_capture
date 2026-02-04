@@ -147,6 +147,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_format: str = Field(default="json", alias="LOG_FORMAT")  # json|text
+    security_audit_db_enabled: bool = Field(default=True, alias="SECURITY_AUDIT_DB_ENABLED")
 
 
 _SETTINGS = Settings()

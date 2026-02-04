@@ -92,3 +92,23 @@ class TranscriptSegment(Base):
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     meeting: Mapped[Meeting] = relationship(back_populates="segments")
+
+
+class SecurityAuditEvent(Base):
+    """
+    Персистентный аудит событий доступа (allow/deny).
+    """
+
+    __tablename__ = "security_audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)  # allow|deny
+    endpoint: Mapped[str] = mapped_column(String(256), nullable=False)
+    method: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject: Mapped[str] = mapped_column(String(256), nullable=False)
+    auth_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(String(256), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
