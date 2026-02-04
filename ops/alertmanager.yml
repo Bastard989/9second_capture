@@ -24,5 +24,14 @@ inhibit_rules:
 
 receivers:
   - name: default
+    webhook_configs:
+      - url: "http://alert-webhook-sink:9080/webhook?channel=default"
+        send_resolved: true
   - name: warning
+    webhook_configs:
+      - url: "http://alert-webhook-sink:9080/webhook?channel=warning"
+        send_resolved: true
   - name: critical
+    webhook_configs:
+      - url: "http://alert-webhook-sink:9080/webhook?channel=critical"
+        send_resolved: true

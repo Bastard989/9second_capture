@@ -1,5 +1,12 @@
 # Alert Runbook
 
+## Проверка доставки алертов (smoke)
+
+1. Поднять observability-профиль: `docker compose --profile observability up -d`.
+2. Запустить smoke: `make alerts-smoke`.
+3. Проверить sink статистику: `curl -fsS http://localhost:9080/stats`.
+4. Ожидаемо: минимум 1 `warning` и 1 `critical` событие.
+
 ## ApiGatewayDown
 
 1. Проверить состояние контейнера `api-gateway`: `docker compose ps`.

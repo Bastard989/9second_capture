@@ -9,7 +9,7 @@ PYTHON ?= python3
 	compose-up compose-down \
 	fmt lint fix test storage-smoke \
 	cycle cycle-autofix \
-	openapi-gen openapi-check release-check
+	openapi-gen openapi-check release-check alerts-smoke
 
 doctor:
 	@echo "== docker ==" && docker version >/dev/null && echo "OK"
@@ -86,3 +86,6 @@ openapi-check:
 
 release-check:
 	$(PYTHON) scripts/check_release.py
+
+alerts-smoke:
+	$(PYTHON) tools/alerts_delivery_smoke.py

@@ -19,6 +19,8 @@ Production-ориентированный backend для транскрибац�
 - `python3 tools/e2e_local.py`
 - `python3 tools/e2e_connector_live.py` (realtime connector live-pull smoke)
 - `make storage-smoke` (shared storage failover smoke)
+- `make alerts-smoke` (проверка маршрутизации warning/critical алертов через Alertmanager в webhook sink;
+  требует `docker compose --profile observability up -d`)
 
 Сценарий smoke:
 1. `POST /v1/meetings/start`
@@ -112,6 +114,7 @@ SberJazz HTTP resilience:
 - Prometheus: `http://localhost:9090`
 - Alertmanager: `http://localhost:9093`
 - Grafana: `http://localhost:3000`
+- Alert webhook sink (dev/stage): `http://localhost:9080` (`/stats`, `/events`, `/reset`)
 
 Дополнительные connector-метрики:
 - `agent_sberjazz_connector_health`
@@ -122,6 +125,12 @@ SberJazz HTTP resilience:
 - `agent_sberjazz_live_pull_last_scanned|connected|pulled|ingested|failed|invalid_chunks`
 - `agent_storage_health{mode="local_fs|shared_fs"}`
 - `agent_system_readiness`
+
+Alert routing:
+- Alertmanager использует severity-маршрутизацию (`default` / `warning` / `critical`).
+- В dev/stage маршрутизация идет во внутренний webhook sink (`alert-webhook-sink`).
+- Для production замени webhook receiver URL в `ops/alertmanager.yml` на внешние каналы
+  (Slack/PagerDuty/incident hub).
 
 ## CI
 

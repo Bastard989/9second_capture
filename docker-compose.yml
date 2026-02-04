@@ -354,6 +354,21 @@ services:
       - ./ops/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
       - "9093:9093"
+    depends_on:
+      alert-webhook-sink:
+        condition: service_started
+    restart: unless-stopped
+
+  alert-webhook-sink:
+    build:
+      context: .
+    profiles: ["observability"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    command: ["python3", "-m", "apps.alert_sink.main"]
+    ports:
+      - "9080:9080"
     restart: unless-stopped
 
   grafana:
