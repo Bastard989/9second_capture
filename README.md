@@ -126,10 +126,17 @@ SberJazz HTTP resilience:
 ## CI
 
 GitHub Actions запускает:
-- security scans (`trivy` + `grype`, fail на HIGH/CRITICAL),
+- dependency review для PR,
+- security scans (`pip-audit` + `trivy` + `grype`, fail на HIGH/CRITICAL),
 - compose build + healthcheck,
 - unit tests + lint + smoke cycle,
 - OpenAPI contract check.
+
+Release automation:
+- workflow `Release` запускается на тегах формата `v*.*.*`,
+- повторно выполняет build/test/lint/smoke/openapi-check,
+- собирает release assets (`sdist`, `wheel`, `openapi.json`, `SHA256SUMS`),
+- публикует GitHub Release с автогенерируемыми release notes и provenance attestation.
 
 ## Runbooks
 
