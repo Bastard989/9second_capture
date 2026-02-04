@@ -90,6 +90,12 @@ SBERJAZZ_CIRCUIT_BREAKER_OPEN = Gauge(
     "Состояние circuit breaker SberJazz connector (1=open, 0=closed/half_open)",
 )
 
+SBERJAZZ_CIRCUIT_BREAKER_RESETS_TOTAL = Counter(
+    "agent_sberjazz_circuit_breaker_resets_total",
+    "Количество reset операций circuit breaker",
+    ["source", "reason"],  # source=admin|auto
+)
+
 STORAGE_HEALTH = Gauge(
     "agent_storage_health",
     "Состояние blob storage (1=healthy, 0=unhealthy)",
@@ -202,6 +208,10 @@ def record_sberjazz_reconcile_result(
     SBERJAZZ_RECONCILE_LAST_STALE.set(max(0, stale))
     SBERJAZZ_RECONCILE_LAST_FAILED.set(max(0, failed))
     SBERJAZZ_RECONCILE_LAST_RECONNECTED.set(max(0, reconnected))
+
+
+def record_sberjazz_cb_reset(*, source: str, reason: str) -> None:
+    SBERJAZZ_CIRCUIT_BREAKER_RESETS_TOTAL.labels(source=source, reason=reason).inc()
 
 
 def refresh_storage_metrics() -> None:

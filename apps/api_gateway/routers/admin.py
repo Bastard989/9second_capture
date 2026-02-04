@@ -13,7 +13,10 @@ from pydantic import BaseModel, Field
 
 from apps.api_gateway.deps import service_auth_read_dep, service_auth_write_dep
 from interview_analytics_agent.common.errors import ErrCode, ProviderError
-from interview_analytics_agent.common.metrics import record_sberjazz_reconcile_result
+from interview_analytics_agent.common.metrics import (
+    record_sberjazz_cb_reset,
+    record_sberjazz_reconcile_result,
+)
 from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.queue.streams import stream_dlq_name
 from interview_analytics_agent.services.sberjazz_service import (
@@ -28,6 +31,7 @@ from interview_analytics_agent.services.sberjazz_service import (
     leave_sberjazz_meeting,
     list_sberjazz_sessions,
     reconcile_sberjazz_sessions,
+    reset_sberjazz_circuit_breaker,
     reconnect_sberjazz_meeting,
 )
 from interview_analytics_agent.services.security_audit_service import list_security_audit_events
@@ -287,6 +291,17 @@ def admin_sberjazz_health() -> SberJazzConnectorHealthResponse:
 )
 def admin_sberjazz_circuit_breaker() -> SberJazzCircuitBreakerResponse:
     return _as_cb_response(get_sberjazz_circuit_breaker_state())
+
+
+@router.post(
+    "/admin/connectors/sberjazz/circuit-breaker/reset",
+    response_model=SberJazzCircuitBreakerResponse,
+    dependencies=[Depends(service_auth_write_dep)],
+)
+def admin_sberjazz_circuit_breaker_reset() -> SberJazzCircuitBreakerResponse:
+    state = reset_sberjazz_circuit_breaker(reason="manual_reset")
+    record_sberjazz_cb_reset(source="admin", reason="manual_reset")
+    return _as_cb_response(state)
 
 
 @router.get(

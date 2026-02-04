@@ -796,6 +796,68 @@
         }
       }
     },
+    "/v1/admin/connectors/sberjazz/circuit-breaker/reset": {
+      "post": {
+        "summary": "Admin Sberjazz Circuit Breaker Reset",
+        "operationId": "admin_sberjazz_circuit_breaker_reset_v1_admin_connectors_sberjazz_circuit_breaker_reset_post",
+        "parameters": [
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SberJazzCircuitBreakerResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/connectors/sberjazz/sessions": {
       "get": {
         "summary": "Admin Sberjazz Sessions",

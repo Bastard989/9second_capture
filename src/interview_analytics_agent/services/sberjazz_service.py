@@ -283,6 +283,21 @@ def get_sberjazz_circuit_breaker_state() -> SberJazzCircuitBreakerState:
     return _default_cb_state()
 
 
+def reset_sberjazz_circuit_breaker(*, reason: str = "manual_reset") -> SberJazzCircuitBreakerState:
+    state = _default_cb_state()
+    saved = _save_cb_state(state)
+    log.info(
+        "sberjazz_cb_reset",
+        extra={
+            "payload": {
+                "reason": reason,
+                "state": saved.state,
+            }
+        },
+    )
+    return saved
+
+
 def _before_connector_call(operation: str) -> None:
     state = get_sberjazz_circuit_breaker_state()
     if state.state != "open":

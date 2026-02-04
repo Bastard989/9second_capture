@@ -320,6 +320,30 @@ def test_admin_sberjazz_circuit_breaker(monkeypatch, auth_settings) -> None:
     assert resp.json()["state"] == "open"
 
 
+def test_admin_sberjazz_circuit_breaker_reset(monkeypatch, auth_settings) -> None:
+    auth_settings.auth_mode = "api_key"
+    auth_settings.service_api_keys = "svc-1"
+
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.admin.reset_sberjazz_circuit_breaker",
+        lambda reason: SimpleNamespace(
+            state="closed",
+            consecutive_failures=0,
+            opened_at=None,
+            last_error=None,
+            updated_at="2026-02-04T20:00:00+00:00",
+        ),
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/v1/admin/connectors/sberjazz/circuit-breaker/reset",
+        headers={"X-API-Key": "svc-1"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "closed"
+
+
 def test_admin_security_audit_list(monkeypatch, auth_settings) -> None:
     auth_settings.auth_mode = "api_key"
     auth_settings.service_api_keys = "svc-1"

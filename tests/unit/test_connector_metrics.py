@@ -66,3 +66,16 @@ def test_refresh_storage_metrics_sets_gauge(monkeypatch) -> None:
     )
     metrics.refresh_storage_metrics()
     assert metrics.STORAGE_HEALTH.labels(mode="shared_fs")._value.get() == 1
+
+
+def test_record_cb_reset_increments_counter() -> None:
+    before = metrics.SBERJAZZ_CIRCUIT_BREAKER_RESETS_TOTAL.labels(
+        source="admin",
+        reason="manual_reset",
+    )._value.get()
+    metrics.record_sberjazz_cb_reset(source="admin", reason="manual_reset")
+    after = metrics.SBERJAZZ_CIRCUIT_BREAKER_RESETS_TOTAL.labels(
+        source="admin",
+        reason="manual_reset",
+    )._value.get()
+    assert after == before + 1
