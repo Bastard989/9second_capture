@@ -40,3 +40,14 @@ groups:
         annotations:
           summary: "High API latency (p95)"
           description: "p95 latency is above 3000ms for 10 minutes."
+
+  - name: agent-connectors
+    rules:
+      - alert: SberJazzConnectorUnhealthy
+        expr: agent_sberjazz_connector_health == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SberJazz connector is unhealthy"
+          description: "Connector health is 0 for more than 5 minutes."

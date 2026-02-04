@@ -60,6 +60,10 @@ Security audit логи:
 - Alertmanager: `http://localhost:9093`
 - Grafana: `http://localhost:3000`
 
+Дополнительные connector-метрики:
+- `agent_sberjazz_connector_health`
+- `agent_sberjazz_sessions_total{state="connected|disconnected"}`
+
 ## CI
 
 GitHub Actions запускает:

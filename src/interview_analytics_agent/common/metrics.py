@@ -74,6 +74,17 @@ METRICS_COLLECTION_ERRORS_TOTAL = Counter(
     ["source"],
 )
 
+SBERJAZZ_SESSIONS_TOTAL = Gauge(
+    "agent_sberjazz_sessions_total",
+    "Количество SberJazz connector-сессий",
+    ["state"],  # connected|disconnected
+)
+
+SBERJAZZ_CONNECTOR_HEALTH = Gauge(
+    "agent_sberjazz_connector_health",
+    "Состояние SberJazz connector (1=healthy, 0=unhealthy)",
+)
+
 
 _QUEUE_GROUPS = {
     "q:stt": "g:stt",
@@ -125,6 +136,25 @@ def refresh_queue_metrics() -> None:
         METRICS_COLLECTION_ERRORS_TOTAL.labels(source="queue_metrics").inc()
 
 
+def refresh_connector_metrics() -> None:
+    try:
+        from interview_analytics_agent.services.sberjazz_service import (
+            get_sberjazz_connector_health,
+            list_sberjazz_sessions,
+        )
+
+        sessions = list_sberjazz_sessions(limit=2000)
+        connected = sum(1 for s in sessions if s.connected)
+        disconnected = max(0, len(sessions) - connected)
+        SBERJAZZ_SESSIONS_TOTAL.labels(state="connected").set(connected)
+        SBERJAZZ_SESSIONS_TOTAL.labels(state="disconnected").set(disconnected)
+
+        health = get_sberjazz_connector_health()
+        SBERJAZZ_CONNECTOR_HEALTH.set(1 if health.healthy else 0)
+    except Exception:
+        METRICS_COLLECTION_ERRORS_TOTAL.labels(source="connector_metrics").inc()
+
+
 # =============================================================================
 # ENDPOINT /metrics
 # =============================================================================
@@ -159,4 +189,5 @@ def setup_metrics_endpoint(app: FastAPI) -> None:
     @app.get("/metrics")
     def metrics() -> Response:
         refresh_queue_metrics()
+        refresh_connector_metrics()
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
