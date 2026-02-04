@@ -9,6 +9,7 @@ groups:
         annotations:
           summary: "API Gateway is down"
           description: "Prometheus cannot scrape api-gateway for more than 2 minutes."
+          runbook_url: "docs/runbooks/alerts.md#apigatewaydown"
 
   - name: agent-queues
     rules:
@@ -20,6 +21,7 @@ groups:
         annotations:
           summary: "Queue backlog is high"
           description: "Queue {{ $labels.queue }} depth is {{ $value }} for more than 5 minutes."
+          runbook_url: "docs/runbooks/alerts.md#queuebackloghigh"
 
       - alert: DLQNotEmpty
         expr: agent_dlq_depth > 0
@@ -29,6 +31,7 @@ groups:
         annotations:
           summary: "DLQ contains messages"
           description: "DLQ for {{ $labels.queue }} has pending messages."
+          runbook_url: "docs/runbooks/alerts.md#dlqnotempty"
 
   - name: agent-latency
     rules:
@@ -40,6 +43,7 @@ groups:
         annotations:
           summary: "High API latency (p95)"
           description: "p95 latency is above 3000ms for 10 minutes."
+          runbook_url: "docs/runbooks/alerts.md#apip95latencyhigh"
 
   - name: agent-connectors
     rules:
@@ -51,3 +55,14 @@ groups:
         annotations:
           summary: "SberJazz connector is unhealthy"
           description: "Connector health is 0 for more than 5 minutes."
+          runbook_url: "docs/runbooks/alerts.md#sberjazzconnectorunhealthy"
+
+      - alert: SberJazzReconcileHasFailures
+        expr: agent_sberjazz_reconcile_last_failed > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SberJazz reconcile reports failures"
+          description: "Последний reconcile зафиксировал {{ $value }} failed reconnect."
+          runbook_url: "docs/runbooks/alerts.md#sberjazzreconcilehasfailures"

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from apps.api_gateway.deps import service_auth_dep
 from interview_analytics_agent.common.errors import ErrCode, ProviderError
+from interview_analytics_agent.common.metrics import record_sberjazz_reconcile_result
 from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.queue.streams import stream_dlq_name
 from interview_analytics_agent.services.sberjazz_service import (
@@ -234,4 +235,10 @@ def admin_sberjazz_sessions(limit: int = 100) -> SberJazzSessionListResponse:
 )
 def admin_sberjazz_reconcile(limit: int = 200) -> SberJazzReconcileResponse:
     result = reconcile_sberjazz_sessions(limit=max(1, min(limit, 500)))
+    record_sberjazz_reconcile_result(
+        source="admin",
+        stale=result.stale,
+        failed=result.failed,
+        reconnected=result.reconnected,
+    )
     return _as_reconcile_response(result)

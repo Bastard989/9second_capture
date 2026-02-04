@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.logging import get_project_logger
+from interview_analytics_agent.common.metrics import record_sberjazz_reconcile_result
 from interview_analytics_agent.services.sberjazz_service import (
     SberJazzReconcileResult,
     reconcile_sberjazz_sessions,
@@ -28,6 +29,12 @@ def run(*, limit: int | None = None) -> SberJazzReconcileResult | None:
     log.info("reconciliation_job_started", extra={"payload": {"limit": reconcile_limit}})
 
     result = reconcile_sberjazz_sessions(limit=max(1, reconcile_limit))
+    record_sberjazz_reconcile_result(
+        source="job",
+        stale=result.stale,
+        failed=result.failed,
+        reconnected=result.reconnected,
+    )
     log.info(
         "reconciliation_job_finished",
         extra={

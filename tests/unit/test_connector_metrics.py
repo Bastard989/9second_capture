@@ -28,3 +28,20 @@ def test_refresh_connector_metrics_sets_gauges(monkeypatch) -> None:
     assert connected == 2
     assert disconnected == 1
     assert healthy == 1
+
+
+def test_record_reconcile_metrics_sets_last_values() -> None:
+    metrics.record_sberjazz_reconcile_result(
+        source="job",
+        stale=4,
+        failed=1,
+        reconnected=3,
+    )
+
+    stale = metrics.SBERJAZZ_RECONCILE_LAST_STALE._value.get()
+    failed = metrics.SBERJAZZ_RECONCILE_LAST_FAILED._value.get()
+    reconnected = metrics.SBERJAZZ_RECONCILE_LAST_RECONNECTED._value.get()
+
+    assert stale == 4
+    assert failed == 1
+    assert reconnected == 3

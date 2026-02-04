@@ -1,5 +1,28 @@
 route:
   receiver: default
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 2h
+  routes:
+    - matchers:
+        - severity="critical"
+      receiver: critical
+      group_wait: 10s
+      repeat_interval: 15m
+    - matchers:
+        - severity="warning"
+      receiver: warning
+      repeat_interval: 1h
+
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ["alertname"]
 
 receivers:
   - name: default
+  - name: warning
+  - name: critical

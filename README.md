@@ -71,3 +71,7 @@ GitHub Actions запускает:
 - compose build + healthcheck,
 - unit tests + lint + smoke cycle,
 - OpenAPI contract check.
+
+## Runbooks
+
+- Алерты и действия при инцидентах: `docs/runbooks/alerts.md`

@@ -85,6 +85,27 @@ SBERJAZZ_CONNECTOR_HEALTH = Gauge(
     "Состояние SberJazz connector (1=healthy, 0=unhealthy)",
 )
 
+SBERJAZZ_RECONCILE_RUNS_TOTAL = Counter(
+    "agent_sberjazz_reconcile_runs_total",
+    "Количество запусков reconcile для SberJazz connector",
+    ["source", "result"],  # source=job|admin, result=ok|failed
+)
+
+SBERJAZZ_RECONCILE_LAST_STALE = Gauge(
+    "agent_sberjazz_reconcile_last_stale",
+    "Количество stale-сессий в последнем reconcile запуске",
+)
+
+SBERJAZZ_RECONCILE_LAST_FAILED = Gauge(
+    "agent_sberjazz_reconcile_last_failed",
+    "Количество failed reconnect в последнем reconcile запуске",
+)
+
+SBERJAZZ_RECONCILE_LAST_RECONNECTED = Gauge(
+    "agent_sberjazz_reconcile_last_reconnected",
+    "Количество успешных reconnect в последнем reconcile запуске",
+)
+
 
 _QUEUE_GROUPS = {
     "q:stt": "g:stt",
@@ -153,6 +174,20 @@ def refresh_connector_metrics() -> None:
         SBERJAZZ_CONNECTOR_HEALTH.set(1 if health.healthy else 0)
     except Exception:
         METRICS_COLLECTION_ERRORS_TOTAL.labels(source="connector_metrics").inc()
+
+
+def record_sberjazz_reconcile_result(
+    *,
+    source: str,
+    stale: int,
+    failed: int,
+    reconnected: int,
+) -> None:
+    result = "failed" if failed > 0 else "ok"
+    SBERJAZZ_RECONCILE_RUNS_TOTAL.labels(source=source, result=result).inc()
+    SBERJAZZ_RECONCILE_LAST_STALE.set(max(0, stale))
+    SBERJAZZ_RECONCILE_LAST_FAILED.set(max(0, failed))
+    SBERJAZZ_RECONCILE_LAST_RECONNECTED.set(max(0, reconnected))
 
 
 # =============================================================================
