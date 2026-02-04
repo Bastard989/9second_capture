@@ -58,6 +58,11 @@ Security audit логи:
 - Настройки: `RECONCILIATION_ENABLED`, `RECONCILIATION_INTERVAL_SEC`, `RECONCILIATION_LIMIT`,
   `SBERJAZZ_RECONCILE_STALE_SEC`.
 
+SberJazz HTTP resilience:
+- `SBERJAZZ_HTTP_RETRIES`
+- `SBERJAZZ_HTTP_RETRY_BACKOFF_MS`
+- `SBERJAZZ_HTTP_RETRY_STATUSES`
+
 ## Storage mode (production)
 
 - `STORAGE_MODE=shared_fs` — production режим (shared POSIX storage, например managed NFS).

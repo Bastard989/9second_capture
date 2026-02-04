@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import requests
@@ -32,6 +33,37 @@ class SaluteJazzConnector(MeetingConnector):
         self.base_url = (base_url or s.sberjazz_api_base or "").rstrip("/")
         self.api_token = (api_token or s.sberjazz_api_token or "").strip()
         self.timeout_sec = int(timeout_sec if timeout_sec is not None else s.sberjazz_timeout_sec)
+        self.http_retries = max(0, int(getattr(s, "sberjazz_http_retries", 2)))
+        self.http_retry_backoff_sec = (
+            max(0, int(getattr(s, "sberjazz_http_retry_backoff_ms", 300))) / 1000.0
+        )
+        self.http_retry_statuses = self._parse_retry_statuses(
+            str(getattr(s, "sberjazz_http_retry_statuses", "408,409,425,429,500,502,503,504"))
+        )
+
+    @staticmethod
+    def _parse_retry_statuses(raw: str) -> set[int]:
+        out: set[int] = set()
+        for item in (raw or "").split(","):
+            value = item.strip()
+            if not value:
+                continue
+            try:
+                out.add(int(value))
+            except ValueError:
+                continue
+        return out
+
+    @staticmethod
+    def _safe_response_text(resp: requests.Response, max_len: int = 300) -> str:
+        try:
+            text = resp.text or ""
+            return text[:max_len]
+        except Exception:
+            return ""
+
+    def _should_retry_status(self, status_code: int) -> bool:
+        return status_code in self.http_retry_statuses
 
     def _request(self, method: str, path: str, *, payload: dict[str, Any] | None = None) -> dict:
         if not self.base_url:
@@ -45,29 +77,69 @@ class SaluteJazzConnector(MeetingConnector):
         if self.api_token:
             headers["Authorization"] = f"Bearer {self.api_token}"
 
-        try:
-            resp = requests.request(
-                method=method.upper(),
-                url=url,
-                json=payload,
-                headers=headers,
-                timeout=self.timeout_sec,
-            )
-            resp.raise_for_status()
-        except requests.RequestException as e:
+        attempts = self.http_retries + 1
+        last_error: str | None = None
+        last_status: int | None = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = requests.request(
+                    method=method.upper(),
+                    url=url,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout_sec,
+                )
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_error = str(e)
+                if attempt < attempts:
+                    time.sleep(self.http_retry_backoff_sec * attempt)
+                    continue
+                raise ProviderError(
+                    ErrCode.CONNECTOR_PROVIDER_ERROR,
+                    "Ошибка обращения к SberJazz API",
+                    details={"err": last_error, "attempts": attempts, "url": url},
+                ) from e
+            except requests.RequestException as e:
+                raise ProviderError(
+                    ErrCode.CONNECTOR_PROVIDER_ERROR,
+                    "Ошибка обращения к SberJazz API",
+                    details={"err": str(e), "url": url},
+                ) from e
+
+            last_status = resp.status_code
+            if 200 <= resp.status_code < 300:
+                if not resp.content:
+                    return {}
+                try:
+                    data = resp.json()
+                    return data if isinstance(data, dict) else {}
+                except ValueError:
+                    return {}
+
+            body = self._safe_response_text(resp)
+            if resp.status_code in {401, 403}:
+                raise ProviderError(
+                    ErrCode.CONNECTOR_PROVIDER_ERROR,
+                    "Ошибка авторизации SberJazz API",
+                    details={"status_code": resp.status_code, "body": body, "url": url},
+                )
+
+            if self._should_retry_status(resp.status_code) and attempt < attempts:
+                time.sleep(self.http_retry_backoff_sec * attempt)
+                continue
+
             raise ProviderError(
                 ErrCode.CONNECTOR_PROVIDER_ERROR,
-                "Ошибка обращения к SberJazz API",
-                details={"err": str(e)},
-            ) from e
+                "SberJazz API вернул ошибку",
+                details={"status_code": resp.status_code, "body": body, "url": url},
+            )
 
-        if not resp.content:
-            return {}
-        try:
-            data = resp.json()
-            return data if isinstance(data, dict) else {}
-        except ValueError:
-            return {}
+        raise ProviderError(
+            ErrCode.CONNECTOR_PROVIDER_ERROR,
+            "Ошибка обращения к SberJazz API",
+            details={"status_code": last_status, "err": last_error, "url": url},
+        )
 
     def health(self) -> dict:
         return self._request("GET", "/api/v1/health")

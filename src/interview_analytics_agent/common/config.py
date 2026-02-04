@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     sberjazz_api_base: str | None = Field(default=None, alias="SBERJAZZ_API_BASE")
     sberjazz_api_token: str | None = Field(default=None, alias="SBERJAZZ_API_TOKEN")
     sberjazz_timeout_sec: int = Field(default=10, alias="SBERJAZZ_TIMEOUT_SEC")
+    sberjazz_http_retries: int = Field(default=2, alias="SBERJAZZ_HTTP_RETRIES")
+    sberjazz_http_retry_backoff_ms: int = Field(default=300, alias="SBERJAZZ_HTTP_RETRY_BACKOFF_MS")
+    sberjazz_http_retry_statuses: str = Field(
+        default="408,409,425,429,500,502,503,504",
+        alias="SBERJAZZ_HTTP_RETRY_STATUSES",
+    )
     sberjazz_retries: int = Field(default=2, alias="SBERJAZZ_RETRIES")
     sberjazz_retry_backoff_ms: int = Field(default=300, alias="SBERJAZZ_RETRY_BACKOFF_MS")
     sberjazz_cb_failure_threshold: int = Field(default=5, alias="SBERJAZZ_CB_FAILURE_THRESHOLD")
