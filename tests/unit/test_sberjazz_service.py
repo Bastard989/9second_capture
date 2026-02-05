@@ -97,6 +97,32 @@ def test_join_state_persisted_and_readable_from_redis(monkeypatch) -> None:
     assert loaded.meeting_id == "meeting-1"
 
 
+def test_join_idempotent_skips_provider_call_for_recent_connected(monkeypatch) -> None:
+    fake_redis = _FakeRedis()
+    fake_connector = _FakeConnector()
+    monkeypatch.setattr(sberjazz_service, "redis_client", lambda: fake_redis)
+    monkeypatch.setattr(
+        sberjazz_service,
+        "_resolve_connector",
+        lambda: ("sberjazz_mock", fake_connector),
+    )
+    sberjazz_service._SESSIONS.clear()
+    sberjazz_service._CIRCUIT_BREAKER = None
+    sberjazz_service._SESSIONS["meeting-idem"] = sberjazz_service.SberJazzSessionState(
+        meeting_id="meeting-idem",
+        provider="sberjazz_mock",
+        connected=True,
+        attempts=7,
+        last_error=None,
+        updated_at=sberjazz_service._now_iso(),
+    )
+
+    joined = sberjazz_service.join_sberjazz_meeting("meeting-idem")
+    assert joined.connected is True
+    assert joined.attempts == 7
+    assert fake_connector.join_calls == 0
+
+
 def test_reconnect_calls_leave_then_join_when_connected(monkeypatch) -> None:
     fake_redis = _FakeRedis()
     fake_connector = _FakeConnector()
@@ -115,6 +141,38 @@ def test_reconnect_calls_leave_then_join_when_connected(monkeypatch) -> None:
     assert reconnected.connected is True
     assert fake_connector.leave_calls == 1
     assert fake_connector.join_calls >= 2
+
+
+def test_reconnect_forces_join_even_when_leave_fails(monkeypatch) -> None:
+    class _LeaveFailConnector(_FakeConnector):
+        def leave(self, meeting_id: str) -> None:
+            _ = meeting_id
+            self.leave_calls += 1
+            raise ProviderError(ErrCode.CONNECTOR_UNAVAILABLE, "temporary leave fail")
+
+    fake_redis = _FakeRedis()
+    fake_connector = _LeaveFailConnector()
+    monkeypatch.setattr(sberjazz_service, "redis_client", lambda: fake_redis)
+    monkeypatch.setattr(
+        sberjazz_service,
+        "_resolve_connector",
+        lambda: ("sberjazz", fake_connector),
+    )
+    sberjazz_service._SESSIONS.clear()
+    sberjazz_service._CIRCUIT_BREAKER = None
+    sberjazz_service._SESSIONS["meeting-reconn"] = sberjazz_service.SberJazzSessionState(
+        meeting_id="meeting-reconn",
+        provider="sberjazz",
+        connected=True,
+        attempts=1,
+        last_error=None,
+        updated_at=sberjazz_service._now_iso(),
+    )
+
+    reconnected = sberjazz_service.reconnect_sberjazz_meeting("meeting-reconn")
+    assert reconnected.connected is True
+    assert fake_connector.leave_calls >= 1
+    assert fake_connector.join_calls == 1
 
 
 def test_reconcile_reconnects_stale_sessions(monkeypatch) -> None:

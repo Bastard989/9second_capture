@@ -243,6 +243,10 @@ def _live_pull_fail_reconnect_threshold() -> int:
     return max(1, int(getattr(get_settings(), "sberjazz_live_pull_fail_reconnect_threshold", 3)))
 
 
+def _join_idempotent_ttl_sec() -> int:
+    return max(0, int(getattr(get_settings(), "sberjazz_join_idempotent_ttl_sec", 30)))
+
+
 def _inc_live_pull_fail_count(meeting_id: str) -> int:
     r = redis_client()
     count = int(r.incr(_live_fail_count_key(meeting_id)))
@@ -481,8 +485,33 @@ def list_sberjazz_sessions(limit: int = 100) -> list[SberJazzSessionState]:
     return states[: max(1, limit)]
 
 
-def _join_sberjazz_meeting_impl(meeting_id: str) -> SberJazzSessionState:
+def _join_sberjazz_meeting_impl(meeting_id: str, *, force: bool = False) -> SberJazzSessionState:
     _before_connector_call("join")
+    previous = get_sberjazz_meeting_state(meeting_id)
+    if previous.connected and not force:
+        age_sec = max(0, int((datetime.now(UTC) - _parse_dt(previous.updated_at)).total_seconds()))
+        ttl = _join_idempotent_ttl_sec()
+        if age_sec <= ttl:
+            state = SberJazzSessionState(
+                meeting_id=meeting_id,
+                provider=previous.provider,
+                connected=True,
+                attempts=previous.attempts,
+                last_error=None,
+                updated_at=_now_iso(),
+            )
+            log.info(
+                "sberjazz_join_idempotent_skip",
+                extra={
+                    "payload": {
+                        "meeting_id": meeting_id,
+                        "age_sec": age_sec,
+                        "ttl_sec": ttl,
+                    }
+                },
+            )
+            return _save_state(state)
+
     provider, connector = _resolve_connector()
     attempts, backoff_sec = _retry_config()
     last_error: str | None = None
@@ -626,7 +655,7 @@ def reconnect_sberjazz_meeting(meeting_id: str) -> SberJazzSessionState:
                     "sberjazz_reconnect_leave_failed",
                     extra={"payload": {"meeting_id": meeting_id, "error": str(e)[:200]}},
                 )
-        return _join_sberjazz_meeting_impl(meeting_id)
+        return _join_sberjazz_meeting_impl(meeting_id, force=True)
 
 
 @dataclass

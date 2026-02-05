@@ -62,6 +62,14 @@ def evaluate_readiness() -> ReadinessState:
                 message="MEETING_CONNECTOR_PROVIDER=sberjazz требует SBERJAZZ_API_BASE",
             )
         )
+    if provider == "sberjazz" and not (s.sberjazz_api_token or "").strip():
+        issues.append(
+            ReadinessIssue(
+                severity="error" if is_prod else "warning",
+                code="sberjazz_api_token_empty",
+                message="MEETING_CONNECTOR_PROVIDER=sberjazz требует SBERJAZZ_API_TOKEN",
+            )
+        )
 
     if is_prod:
         auth_mode = (s.auth_mode or "").strip().lower()
@@ -127,6 +135,25 @@ def evaluate_readiness() -> ReadinessState:
                     message="В prod используется sberjazz_mock; рекомендуется real sberjazz",
                 )
             )
+        if provider == "sberjazz":
+            if (s.sberjazz_api_base or "").strip().lower().startswith("http://") and bool(
+                getattr(s, "sberjazz_require_https_in_prod", True)
+            ):
+                issues.append(
+                    ReadinessIssue(
+                        severity="error",
+                        code="sberjazz_api_base_not_https",
+                        message="В prod SBERJAZZ_API_BASE должен использовать https://",
+                    )
+                )
+            if auth_mode != "jwt":
+                issues.append(
+                    ReadinessIssue(
+                        severity="error",
+                        code="sberjazz_requires_jwt_auth_mode",
+                        message="В prod для real SberJazz требуется AUTH_MODE=jwt",
+                    )
+                )
 
     ready = all(i.severity != "error" for i in issues)
     return ReadinessState(ready=ready, issues=issues)

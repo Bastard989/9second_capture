@@ -102,8 +102,12 @@ SberJazz HTTP resilience:
 - `SBERJAZZ_HTTP_RETRY_STATUSES`
 - `SBERJAZZ_OP_LOCK_TTL_SEC` (защита от параллельных join/reconnect/leave для одной встречи)
 - `SBERJAZZ_CB_AUTO_RESET_ENABLED` / `SBERJAZZ_CB_AUTO_RESET_MIN_AGE_SEC` (self-healing breaker через reconciliation worker)
+- `SBERJAZZ_JOIN_IDEMPOTENT_TTL_SEC` (идемпотентный join: повторный join для свежей connected-сессии не дергает provider)
 - Для non-retryable provider ошибок (auth/bad-request/invalid-response) join/leave/live-pull
   не тратят лишние retry-итерации (fail-fast).
+- Для `MEETING_CONNECTOR_PROVIDER=sberjazz` в `APP_ENV=prod` readiness ожидает:
+  `SBERJAZZ_API_BASE=https://...`, непустой `SBERJAZZ_API_TOKEN`, `AUTH_MODE=jwt`
+  (`SBERJAZZ_REQUIRE_HTTPS_IN_PROD=true`).
 
 ## Storage mode (production)
 

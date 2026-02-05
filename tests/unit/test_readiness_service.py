@@ -137,3 +137,40 @@ def test_readiness_prod_jwt_fallback_enabled_is_warning() -> None:
             s.oidc_issuer_url,
             s.oidc_jwks_url,
         ) = snapshot
+
+
+def test_readiness_prod_sberjazz_requires_strict_connector_policy() -> None:
+    s = get_settings()
+    snapshot = (
+        s.app_env,
+        s.auth_mode,
+        s.api_keys,
+        s.meeting_connector_provider,
+        s.sberjazz_api_base,
+        s.sberjazz_api_token,
+        s.sberjazz_require_https_in_prod,
+    )
+    try:
+        s.app_env = "prod"
+        s.auth_mode = "api_key"
+        s.api_keys = "k1"
+        s.meeting_connector_provider = "sberjazz"
+        s.sberjazz_api_base = "http://sj.example.local"
+        s.sberjazz_api_token = ""
+        s.sberjazz_require_https_in_prod = True
+        state = evaluate_readiness()
+        codes = {i.code for i in state.issues}
+        assert state.ready is False
+        assert "sberjazz_api_token_empty" in codes
+        assert "sberjazz_api_base_not_https" in codes
+        assert "sberjazz_requires_jwt_auth_mode" in codes
+    finally:
+        (
+            s.app_env,
+            s.auth_mode,
+            s.api_keys,
+            s.meeting_connector_provider,
+            s.sberjazz_api_base,
+            s.sberjazz_api_token,
+            s.sberjazz_require_https_in_prod,
+        ) = snapshot
