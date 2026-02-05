@@ -168,7 +168,8 @@ GitHub Actions запускает:
 - alert rules check (`promtool` + валидация runbook anchors),
 - alert routing smoke (`warning`/`critical` delivery через Alertmanager -> alert-relay -> webhook sink),
 - alert relay metrics smoke (`/metrics` + рост `agent_alert_relay_forward_total`),
-- alert relay failure-policy smoke (проверка fail-closed/fail-open через `ALERT_RELAY_FAIL_ON_ERROR`).
+- alert relay failure-policy smoke (проверка fail-closed/fail-open через `ALERT_RELAY_FAIL_ON_ERROR`),
+- alert relay retry guardrail (проверка retry/backoff профиля и стабильности задержки).
 
 Отдельный workflow `Performance Smoke` (nightly + manual):
 - поднимает стек в `STT_PROVIDER=mock`,

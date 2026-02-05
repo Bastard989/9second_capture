@@ -9,7 +9,7 @@ PYTHON ?= python3
 	compose-up compose-down \
 	fmt lint fix test storage-smoke \
 	cycle cycle-autofix \
-	openapi-gen openapi-check release-check alerts-rules-check alerts-smoke alert-relay-metrics-smoke alert-relay-failure-smoke load-guardrail ws-guardrail
+	openapi-gen openapi-check release-check alerts-rules-check alerts-smoke alert-relay-metrics-smoke alert-relay-failure-smoke alert-relay-retry-guardrail load-guardrail ws-guardrail
 
 doctor:
 	@echo "== docker ==" && docker version >/dev/null && echo "OK"
@@ -98,6 +98,9 @@ alert-relay-metrics-smoke:
 
 alert-relay-failure-smoke:
 	$(PYTHON) tools/alert_relay_failure_policy_smoke.py --expected-status 502 --expect-fail-on-error true
+
+alert-relay-retry-guardrail:
+	$(PYTHON) tools/alert_relay_retry_guardrail.py --expected-status 502 --expect-fail-on-error true
 
 load-guardrail:
 	$(PYTHON) tools/realtime_load_guardrail.py
