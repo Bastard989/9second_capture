@@ -28,6 +28,7 @@ from interview_analytics_agent.common.security import (
     is_service_jwt_claims,
     require_auth,
 )
+from interview_analytics_agent.common.tracing import start_trace
 from interview_analytics_agent.common.utils import b64_decode, safe_dict
 from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.services.chunk_ingest_service import ingest_audio_chunk_bytes
@@ -267,18 +268,23 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                 continue
 
             try:
-                result = ingest_audio_chunk_bytes(
+                with start_trace(
+                    trace_id=event.get("trace_id"),
                     meeting_id=meeting_id,
-                    seq=seq,
-                    audio_bytes=audio_bytes,
-                    idempotency_key=idem_key,
-                    idempotency_scope="audio_chunk_ws",
-                    idempotency_prefix="ws",
-                )
+                    source="ws.ingest",
+                ):
+                    result = ingest_audio_chunk_bytes(
+                        meeting_id=meeting_id,
+                        seq=seq,
+                        audio_bytes=audio_bytes,
+                        idempotency_key=idem_key,
+                        idempotency_scope="audio_chunk_ws",
+                        idempotency_prefix="ws",
+                    )
             except Exception as e:
                 log.error(
                     "ws_ingest_failed",
-                    extra={"meeting_id": meeting_id, "payload": {"err": str(e)[:200]}},
+                    extra={"payload": {"meeting_id": meeting_id, "err": str(e)[:200]}},
                 )
                 await ws.send_text(
                     json.dumps(

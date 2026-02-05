@@ -20,6 +20,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.logging import get_project_logger, setup_logging
 from interview_analytics_agent.common.metrics import QUEUE_TASKS_TOTAL, track_stage_latency
+from interview_analytics_agent.common.tracing import start_trace_from_payload
 from interview_analytics_agent.delivery.email.sender import SMTPEmailProvider
 from interview_analytics_agent.domain.enums import PipelineStatus
 from interview_analytics_agent.queue.dispatcher import Q_DELIVERY, enqueue_retention
@@ -56,10 +57,12 @@ def run_loop() -> None:
 
         should_ack = False
         try:
-            with track_stage_latency("worker-delivery", "delivery"):
-                task = msg.payload
-                meeting_id = task["meeting_id"]
-
+            task = msg.payload
+            meeting_id = task["meeting_id"]
+            with (
+                start_trace_from_payload(task, meeting_id=meeting_id, source="worker.delivery"),
+                track_stage_latency("worker-delivery", "delivery"),
+            ):
                 with db_session() as session:
                     mrepo = MeetingRepository(session)
                     m = mrepo.get(meeting_id)
@@ -93,15 +96,15 @@ def run_loop() -> None:
                         )
                         log.info(
                             "delivery_done",
-                            extra={"meeting_id": meeting_id, "payload": {"recipients": recipients}},
+                            extra={"payload": {"meeting_id": meeting_id, "recipients": recipients}},
                         )
                     else:
                         # В MVP, если нет получателей — считаем доставку пропущенной
                         log.warning(
                             "delivery_skipped",
                             extra={
-                                "meeting_id": meeting_id,
                                 "payload": {
+                                    "meeting_id": meeting_id,
                                     "provider": settings.delivery_provider,
                                     "recipients": recipients,
                                 },

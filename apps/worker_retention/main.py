@@ -14,6 +14,7 @@ from contextlib import suppress
 
 from interview_analytics_agent.common.logging import get_project_logger, setup_logging
 from interview_analytics_agent.common.metrics import QUEUE_TASKS_TOTAL, track_stage_latency
+from interview_analytics_agent.common.tracing import start_trace_from_payload
 from interview_analytics_agent.queue.dispatcher import Q_RETENTION
 from interview_analytics_agent.queue.retry import requeue_with_backoff
 from interview_analytics_agent.queue.streams import ack_task, consumer_name, read_task
@@ -38,9 +39,12 @@ def run_loop() -> None:
 
         should_ack = False
         try:
-            with track_stage_latency("worker-retention", "retention"):
-                task = msg.payload
-
+            task = msg.payload
+            meeting_id = str(task.get("entity_id") or "").strip() or None
+            with (
+                start_trace_from_payload(task, meeting_id=meeting_id, source="worker.retention"),
+                track_stage_latency("worker-retention", "retention"),
+            ):
                 with db_session() as session:
                     apply_retention(session)
 

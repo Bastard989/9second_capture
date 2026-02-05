@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from interview_analytics_agent.common.config import get_settings
+from interview_analytics_agent.common.tracing import current_trace_context
 
 
 class JsonFormatter(logging.Formatter):
@@ -25,6 +26,14 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
+        trace_ctx = current_trace_context()
+        if trace_ctx:
+            payload["trace_id"] = trace_ctx.trace_id
+            payload["span_id"] = trace_ctx.span_id
+            if trace_ctx.parent_span_id:
+                payload["parent_span_id"] = trace_ctx.parent_span_id
+            if trace_ctx.meeting_id:
+                payload["meeting_id"] = trace_ctx.meeting_id
         extra_payload = getattr(record, "payload", None)
         if isinstance(extra_payload, dict):
             payload["payload"] = extra_payload

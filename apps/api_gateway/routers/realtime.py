@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from apps.api_gateway.deps import auth_dep, service_auth_write_dep
 from interview_analytics_agent.common.logging import get_project_logger
+from interview_analytics_agent.common.tracing import start_trace
 from interview_analytics_agent.services.chunk_ingest_service import ingest_audio_chunk_b64
 
 log = get_project_logger()
@@ -38,40 +39,40 @@ class ChunkIngestResponse(BaseModel):
 
 
 def _ingest_chunk_impl(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestResponse:
-    try:
-        result = ingest_audio_chunk_b64(
-            meeting_id=meeting_id,
-            seq=req.seq,
-            content_b64=req.content_b64,
-            idempotency_key=req.idempotency_key,
-            idempotency_scope="audio_chunk_http",
-            idempotency_prefix="http-chunk",
-        )
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "bad_audio", "message": "content_b64 не декодируется"},
-        ) from e
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "ingest_error", "message": "Ошибка ingest аудио-чанка"},
-        ) from e
+    with start_trace(meeting_id=meeting_id, source="http.ingest"):
+        try:
+            result = ingest_audio_chunk_b64(
+                meeting_id=meeting_id,
+                seq=req.seq,
+                content_b64=req.content_b64,
+                idempotency_key=req.idempotency_key,
+                idempotency_scope="audio_chunk_http",
+                idempotency_prefix="http-chunk",
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "bad_audio", "message": "content_b64 не декодируется"},
+            ) from e
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "ingest_error", "message": "Ошибка ingest аудио-чанка"},
+            ) from e
 
-    log.info(
-        "http_chunk_ingested",
-        extra={
-            "meeting_id": meeting_id,
-            "payload": {"seq": req.seq, "codec": req.codec, "sample_rate": req.sample_rate},
-        },
-    )
-    return ChunkIngestResponse(
-        accepted=result.accepted,
-        meeting_id=result.meeting_id,
-        seq=result.seq,
-        idempotency_key=result.idempotency_key,
-        blob_key=result.blob_key,
-    )
+        log.info(
+            "http_chunk_ingested",
+            extra={
+                "payload": {"meeting_id": meeting_id, "seq": req.seq, "codec": req.codec},
+            },
+        )
+        return ChunkIngestResponse(
+            accepted=result.accepted,
+            meeting_id=result.meeting_id,
+            seq=result.seq,
+            idempotency_key=result.idempotency_key,
+            blob_key=result.blob_key,
+        )
 
 
 @router.post(

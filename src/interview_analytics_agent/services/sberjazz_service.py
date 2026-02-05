@@ -19,6 +19,7 @@ from uuid import uuid4
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.errors import ErrCode, ProviderError
 from interview_analytics_agent.common.logging import get_project_logger
+from interview_analytics_agent.common.tracing import start_trace
 from interview_analytics_agent.connectors.base import MeetingConnector
 from interview_analytics_agent.connectors.salutejazz.adapter import SaluteJazzConnector
 from interview_analytics_agent.connectors.salutejazz.mock import MockSaluteJazzConnector
@@ -788,68 +789,69 @@ def _pull_live_for_meeting(meeting_id: str, *, batch_limit: int) -> tuple[int, i
     if not callable(fetch_fn):
         return 0, 0, 0
 
-    cursor = _load_live_cursor(meeting_id)
-    attempts, backoff_sec = _live_pull_retry_config()
-    payload: object | None = None
-    for attempt in range(1, attempts + 1):
-        try:
-            payload = fetch_fn(meeting_id, cursor=cursor, limit=max(1, int(batch_limit))) or {}
-            break
-        except Exception as e:
-            retryable = _is_retryable_connector_error(e)
-            if attempt >= attempts or not retryable:
-                raise
-            log.warning(
-                "sberjazz_live_pull_retry",
-                extra={
-                    "payload": {
-                        "meeting_id": meeting_id,
-                        "attempt": attempt,
-                        "error": str(e)[:300],
-                    }
-                },
-            )
-            if backoff_sec > 0:
-                time.sleep(backoff_sec * attempt)
+    with start_trace(meeting_id=meeting_id, source="connector.live_pull"):
+        cursor = _load_live_cursor(meeting_id)
+        attempts, backoff_sec = _live_pull_retry_config()
+        payload: object | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                payload = fetch_fn(meeting_id, cursor=cursor, limit=max(1, int(batch_limit))) or {}
+                break
+            except Exception as e:
+                retryable = _is_retryable_connector_error(e)
+                if attempt >= attempts or not retryable:
+                    raise
+                log.warning(
+                    "sberjazz_live_pull_retry",
+                    extra={
+                        "payload": {
+                            "meeting_id": meeting_id,
+                            "attempt": attempt,
+                            "error": str(e)[:300],
+                        }
+                    },
+                )
+                if backoff_sec > 0:
+                    time.sleep(backoff_sec * attempt)
 
-    fallback_prefix = cursor or "no-cursor"
-    chunks, next_cursor, invalid_chunks = _parse_live_pull_payload(
-        meeting_id,
-        payload,
-        fallback_prefix=fallback_prefix,
-    )
-    if next_cursor:
-        _save_live_cursor(meeting_id, next_cursor)
-
-    pulled = 0
-    ingested = 0
-    for chunk in chunks:
-        result = ingest_audio_chunk_b64(
-            meeting_id=meeting_id,
-            seq=chunk.seq,
-            content_b64=chunk.content_b64,
-            idempotency_key=chunk.chunk_id,
-            idempotency_scope="audio_chunk_connector_live",
-            idempotency_prefix="sj-live",
+        fallback_prefix = cursor or "no-cursor"
+        chunks, next_cursor, invalid_chunks = _parse_live_pull_payload(
+            meeting_id,
+            payload,
+            fallback_prefix=fallback_prefix,
         )
-        pulled += 1
-        if not result.is_duplicate:
-            ingested += 1
+        if next_cursor:
+            _save_live_cursor(meeting_id, next_cursor)
 
-    if pulled > 0:
-        _touch_connected_state(meeting_id)
-    log.info(
-        "sberjazz_live_pull_batch",
-        extra={
-            "payload": {
-                "meeting_id": meeting_id,
-                "pulled": pulled,
-                "ingested": ingested,
-                "invalid_chunks": invalid_chunks,
-            }
-        },
-    )
-    return pulled, ingested, invalid_chunks
+        pulled = 0
+        ingested = 0
+        for chunk in chunks:
+            result = ingest_audio_chunk_b64(
+                meeting_id=meeting_id,
+                seq=chunk.seq,
+                content_b64=chunk.content_b64,
+                idempotency_key=chunk.chunk_id,
+                idempotency_scope="audio_chunk_connector_live",
+                idempotency_prefix="sj-live",
+            )
+            pulled += 1
+            if not result.is_duplicate:
+                ingested += 1
+
+        if pulled > 0:
+            _touch_connected_state(meeting_id)
+        log.info(
+            "sberjazz_live_pull_batch",
+            extra={
+                "payload": {
+                    "meeting_id": meeting_id,
+                    "pulled": pulled,
+                    "ingested": ingested,
+                    "invalid_chunks": invalid_chunks,
+                }
+            },
+        )
+        return pulled, ingested, invalid_chunks
 
 
 def pull_sberjazz_live_chunks(

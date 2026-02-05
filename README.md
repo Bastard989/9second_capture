@@ -50,6 +50,9 @@ HTTP ingest контуры:
 - `/v1/meetings/{meeting_id}/chunks` — пользовательский/общий ingest.
 - `/v1/internal/meetings/{meeting_id}/chunks` — только service-auth ingest (внутренний контур).
 - Коннекторный live-ingest использует тот же ingest service/path (единая точка постановки chunk -> STT).
+- Для трассировки можно передавать заголовок `X-Trace-Id` (32 hex), API возвращает тот же `X-Trace-Id` в ответе.
+- Очереди и воркеры пробрасывают `trace_id/span_id`, а structured logs автоматически включают
+  `trace_id`, `span_id`, `parent_span_id`, `meeting_id` (если известен).
 
 ## Режимы авторизации
 

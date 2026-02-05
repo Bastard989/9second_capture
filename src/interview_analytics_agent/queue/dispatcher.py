@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from interview_analytics_agent.common.ids import new_event_id
 from interview_analytics_agent.common.logging import get_project_logger
+from interview_analytics_agent.common.tracing import inject_trace_context
 
 from .streams import enqueue
 
@@ -48,8 +49,12 @@ def enqueue_stt(*, meeting_id: str, chunk_seq: int, blob_key: str) -> str:
         "blob_key": blob_key,
         "timestamp": _now_iso(),
     }
+    inject_trace_context(payload, meeting_id=meeting_id, source="queue.stt")
     enqueue(Q_STT, payload)
-    log.info("enqueue_stt", extra={"meeting_id": meeting_id, "payload": {"chunk_seq": chunk_seq}})
+    log.info(
+        "enqueue_stt",
+        extra={"payload": {"meeting_id": meeting_id, "chunk_seq": chunk_seq, "event_id": event_id}},
+    )
     return event_id
 
 
@@ -59,8 +64,12 @@ def enqueue_enhancer(*, meeting_id: str) -> str:
     """
     event_id = new_event_id("enh")
     payload = {"schema_version": "v1", "event_id": event_id, "meeting_id": meeting_id}
+    inject_trace_context(payload, meeting_id=meeting_id, source="queue.enhancer")
     enqueue(Q_ENHANCER, payload)
-    log.info("enqueue_enhancer", extra={"meeting_id": meeting_id})
+    log.info(
+        "enqueue_enhancer",
+        extra={"payload": {"meeting_id": meeting_id, "event_id": event_id}},
+    )
     return event_id
 
 
@@ -70,8 +79,12 @@ def enqueue_analytics(*, meeting_id: str) -> str:
     """
     event_id = new_event_id("anl")
     payload = {"schema_version": "v1", "event_id": event_id, "meeting_id": meeting_id}
+    inject_trace_context(payload, meeting_id=meeting_id, source="queue.analytics")
     enqueue(Q_ANALYTICS, payload)
-    log.info("enqueue_analytics", extra={"meeting_id": meeting_id})
+    log.info(
+        "enqueue_analytics",
+        extra={"payload": {"meeting_id": meeting_id, "event_id": event_id}},
+    )
     return event_id
 
 
@@ -81,8 +94,12 @@ def enqueue_delivery(*, meeting_id: str) -> str:
     """
     event_id = new_event_id("dlv")
     payload = {"schema_version": "v1", "event_id": event_id, "meeting_id": meeting_id}
+    inject_trace_context(payload, meeting_id=meeting_id, source="queue.delivery")
     enqueue(Q_DELIVERY, payload)
-    log.info("enqueue_delivery", extra={"meeting_id": meeting_id})
+    log.info(
+        "enqueue_delivery",
+        extra={"payload": {"meeting_id": meeting_id, "event_id": event_id}},
+    )
     return event_id
 
 
@@ -98,6 +115,7 @@ def enqueue_retention(*, entity_type: str, entity_id: str, reason: str) -> str:
         "entity_id": entity_id,
         "reason": reason,
     }
+    inject_trace_context(payload, source="queue.retention")
     enqueue(Q_RETENTION, payload)
     log.info("enqueue_retention", extra={"payload": payload})
     return event_id

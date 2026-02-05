@@ -17,6 +17,7 @@ from contextlib import suppress
 
 from interview_analytics_agent.common.logging import get_project_logger, setup_logging
 from interview_analytics_agent.common.metrics import QUEUE_TASKS_TOTAL, track_stage_latency
+from interview_analytics_agent.common.tracing import start_trace_from_payload
 from interview_analytics_agent.processing.enhancer import enhance_text
 from interview_analytics_agent.processing.quality import quality_score
 from interview_analytics_agent.queue.dispatcher import Q_ENHANCER, enqueue_analytics
@@ -46,10 +47,12 @@ def run_loop() -> None:
 
         should_ack = False
         try:
-            with track_stage_latency("worker-enhancer", "enhancer"):
-                task = msg.payload
-                meeting_id = task["meeting_id"]
-
+            task = msg.payload
+            meeting_id = task["meeting_id"]
+            with (
+                start_trace_from_payload(task, meeting_id=meeting_id, source="worker.enhancer"),
+                track_stage_latency("worker-enhancer", "enhancer"),
+            ):
                 with db_session() as session:
                     srepo = TranscriptSegmentRepository(session)
                     segs = srepo.list_by_meeting(meeting_id)

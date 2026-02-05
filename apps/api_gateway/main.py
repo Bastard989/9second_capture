@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api_gateway.routers.admin import router as admin_router
@@ -29,6 +29,7 @@ from interview_analytics_agent.common.logging import get_project_logger, setup_l
 from interview_analytics_agent.common.metrics import setup_metrics_endpoint
 from interview_analytics_agent.common.observability import setup_observability
 from interview_analytics_agent.common.otel import maybe_setup_otel
+from interview_analytics_agent.common.tracing import current_trace_id, start_trace
 from interview_analytics_agent.services.readiness_service import enforce_startup_readiness
 
 log = get_project_logger()
@@ -73,6 +74,16 @@ def _create_app() -> FastAPI:
     )
 
     setup_metrics_endpoint(app)
+
+    @app.middleware("http")
+    async def tracing_middleware(request: Request, call_next):
+        inbound_trace_id = request.headers.get("x-trace-id")
+        with start_trace(trace_id=inbound_trace_id, source="http"):
+            response = await call_next(request)
+            trace_id = current_trace_id()
+            if trace_id:
+                response.headers["X-Trace-Id"] = trace_id
+            return response
 
     @app.get("/health")
     def health() -> dict[str, Any]:
