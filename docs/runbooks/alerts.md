@@ -15,6 +15,18 @@
 - Для нестабильных внешних каналов настрой retry relay:
   `ALERT_RELAY_RETRIES`, `ALERT_RELAY_RETRY_BACKOFF_MS`, `ALERT_RELAY_RETRY_STATUSES`.
 
+## On-call routing (prod)
+
+1. Задать реальные каналы:
+   - `ALERT_RELAY_DEFAULT_TARGET_URL`
+   - `ALERT_RELAY_WARNING_TARGET_URL`
+   - `ALERT_RELAY_CRITICAL_TARGET_URL`
+2. При необходимости включить fail-closed доставку:
+   - `ALERT_RELAY_FAIL_ON_ERROR=true`
+3. Проверить ручным smoke:
+   - `make alerts-smoke`
+4. Убедиться, что в каналах пришли `warning` и `critical`.
+
 ## AlertRelayDown
 
 1. Проверить контейнер `alert-relay`: `docker compose ps alert-relay`.
