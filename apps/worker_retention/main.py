@@ -14,6 +14,7 @@ from contextlib import suppress
 
 from interview_analytics_agent.common.logging import get_project_logger, setup_logging
 from interview_analytics_agent.common.metrics import QUEUE_TASKS_TOTAL, track_stage_latency
+from interview_analytics_agent.common.otel import maybe_setup_otel
 from interview_analytics_agent.common.tracing import start_trace_from_payload
 from interview_analytics_agent.queue.dispatcher import Q_RETENTION
 from interview_analytics_agent.queue.retry import requeue_with_backoff
@@ -93,6 +94,7 @@ def run_loop() -> None:
 
 def main() -> None:
     setup_logging()
+    maybe_setup_otel()
     enforce_startup_readiness(service_name="worker-retention")
     while True:
         try:

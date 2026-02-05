@@ -20,6 +20,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.logging import get_project_logger, setup_logging
 from interview_analytics_agent.common.metrics import QUEUE_TASKS_TOTAL, track_stage_latency
+from interview_analytics_agent.common.otel import maybe_setup_otel
 from interview_analytics_agent.common.tracing import start_trace_from_payload
 from interview_analytics_agent.delivery.email.sender import SMTPEmailProvider
 from interview_analytics_agent.domain.enums import PipelineStatus
@@ -152,6 +153,7 @@ def run_loop() -> None:
 
 def main() -> None:
     setup_logging()
+    maybe_setup_otel()
     enforce_startup_readiness(service_name="worker-delivery")
     while True:
         try:

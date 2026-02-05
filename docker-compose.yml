@@ -89,6 +89,9 @@ services:
       LLM_ENABLED: ${LLM_ENABLED:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      SERVICE_NAME: api-gateway
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
     command: ["uvicorn", "apps.api_gateway.main:app", "--host", "0.0.0.0", "--port", "8010"]
     ports:
       - "8010:8010"
@@ -174,6 +177,9 @@ services:
       HF_HUB_OFFLINE: "1"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      SERVICE_NAME: worker-stt
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
     command: ["python3", "-m", "apps.worker_stt.main"]
     volumes:
       - app_data:/data
@@ -200,6 +206,9 @@ services:
       LLM_ENABLED: ${LLM_ENABLED:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      SERVICE_NAME: worker-enhancer
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
     command: ["python3", "-m", "apps.worker_enhancer.main"]
     volumes:
       - app_data:/data
@@ -224,6 +233,9 @@ services:
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      SERVICE_NAME: worker-analytics
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
     command: ["python3", "-m", "apps.worker_analytics.main"]
     volumes:
       - app_data:/data
@@ -248,6 +260,9 @@ services:
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      SERVICE_NAME: worker-delivery
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
     command: ["python3", "-m", "apps.worker_delivery.main"]
     volumes:
       - app_data:/data
@@ -272,6 +287,9 @@ services:
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      SERVICE_NAME: worker-retention
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
     command: ["python3", "-m", "apps.worker_retention.main"]
     volumes:
       - app_data:/data
@@ -320,11 +338,24 @@ services:
       RECONCILIATION_LIMIT: ${RECONCILIATION_LIMIT:-200}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      SERVICE_NAME: worker-reconciliation
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
     command: ["python3", "-m", "apps.worker_reconciliation.main"]
     volumes:
       - app_data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.109.0
+    profiles: ["observability"]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./ops/otel/otel-collector.yml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4318:4318"
     restart: unless-stopped
 
   prometheus:

@@ -121,6 +121,13 @@ SberJazz HTTP resilience:
 - Startup probe для real SberJazz в prod:
   `SBERJAZZ_STARTUP_PROBE_ENABLED=true`, `SBERJAZZ_STARTUP_PROBE_FAIL_FAST_IN_PROD=true`.
 
+## Tracing (OTEL)
+
+- Базовая трассировка включена в ingress/queue/workers и коррелируется по `meeting_id`.
+- При `OTEL_ENABLED=true` сервисы экспортируют OTLP spans в `OTEL_EXPORTER_OTLP_ENDPOINT`.
+- Для HTTP можно передавать `X-Trace-Id` (32 hex), он возвращается в response header.
+- Если OTEL-зависимости/endpoint недоступны, сервис продолжает работать (fail-safe no-op).
+
 ## Storage mode (production)
 
 - `STORAGE_MODE=shared_fs` — production режим (shared POSIX storage, например managed NFS).
@@ -137,6 +144,7 @@ SberJazz HTTP resilience:
 - Prometheus: `http://localhost:9090`
 - Alertmanager: `http://localhost:9093`
 - Grafana: `http://localhost:3000`
+- OTEL Collector (OTLP HTTP): `http://localhost:4318`
 - Alert relay: `http://localhost:9081` (`/health`, `/webhook/{default|warning|critical}`)
 - Alert webhook sink (dev/stage): `http://localhost:9080` (`/stats`, `/events`, `/reset`)
 
@@ -207,3 +215,4 @@ Release automation:
 - Алерты и действия при инцидентах: `docs/runbooks/alerts.md`
 - Производительность и guardrail-порогы: `docs/runbooks/performance.md`
 - Real SberJazz smoke/приемка: `docs/runbooks/connector_real_smoke.md`
+- Трассировка и OTEL smoke: `docs/runbooks/tracing.md`

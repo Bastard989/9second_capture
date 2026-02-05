@@ -51,6 +51,59 @@ def current_trace_id() -> str | None:
 
 
 @contextmanager
+def _maybe_start_otel_span(
+    *,
+    span_name: str,
+    trace_id: str,
+    parent_span_id: str | None,
+    meeting_id: str | None,
+    source: str,
+) -> Iterator[None]:
+    """
+    Запускает OTEL span, если SDK доступен и уже инициализирован в процессе.
+    Если OTEL недоступен/не настроен — no-op.
+    """
+    try:
+        from opentelemetry import trace
+        from opentelemetry.trace import (
+            NonRecordingSpan,
+            SpanContext,
+            TraceFlags,
+            TraceState,
+            set_span_in_context,
+        )
+    except Exception:
+        yield
+        return
+
+    parent_context = None
+    parent_id = _normalize_hex(parent_span_id, 16)
+    if parent_id:
+        try:
+            parent_span_ctx = SpanContext(
+                trace_id=int(trace_id, 16),
+                span_id=int(parent_id, 16),
+                is_remote=True,
+                trace_flags=TraceFlags(TraceFlags.SAMPLED),
+                trace_state=TraceState(),
+            )
+            parent_context = set_span_in_context(NonRecordingSpan(parent_span_ctx))
+        except Exception:
+            parent_context = None
+
+    tracer = trace.get_tracer("interview-analytics-agent")
+    with tracer.start_as_current_span(span_name, context=parent_context) as span:
+        try:
+            span.set_attribute("agent.trace_id", trace_id)
+            span.set_attribute("agent.trace_source", source)
+            if meeting_id:
+                span.set_attribute("agent.meeting_id", meeting_id)
+        except Exception:
+            pass
+        yield
+
+
+@contextmanager
 def start_trace(
     *,
     trace_id: str | None = None,
@@ -77,11 +130,18 @@ def start_trace(
         meeting_id=resolved_meeting_id,
         source=resolved_source,
     )
-    token = _TRACE_CONTEXT.set(ctx)
-    try:
-        yield ctx
-    finally:
-        _TRACE_CONTEXT.reset(token)
+    with _maybe_start_otel_span(
+        span_name=resolved_source,
+        trace_id=ctx.trace_id,
+        parent_span_id=ctx.parent_span_id,
+        meeting_id=ctx.meeting_id,
+        source=resolved_source,
+    ):
+        token = _TRACE_CONTEXT.set(ctx)
+        try:
+            yield ctx
+        finally:
+            _TRACE_CONTEXT.reset(token)
 
 
 @contextmanager
@@ -106,11 +166,18 @@ def start_trace_from_payload(
         meeting_id=meeting_id or payload_meeting,
         source=source,
     )
-    token = _TRACE_CONTEXT.set(ctx)
-    try:
-        yield ctx
-    finally:
-        _TRACE_CONTEXT.reset(token)
+    with _maybe_start_otel_span(
+        span_name=source,
+        trace_id=ctx.trace_id,
+        parent_span_id=ctx.parent_span_id,
+        meeting_id=ctx.meeting_id,
+        source=source,
+    ):
+        token = _TRACE_CONTEXT.set(ctx)
+        try:
+            yield ctx
+        finally:
+            _TRACE_CONTEXT.reset(token)
 
 
 def inject_trace_context(
