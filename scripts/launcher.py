@@ -197,7 +197,7 @@ def _start_app() -> str:
     root = _user_root()
     python_bin = _venv_paths(root)[1]
     if not python_bin.exists():
-        raise RuntimeError("venv not installed")
+        raise RuntimeError("venv не установлен")
 
     port = _pick_port()
     APP_URL = f"http://127.0.0.1:{port}"
@@ -215,9 +215,26 @@ def _start_app() -> str:
     env["CHUNKS_DIR"] = str(root / "chunks")
     env["LOCAL_AGENT_STATE_DIR"] = str(root / "state")
     env["STT_PROVIDER"] = "whisper_local" if INSTALL_MODE == "full" else "mock"
+    env["LOCAL_AGENT_AUTO_OPEN"] = "false"
+    env["PYTHONUNBUFFERED"] = "1"
 
     cmd = [str(python_bin), str(bundle / "scripts" / "run_local_agent.py")]
-    APP_PROCESS = subprocess.Popen(cmd, cwd=str(root), env=env)
+    _log("[start] starting agent...")
+    agent_log = root / "agent.log"
+    agent_log.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = open(agent_log, "a", encoding="utf-8")
+    APP_PROCESS = subprocess.Popen(
+        cmd,
+        cwd=str(root),
+        env=env,
+        stdout=log_fh,
+        stderr=log_fh,
+    )
+    _log(f"[start] agent pid={APP_PROCESS.pid} log={agent_log}")
+    time.sleep(0.8)
+    if APP_PROCESS.poll() is not None:
+        _log("[start] agent exited early, see agent.log")
+        raise RuntimeError("agent_failed_to_start")
     return APP_URL
 
 
