@@ -13,6 +13,15 @@ from collections.abc import Iterable
 from interview_analytics_agent.storage.models import TranscriptSegment
 
 
+def _format_speaker(label: str | None) -> str:
+    if not label:
+        return "UNKNOWN"
+    if label.startswith("proxy_for_"):
+        name = label.replace("proxy_for_", "").strip()
+        return f"PROXY_FOR_{name or 'UNKNOWN'}"
+    return label
+
+
 def build_raw_transcript(segments: Iterable[TranscriptSegment]) -> str:
     """
     Собирает сырой транскрипт в один текст.
@@ -23,7 +32,7 @@ def build_raw_transcript(segments: Iterable[TranscriptSegment]) -> str:
     lines: list[str] = []
 
     for s in segments:
-        speaker = s.speaker or "UNKNOWN"
+        speaker = _format_speaker(s.speaker)
         text = (s.raw_text or "").strip()
         if not text:
             continue
@@ -42,7 +51,7 @@ def build_enhanced_transcript(segments: Iterable[TranscriptSegment]) -> str:
     lines: list[str] = []
 
     for s in segments:
-        speaker = s.speaker or "UNKNOWN"
+        speaker = _format_speaker(s.speaker)
         text = (s.enhanced_text or "").strip()
         if not text:
             continue

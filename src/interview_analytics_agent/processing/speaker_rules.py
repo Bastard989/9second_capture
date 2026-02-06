@@ -16,6 +16,10 @@ ABSENT_RE = re.compile(
     re.IGNORECASE,
 )
 SKIP_RE = re.compile(r"\b(ладно|ок|тогда|идем дальше|следующий)\b", re.IGNORECASE)
+PROXY_RE = re.compile(
+    r"\b(отвечу за|скажу за|за него|за нее|за неё|я скажу за|я отвечу за)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -64,7 +68,12 @@ def infer_speakers(
                         speaker = host_name
 
             if pending_name and pending_until_seq is not None:
-                if ABSENT_RE.search(text) or SKIP_RE.search(text):
+                if PROXY_RE.search(text):
+                    speaker = f"proxy_for_{pending_name}"
+                    proxy_for = pending_name
+                    pending_name = None
+                    pending_until_seq = None
+                elif ABSENT_RE.search(text) or SKIP_RE.search(text):
                     speaker = host_name or speaker
                     proxy_for = pending_name if ABSENT_RE.search(text) else None
                     pending_name = None

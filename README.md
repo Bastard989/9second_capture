@@ -111,3 +111,7 @@ Linux (PulseAudio / PipeWire):
 - `AUTH_MODE=api_key`
 - `API_KEYS=dev-user-key`
 - `SERVICE_API_KEYS=dev-service-key`
+
+## Packaging (launcher)
+
+Базовые инструкции по сборке бинарников: `tools/packaging/README.md`.
