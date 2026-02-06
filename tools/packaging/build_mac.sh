@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python3 -m pip install pyinstaller
+VENV_DIR=".venv-pack"
+if [ ! -d "$VENV_DIR" ]; then
+  python3 -m venv "$VENV_DIR"
+fi
+
+# shellcheck disable=SC1091
+source "$VENV_DIR/bin/activate"
+
+python -m pip install -U pip
+python -m pip install -r requirements.txt
+python -m pip install pyinstaller
 
 # Убираем AppleDouble (._*) из исходников, чтобы не тащить их в bundle
 find . -name "._*" -delete || true
@@ -11,7 +21,7 @@ find . -name "*.pyo" -delete || true
 
 export COPYFILE_DISABLE=1
 
-pyinstaller --onedir --windowed --noconfirm --clean \
+python -m pyinstaller --onedir --windowed --noconfirm --clean \
   --name 9second_capture \
   --icon assets/icon/icon.icns \
   --paths "." \
@@ -22,6 +32,8 @@ pyinstaller --onedir --windowed --noconfirm --clean \
   --exclude-module IPython \
   --exclude-module pygments \
   scripts/run_local_agent.py
+
+deactivate
 
 APP_PATH="dist/9second_capture.app"
 if [ -d "$APP_PATH" ]; then
