@@ -116,6 +116,11 @@ def _pip_install(python_bin: Path, req_path: Path) -> None:
     env = os.environ.copy()
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     env["PIP_NO_CACHE_DIR"] = "1"
+    if req_path.is_dir():
+        # PyInstaller on macOS может упаковать файл как папку с одноимённым файлом внутри.
+        candidate = req_path / req_path.name
+        if candidate.exists():
+            req_path = candidate
     cmd = [str(python_bin), "-m", "pip", "install", "-r", str(req_path)]
     try:
         _run_and_log(cmd, env=env)

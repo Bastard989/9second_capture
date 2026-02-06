@@ -23,8 +23,8 @@ python -m PyInstaller --onedir --windowed --noconfirm --clean \
   --add-data "apps:bundle/apps" \
   --add-data "src:bundle/src" \
   --add-data "scripts/run_local_agent.py:bundle/scripts/run_local_agent.py" \
-  --add-data "requirements.app.txt:bundle/requirements.app.txt" \
-  --add-data "requirements.whisper.txt:bundle/requirements.whisper.txt" \
+  --add-data "requirements.app.txt:bundle" \
+  --add-data "requirements.whisper.txt:bundle" \
   --add-data "apps/launcher/ui:bundle/launcher_ui" \
   --exclude-module pytest \
   --exclude-module py \
