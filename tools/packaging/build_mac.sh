@@ -15,23 +15,23 @@ python -m pip install pyinstaller
 
 # Убираем AppleDouble (._*) из исходников, чтобы не тащить их в bundle
 find . -name "._*" -delete || true
-find . -name "__pycache__" -type d -exec rm -rf {} + || true
-find . -name "*.pyc" -delete || true
-find . -name "*.pyo" -delete || true
 
 export COPYFILE_DISABLE=1
 
 python -m pyinstaller --onedir --windowed --noconfirm --clean \
   --name 9second_capture \
   --icon assets/icon/icon.icns \
-  --paths "." \
-  --paths "src" \
-  --add-data "apps/api_gateway/ui:apps/api_gateway/ui" \
+  --add-data "apps:bundle/apps" \
+  --add-data "src:bundle/src" \
+  --add-data "scripts/run_local_agent.py:bundle/scripts/run_local_agent.py" \
+  --add-data "requirements.app.txt:bundle/requirements.app.txt" \
+  --add-data "requirements.whisper.txt:bundle/requirements.whisper.txt" \
+  --add-data "apps/launcher/ui:bundle/launcher_ui" \
   --exclude-module pytest \
   --exclude-module py \
   --exclude-module IPython \
   --exclude-module pygments \
-  scripts/run_local_agent.py
+  scripts/launcher.py
 
 deactivate
 
