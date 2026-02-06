@@ -90,7 +90,6 @@
         <div id="error" style="color:#ff7b7b; margin-top:8px;"></div>
         <div id="appUrl" style="margin-top:8px; color:#bdbdbd;"></div>
         <div style="margin-top:12px;">
-          <button id="startBtn" class="secondary">Запустить агент</button>
           <button id="openBtn" class="secondary">Открыть UI</button>
           <button id="stopBtn" class="secondary">Остановить</button>
         </div>
@@ -106,7 +105,6 @@
       const errorEl = document.getElementById("error");
       const appUrlEl = document.getElementById("appUrl");
       const logEl = document.getElementById("log");
-      const startBtn = document.getElementById("startBtn");
       const openBtn = document.getElementById("openBtn");
       const stopBtn = document.getElementById("stopBtn");
 
@@ -128,8 +126,7 @@
         } else {
           appUrlEl.textContent = "UI: —";
         }
-        startBtn.disabled = Boolean(data.app_running);
-        openBtn.disabled = !data.app_url;
+        openBtn.disabled = false;
         stopBtn.disabled = !data.app_running;
       };
 
@@ -139,7 +136,7 @@
       document.getElementById("installFull").onclick = async () => {
         await fetch("/api/install?mode=full", { method: "POST" });
       };
-      startBtn.onclick = async () => {
+      openBtn.onclick = async () => {
         const res = await fetch("/api/start", { method: "POST" });
         const data = await res.json();
         if (!data.ok) {
@@ -149,9 +146,6 @@
         if (data.url) {
           window.open(data.url, "_blank");
         }
-      };
-      openBtn.onclick = async () => {
-        await fetch("/api/open", { method: "POST" });
       };
       stopBtn.onclick = async () => {
         await fetch("/api/stop", { method: "POST" });
