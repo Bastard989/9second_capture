@@ -5,6 +5,9 @@ python3 -m pip install pyinstaller
 
 # Убираем AppleDouble (._*) из исходников, чтобы не тащить их в bundle
 find . -name "._*" -delete || true
+find . -name "__pycache__" -type d -exec rm -rf {} + || true
+find . -name "*.pyc" -delete || true
+find . -name "*.pyo" -delete || true
 
 export COPYFILE_DISABLE=1
 
@@ -13,8 +16,6 @@ pyinstaller --onedir --windowed --noconfirm --clean \
   --icon assets/icon/icon.icns \
   --paths "." \
   --paths "src" \
-  --collect-submodules apps \
-  --collect-submodules interview_analytics_agent \
   --add-data "apps/api_gateway/ui:apps/api_gateway/ui" \
   --exclude-module pytest \
   --exclude-module py \
