@@ -9,6 +9,8 @@ import sys
 import threading
 import time
 import webbrowser
+import shutil
+import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,6 +24,7 @@ INSTALL_MODE = "base"  # base|full
 INSTALL_ERROR: str | None = None
 APP_PROCESS: subprocess.Popen | None = None
 APP_URL: str | None = None
+LOG_FILE: Path | None = None
 
 
 def _bundle_root() -> Path:
@@ -41,6 +44,15 @@ def _log(line: str) -> None:
         INSTALL_LOG.append(line.rstrip())
         if len(INSTALL_LOG) > 4000:
             del INSTALL_LOG[:500]
+    try:
+        root = _user_root()
+        root.mkdir(parents=True, exist_ok=True)
+        global LOG_FILE
+        if LOG_FILE is None:
+            LOG_FILE = root / "launcher.log"
+        LOG_FILE.write_text("\n".join(INSTALL_LOG[-500:]) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _set_state(state: str, error: str | None = None) -> None:
@@ -56,12 +68,38 @@ def _venv_paths(root: Path) -> tuple[Path, Path]:
     return venv_dir, python_bin
 
 
+def _resolve_system_python() -> Path:
+    if not getattr(sys, "frozen", False):
+        return Path(sys.executable)
+    candidates = [
+        os.environ.get("PYTHON3_PATH"),
+        shutil.which("python3"),
+        shutil.which("python"),
+    ]
+    for candidate in candidates:
+        if candidate:
+            return Path(candidate)
+    raise RuntimeError("python3 не найден. Установи Python 3 и повтори попытку.")
+
+
+def _run_and_log(cmd: list[str], env: dict | None = None) -> None:
+    _log("[cmd] " + " ".join(cmd))
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    assert proc.stdout
+    for line in proc.stdout:
+        _log(line)
+    code = proc.wait()
+    if code != 0:
+        raise RuntimeError(f"command failed: {code}")
+
+
 def _ensure_venv(root: Path) -> Path:
     venv_dir, python_bin = _venv_paths(root)
     if python_bin.exists():
         return python_bin
     _log("[setup] create venv...")
-    subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
+    system_python = _resolve_system_python()
+    _run_and_log([str(system_python), "-m", "venv", str(venv_dir)])
     return python_bin
 
 
@@ -70,14 +108,12 @@ def _pip_install(python_bin: Path, req_path: Path) -> None:
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     env["PIP_NO_CACHE_DIR"] = "1"
     cmd = [str(python_bin), "-m", "pip", "install", "-r", str(req_path)]
-    _log("[install] " + " ".join(cmd))
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-    assert proc.stdout
-    for line in proc.stdout:
-        _log(line)
-    code = proc.wait()
-    if code != 0:
-        raise RuntimeError(f"pip install failed: {code}")
+    try:
+        _run_and_log(cmd, env=env)
+    except RuntimeError:
+        _log("[install] pip не найден, пробуем ensurepip...")
+        _run_and_log([str(python_bin), "-m", "ensurepip", "--upgrade"], env=env)
+        _run_and_log(cmd, env=env)
 
 
 def _install(mode: str) -> None:
@@ -102,6 +138,7 @@ def _install(mode: str) -> None:
 
         _set_state("done")
     except Exception as e:
+        _log(traceback.format_exc())
         _set_state("error", str(e))
 
 
