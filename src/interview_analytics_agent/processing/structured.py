@@ -107,4 +107,5 @@ def structured_to_csv(structured: dict[str, Any]) -> bytes:
     writer.writeheader()
     for row in rows:
         writer.writerow({c: row.get(c, "") for c in columns})
-    return output.getvalue().encode("utf-8")
+    # BOM для лучшей совместимости с Excel
+    return ("\ufeff" + output.getvalue()).encode("utf-8")
