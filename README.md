@@ -100,7 +100,7 @@ Linux (PulseAudio / PipeWire):
 
 Для локального web-интерфейса со стартом/стопом записи и проверкой сигнала:
 
-- `AUTH_MODE=none STT_PROVIDER=mock LLM_ENABLED=false python3 scripts/run_local_agent.py`
+- `AUTH_MODE=none STT_PROVIDER=mock LLM_ENABLED=false LLM_LIVE_ENABLED=false python3 scripts/run_local_agent.py`
 - Скрипт сам выберет свободный порт в диапазоне `8010–8099` и запомнит его в `./data/local_agent/state.json`.
 - UI откроется по адресу вида `http://127.0.0.1:<порт>`.
 
@@ -113,6 +113,7 @@ Linux (PulseAudio / PipeWire):
 - `AUTH_MODE=api_key`
 - `API_KEYS=dev-user-key`
 - `SERVICE_API_KEYS=dev-service-key`
+- `RECORDS_DIR=./data/records` (по умолчанию)
 
 ## Packaging (launcher)
 
