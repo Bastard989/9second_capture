@@ -14,7 +14,7 @@ prometheus-client==0.20.0
 requests==2.32.3
 PyJWT[crypto]==2.10.1
 jinja2==3.1.4
-python-multipart==0.0.9
+python-multipart==0.0.22
 opentelemetry-api==1.29.0
 opentelemetry-sdk==1.29.0
 opentelemetry-exporter-otlp-proto-http==1.29.0
