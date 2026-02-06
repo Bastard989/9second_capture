@@ -96,6 +96,11 @@ Linux (PulseAudio / PipeWire):
 - Проверка API: `http://localhost:8010/health`
 - Метрики: `http://localhost:8010/metrics`
 
+### Тесты
+
+Если при запуске тестов появляется ошибка про `python-multipart`, установи зависимости:
+`pip install -r requirements.txt`.
+
 ## Локальный UI (агент)
 
 Для локального web-интерфейса со стартом/стопом записи и проверкой сигнала:
