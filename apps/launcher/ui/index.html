@@ -91,7 +91,6 @@
         <div id="appUrl" style="margin-top:8px; color:#bdbdbd;"></div>
         <div style="margin-top:12px;">
           <button id="openBtn" class="secondary">Открыть UI</button>
-          <button id="stopBtn" class="secondary">Остановить</button>
         </div>
       </div>
 
@@ -106,7 +105,6 @@
       const appUrlEl = document.getElementById("appUrl");
       const logEl = document.getElementById("log");
       const openBtn = document.getElementById("openBtn");
-      const stopBtn = document.getElementById("stopBtn");
 
       const setStatus = (state, err) => {
         statusEl.textContent = state;
@@ -127,7 +125,6 @@
           appUrlEl.textContent = "UI: —";
         }
         openBtn.disabled = false;
-        stopBtn.disabled = !data.app_running;
       };
 
       document.getElementById("installBase").onclick = async () => {
@@ -146,9 +143,6 @@
         if (data.url) {
           window.open(data.url, "_blank");
         }
-      };
-      stopBtn.onclick = async () => {
-        await fetch("/api/stop", { method: "POST" });
       };
 
       refresh();
