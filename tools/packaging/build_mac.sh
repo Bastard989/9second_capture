@@ -11,6 +11,10 @@ export COPYFILE_DISABLE=1
 pyinstaller --onedir --windowed --noconfirm --clean \
   --name 9second_capture \
   --icon assets/icon/icon.icns \
+  --paths "." \
+  --paths "src" \
+  --collect-submodules apps \
+  --collect-submodules interview_analytics_agent \
   --add-data "apps/api_gateway/ui:apps/api_gateway/ui" \
   --exclude-module pytest \
   --exclude-module py \
