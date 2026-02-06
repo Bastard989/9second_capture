@@ -28,6 +28,7 @@ from interview_analytics_agent.queue.retry import requeue_with_backoff
 from interview_analytics_agent.queue.streams import ack_task, consumer_name, read_task
 from interview_analytics_agent.services.readiness_service import enforce_startup_readiness
 from interview_analytics_agent.storage.db import db_session
+from interview_analytics_agent.storage import records
 from interview_analytics_agent.storage.repositories import (
     MeetingRepository,
     TranscriptSegmentRepository,
@@ -64,6 +65,9 @@ def run_loop() -> None:
                     segs = srepo.list_by_meeting(meeting_id)
                     raw = build_raw_transcript(segs)
                     enhanced = build_enhanced_transcript(segs)
+
+                    records.write_text(meeting_id, "raw.txt", raw)
+                    records.write_text(meeting_id, "clean.txt", enhanced)
 
                     if m:
                         m.raw_transcript = raw
