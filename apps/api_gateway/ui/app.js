@@ -660,6 +660,7 @@ const fetchRecords = async () => {
     if (!res.ok) return;
     const data = await res.json();
     const items = data.items || [];
+    const current = getSelectedMeeting();
     els.recordsSelect.innerHTML = "";
     if (!items.length) {
       const opt = document.createElement("option");
@@ -673,6 +674,9 @@ const fetchRecords = async () => {
       opt.value = item.meeting_id;
       const created = item.created_at ? new Date(item.created_at).toLocaleString() : "";
       opt.textContent = `${item.meeting_id}${created ? ` (${created})` : ""}`;
+      if (current && item.meeting_id === current) {
+        opt.selected = true;
+      }
       els.recordsSelect.appendChild(opt);
     });
   } catch (err) {
@@ -831,6 +835,12 @@ document.querySelectorAll('input[name="captureMode"]').forEach((el) => {
 els.refreshDevices.addEventListener("click", listDevices);
 els.checkDriver.addEventListener("click", checkDriver);
 els.refreshRecords.addEventListener("click", fetchRecords);
+els.recordsSelect.addEventListener("change", () => {
+  const meetingId = getSelectedMeeting();
+  if (meetingId) {
+    els.meetingIdText.textContent = meetingId;
+  }
+});
 els.chooseFolder.addEventListener("click", chooseFolder);
 document.querySelectorAll("[data-action]").forEach((btn) => {
   btn.addEventListener("click", handleRecordAction);
