@@ -6,20 +6,17 @@
 
 ### macOS
 ```bash
-python3 -m pip install pyinstaller
-pyinstaller --onefile --name 9second_capture scripts/run_local_agent.py
+tools/packaging/build_mac.sh
 ```
 
 ### Windows
 ```powershell
-py -m pip install pyinstaller
-pyinstaller --onefile --name 9second_capture scripts/run_local_agent.py
+tools/packaging/build_windows.ps1
 ```
 
 ### Linux
 ```bash
-python3 -m pip install pyinstaller
-pyinstaller --onefile --name 9second_capture scripts/run_local_agent.py
+tools/packaging/build_linux.sh
 ```
 
 ## Иконка
