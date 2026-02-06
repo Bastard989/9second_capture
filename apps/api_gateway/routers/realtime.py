@@ -9,7 +9,7 @@ HTTP ingestion endpoints for post-meeting uploads.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from apps.api_gateway.deps import auth_dep, service_auth_write_dep
@@ -101,6 +101,31 @@ def ingest_chunk(
 ) -> ChunkIngestResponse:
     _ensure_meeting_access(ctx, meeting_id)
     return _ingest_chunk_impl(meeting_id=meeting_id, req=req)
+
+
+@router.post("/meetings/{meeting_id}/upload", response_model=ChunkIngestResponse)
+async def upload_audio(
+    meeting_id: str,
+    file: UploadFile = File(...),
+    ctx: AuthContext = Depends(auth_dep),
+) -> ChunkIngestResponse:
+    _ensure_meeting_access(ctx, meeting_id)
+    payload = await file.read()
+    result = ingest_audio_chunk_bytes(
+        meeting_id=meeting_id,
+        seq=0,
+        audio_bytes=payload,
+        idempotency_key=None,
+        idempotency_scope="audio_chunk_upload",
+        idempotency_prefix="upload",
+    )
+    return ChunkIngestResponse(
+        accepted=result.accepted,
+        meeting_id=result.meeting_id,
+        seq=result.seq,
+        idempotency_key=result.idempotency_key,
+        blob_key=result.blob_key,
+    )
 
 
 @router.post(

@@ -223,6 +223,13 @@ const buildHeaders = () => {
   return headers;
 };
 
+const buildAuthHeaders = () => {
+  const headers = {};
+  const key = (els.apiKey.value || "").trim();
+  if (key) headers["X-API-Key"] = key;
+  return headers;
+};
+
 const listDevices = async () => {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
@@ -580,18 +587,19 @@ const uploadAudioFile = async () => {
   els.meetingIdText.textContent = state.meetingId;
   openWebSocket();
 
-  const content_b64 = await toBase64(file);
-  await fetch(`/v1/meetings/${state.meetingId}/chunks`, {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const uploadRes = await fetch(`/v1/meetings/${state.meetingId}/upload`, {
     method: "POST",
-    headers: buildHeaders(),
-    body: JSON.stringify({
-      seq: 0,
-      content_b64,
-      codec: file.type || "audio",
-      sample_rate: 16000,
-      channels: 1,
-    }),
+    headers: buildAuthHeaders(),
+    body: form,
   });
+  if (!uploadRes.ok) {
+    setStatus("status_error", "error");
+    state.isUploading = false;
+    els.startBtn.disabled = false;
+    return;
+  }
   state.chunkCount = 1;
   els.chunkCount.textContent = "1";
 
