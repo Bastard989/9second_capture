@@ -11,3 +11,11 @@ pyinstaller --onedir --windowed --noconfirm --clean \
   --exclude-module IPython \
   --exclude-module pygments \
   scripts/run_local_agent.py
+
+APP_PATH="dist/9second_capture.app"
+if [ -d "$APP_PATH" ]; then
+  # Убираем extended attributes (resource fork/Finder info),
+  # иначе codesign может падать.
+  xattr -cr "$APP_PATH" || true
+  /usr/bin/codesign --force --deep --sign - "$APP_PATH" || true
+fi
