@@ -17,7 +17,10 @@ from apps.api_gateway.tenancy import enforce_meeting_access, tenant_enforcement_
 from interview_analytics_agent.common.logging import get_project_logger
 from interview_analytics_agent.common.security import AuthContext
 from interview_analytics_agent.common.tracing import start_trace
-from interview_analytics_agent.services.chunk_ingest_service import ingest_audio_chunk_b64
+from interview_analytics_agent.services.chunk_ingest_service import (
+    ingest_audio_chunk_b64,
+    ingest_audio_chunk_bytes,
+)
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import MeetingRepository
 
