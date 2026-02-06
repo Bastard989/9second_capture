@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
+
+from interview_analytics_agent.common.time import UTC
 
 
 def new_uuid() -> str:

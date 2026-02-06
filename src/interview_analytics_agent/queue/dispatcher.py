@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
+
+from interview_analytics_agent.common.time import UTC
 
 from interview_analytics_agent.common.ids import new_event_id
 from interview_analytics_agent.common.logging import get_project_logger

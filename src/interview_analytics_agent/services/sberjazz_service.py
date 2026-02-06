@@ -13,7 +13,9 @@ import json
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime
+
+from interview_analytics_agent.common.time import UTC
 from uuid import uuid4
 
 from interview_analytics_agent.common.config import get_settings

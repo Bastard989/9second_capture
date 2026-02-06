@@ -8,7 +8,9 @@ Reconciliation job.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
+
+from interview_analytics_agent.common.time import UTC
 
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.logging import get_project_logger
