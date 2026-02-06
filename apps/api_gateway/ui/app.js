@@ -17,6 +17,9 @@ const state = {
   transcriptMode: "enhanced",
   driverStatusKey: "driver_unknown",
   driverStatusStyle: "muted",
+  folderStatusKey: "folder_not_selected",
+  folderStatusStyle: "muted",
+  downloadDirHandle: null,
   transcript: {
     raw: new Map(),
     enhanced: new Map(),
@@ -61,6 +64,10 @@ const i18n = {
     view_enhanced: "Clean",
     records_title: "Результаты",
     records_refresh: "Обновить",
+    choose_folder: "Выбрать папку",
+    folder_not_selected: "Папка не выбрана",
+    folder_selected: "Папка выбрана",
+    folder_not_supported: "Выбор папки недоступен",
     download_raw: "Скачать raw",
     download_clean: "Скачать clean",
     gen_report_raw: "Отчёт raw",
@@ -127,6 +134,10 @@ const i18n = {
     view_enhanced: "Clean",
     records_title: "Results",
     records_refresh: "Refresh",
+    choose_folder: "Choose folder",
+    folder_not_selected: "Folder not selected",
+    folder_selected: "Folder selected",
+    folder_not_supported: "Folder chooser not supported",
     download_raw: "Download raw",
     download_clean: "Download clean",
     gen_report_raw: "Report raw",
@@ -177,6 +188,8 @@ const els = {
   viewEnhanced: document.getElementById("viewEnhanced"),
   recordsSelect: document.getElementById("recordsSelect"),
   refreshRecords: document.getElementById("refreshRecords"),
+  chooseFolder: document.getElementById("chooseFolder"),
+  folderStatus: document.getElementById("folderStatus"),
   uploadAudio: document.getElementById("uploadAudio"),
   uploadAudioBtn: document.getElementById("uploadAudioBtn"),
   uploadVideo: document.getElementById("uploadVideo"),
@@ -195,6 +208,7 @@ const updateI18n = () => {
     if (dict[key]) el.setAttribute("placeholder", dict[key]);
   });
   setDriverStatus(state.driverStatusKey, state.driverStatusStyle);
+  setFolderStatus(state.folderStatusKey, state.folderStatusStyle);
 };
 
 const setStatus = (statusKey, style) => {
@@ -214,6 +228,14 @@ const setDriverStatus = (statusKey, style) => {
   els.driverStatus.className = `pill ${style || "muted"}`;
   state.driverStatusKey = statusKey;
   state.driverStatusStyle = style || "muted";
+};
+
+const setFolderStatus = (statusKey, style) => {
+  const dict = i18n[state.lang];
+  els.folderStatus.textContent = dict[statusKey] || statusKey;
+  els.folderStatus.className = `pill ${style || "muted"}`;
+  state.folderStatusKey = statusKey;
+  state.folderStatusStyle = style || "muted";
 };
 
 const buildHeaders = () => {
@@ -619,6 +641,19 @@ const updateCaptureUi = () => {
   els.deviceSelect.disabled = mode === "screen";
 };
 
+const chooseFolder = async () => {
+  if (!window.showDirectoryPicker) {
+    setFolderStatus("folder_not_supported", "bad");
+    return;
+  }
+  try {
+    state.downloadDirHandle = await window.showDirectoryPicker();
+    setFolderStatus("folder_selected", "good");
+  } catch (err) {
+    console.warn("folder pick cancelled", err);
+  }
+};
+
 const fetchRecords = async () => {
   try {
     const res = await fetch("/v1/meetings?limit=50", { headers: buildHeaders() });
@@ -649,8 +684,50 @@ const getSelectedMeeting = () => {
   return els.recordsSelect.value || state.meetingId;
 };
 
-const openDownload = (url) => {
-  window.open(url, "_blank");
+const buildFilename = ({ kind, source, fmt }) => {
+  if (kind === "raw") return "raw.txt";
+  if (kind === "clean") return "clean.txt";
+  if (kind === "report") {
+    return source === "raw" ? "report_raw.json" : "report_clean.json";
+  }
+  if (kind === "structured") {
+    return `structured_${source}.${fmt}`;
+  }
+  return "artifact.bin";
+};
+
+const saveToFolder = async (filename, blob) => {
+  if (!state.downloadDirHandle) return false;
+  try {
+    const handle = await state.downloadDirHandle.getFileHandle(filename, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return true;
+  } catch (err) {
+    console.warn("save to folder failed", err);
+    return false;
+  }
+};
+
+const downloadArtifact = async (url, filename) => {
+  try {
+    const res = await fetch(url, { headers: buildAuthHeaders() });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const saved = await saveToFolder(filename, blob);
+    if (saved) return;
+    const link = document.createElement("a");
+    const objectUrl = URL.createObjectURL(blob);
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 500);
+  } catch (err) {
+    console.warn("download failed", err);
+  }
 };
 
 const handleRecordAction = async (event) => {
@@ -673,7 +750,9 @@ const handleRecordAction = async (event) => {
 
   if (action === "download") {
     const kind = button.dataset.kind;
-    openDownload(`/v1/meetings/${meetingId}/artifact?kind=${kind}&fmt=txt`);
+    const url = `/v1/meetings/${meetingId}/artifact?kind=${kind}&fmt=txt`;
+    const filename = buildFilename({ kind, fmt: "txt" });
+    await downloadArtifact(url, filename);
     return;
   }
 
@@ -697,7 +776,9 @@ const handleRecordAction = async (event) => {
 
   if (action === "download-report") {
     const source = button.dataset.source;
-    openDownload(`/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=json`);
+    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=json`;
+    const filename = buildFilename({ kind: "report", source, fmt: "json" });
+    await downloadArtifact(url, filename);
     return;
   }
 
@@ -721,17 +802,17 @@ const handleRecordAction = async (event) => {
 
   if (action === "download-structured-json") {
     const source = button.dataset.source;
-    openDownload(
-      `/v1/meetings/${meetingId}/artifact?kind=structured&source=${source}&fmt=json`
-    );
+    const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${source}&fmt=json`;
+    const filename = buildFilename({ kind: "structured", source, fmt: "json" });
+    await downloadArtifact(url, filename);
     return;
   }
 
   if (action === "download-structured-csv") {
     const source = button.dataset.source;
-    openDownload(
-      `/v1/meetings/${meetingId}/artifact?kind=structured&source=${source}&fmt=csv`
-    );
+    const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${source}&fmt=csv`;
+    const filename = buildFilename({ kind: "structured", source, fmt: "csv" });
+    await downloadArtifact(url, filename);
   }
 };
 
@@ -750,6 +831,7 @@ document.querySelectorAll('input[name="captureMode"]').forEach((el) => {
 els.refreshDevices.addEventListener("click", listDevices);
 els.checkDriver.addEventListener("click", checkDriver);
 els.refreshRecords.addEventListener("click", fetchRecords);
+els.chooseFolder.addEventListener("click", chooseFolder);
 document.querySelectorAll("[data-action]").forEach((btn) => {
   btn.addEventListener("click", handleRecordAction);
 });
@@ -781,3 +863,6 @@ updateI18n();
 listDevices();
 updateCaptureUi();
 fetchRecords();
+if (!window.showDirectoryPicker) {
+  setFolderStatus("folder_not_supported", "bad");
+}

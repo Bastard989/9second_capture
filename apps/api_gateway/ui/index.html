@@ -160,6 +160,14 @@
       <section class="card">
         <h2 data-i18n="records_title">Результаты</h2>
         <div class="row">
+          <button id="chooseFolder" class="ghost" data-i18n="choose_folder">
+            Выбрать папку
+          </button>
+          <span id="folderStatus" class="pill muted" data-i18n="folder_not_selected">
+            Папка не выбрана
+          </span>
+        </div>
+        <div class="row">
           <select id="recordsSelect"></select>
           <button id="refreshRecords" class="ghost" data-i18n="records_refresh">
             Обновить
