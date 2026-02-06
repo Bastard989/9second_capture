@@ -22,7 +22,7 @@ python -m PyInstaller --onedir --windowed --noconfirm --clean \
   --icon assets/icon/icon.icns \
   --add-data "apps:bundle/apps" \
   --add-data "src:bundle/src" \
-  --add-data "scripts/run_local_agent.py:bundle/scripts/run_local_agent.py" \
+  --add-data "scripts/run_local_agent.py:bundle/scripts" \
   --add-data "requirements.app.txt:bundle" \
   --add-data "requirements.whisper.txt:bundle" \
   --add-data "apps/launcher/ui:bundle/launcher_ui" \

@@ -218,7 +218,15 @@ def _start_app() -> str:
     env["LOCAL_AGENT_AUTO_OPEN"] = "false"
     env["PYTHONUNBUFFERED"] = "1"
 
-    cmd = [str(python_bin), str(bundle / "scripts" / "run_local_agent.py")]
+    script_path = bundle / "scripts" / "run_local_agent.py"
+    if script_path.is_dir():
+        candidate = script_path / "run_local_agent.py"
+        if candidate.exists():
+            script_path = candidate
+    if not script_path.exists():
+        raise RuntimeError(f"run_local_agent.py not found: {script_path}")
+
+    cmd = [str(python_bin), str(script_path)]
     _log("[start] starting agent...")
     agent_log = root / "agent.log"
     agent_log.parent.mkdir(parents=True, exist_ok=True)
