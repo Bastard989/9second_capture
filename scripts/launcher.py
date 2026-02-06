@@ -230,7 +230,7 @@ def _start_app() -> str:
     _log("[start] starting agent...")
     agent_log = root / "agent.log"
     agent_log.parent.mkdir(parents=True, exist_ok=True)
-    log_fh = open(agent_log, "a", encoding="utf-8")
+    log_fh = open(agent_log, "w", encoding="utf-8")
     APP_PROCESS = subprocess.Popen(
         cmd,
         cwd=str(root),

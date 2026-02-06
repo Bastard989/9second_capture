@@ -55,7 +55,11 @@ def _is_port_free(port: int) -> bool:
         return True
 
 
-def _pick_port(range_start: int, range_end: int) -> int:
+def _pick_port(range_start: int, range_end: int, preferred: int | None = None) -> int:
+    if preferred and preferred > 0:
+        if _is_port_free(preferred):
+            return preferred
+
     last = _load_last_port()
     if last and _is_port_free(last):
         return last
@@ -70,7 +74,15 @@ def _pick_port(range_start: int, range_end: int) -> int:
 
 
 def main() -> None:
-    port = _pick_port(8010, 8099)
+    preferred_port = None
+    raw_port = os.getenv("API_PORT")
+    if raw_port:
+        try:
+            preferred_port = int(raw_port)
+        except ValueError:
+            preferred_port = None
+
+    port = _pick_port(8010, 8099, preferred=preferred_port)
     _save_last_port(port)
 
     os.environ.setdefault("API_HOST", "127.0.0.1")
