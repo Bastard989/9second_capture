@@ -32,18 +32,35 @@ def _decode_audio_to_float32(audio_bytes: bytes, target_sr: int = 16000) -> np.n
     Требование:
     - ffmpeg/libav должен быть доступен (через PyAV)
     """
-    container = av.open(io.BytesIO(audio_bytes))
-    stream = next(s for s in container.streams if s.type == "audio")
-    resampler = av.audio.resampler.AudioResampler(format="fltp", layout="mono", rate=target_sr)
+    try:
+        container = av.open(io.BytesIO(audio_bytes))
+        stream = next(s for s in container.streams if s.type == "audio")
+        resampler = av.audio.resampler.AudioResampler(
+            format="fltp", layout="mono", rate=target_sr
+        )
+    except Exception:
+        # Некорректный/неполный чанк — просто пропускаем
+        return np.zeros((0,), dtype=np.float32)
 
     samples: list[np.ndarray] = []
-    for frame in container.decode(stream):
-        frame = resampler.resample(frame)
-        # frame.to_ndarray() -> shape (channels, samples) в float
-        arr = frame.to_ndarray()
-        if arr.ndim == 2:
-            arr = arr[0]
-        samples.append(arr.astype(np.float32))
+    try:
+        for frame in container.decode(stream):
+            frames = resampler.resample(frame)
+            # PyAV может вернуть один фрейм или список
+            if isinstance(frames, (list, tuple)):
+                frames_iter = frames
+            else:
+                frames_iter = [frames]
+            for fr in frames_iter:
+                if fr is None:
+                    continue
+                # fr.to_ndarray() -> shape (channels, samples) в float
+                arr = fr.to_ndarray()
+                if arr.ndim == 2:
+                    arr = arr[0]
+                samples.append(arr.astype(np.float32))
+    except Exception:
+        return np.zeros((0,), dtype=np.float32)
 
     if not samples:
         return np.zeros((0,), dtype=np.float32)
