@@ -15,7 +15,7 @@ const state = {
   countdownValue: null,
   isCountingDown: false,
   isUploading: false,
-  transcriptMode: "enhanced",
+  enhancedTimers: new Map(),
   resultsSource: "raw",
   driverStatusKey: "driver_unknown",
   driverStatusStyle: "muted",
@@ -77,8 +77,12 @@ const i18n = {
     meeting_id_label: "Meeting ID:",
     chunks_label: "Чанки:",
     transcript_title: "Транскрипт",
-    view_raw: "Raw",
-    view_enhanced: "Clean",
+    raw_label: "Raw",
+    clean_label: "Clean",
+    raw_live: "Live",
+    clean_delay: "~3–4 сек",
+    transcript_placeholder_raw: "Сырой текст будет появляться в реальном времени...",
+    transcript_placeholder_clean: "Чистый текст появится с небольшой задержкой...",
     records_title: "Результаты",
     records_refresh: "Обновить",
     choose_folder: "Выбрать папку",
@@ -102,7 +106,6 @@ const i18n = {
     download_structured_raw_csv: "CSV raw",
     download_structured_clean_json: "JSON clean",
     download_structured_clean_csv: "CSV clean",
-    transcript_placeholder: "Здесь появится текст по мере распознавания...",
     upload_title: "Загрузка конференции",
     upload_audio_label: "Аудио файл",
     upload_audio_btn: "Загрузить аудио",
@@ -167,8 +170,12 @@ const i18n = {
     meeting_id_label: "Meeting ID:",
     chunks_label: "Chunks:",
     transcript_title: "Transcript",
-    view_raw: "Raw",
-    view_enhanced: "Clean",
+    raw_label: "Raw",
+    clean_label: "Clean",
+    raw_live: "Live",
+    clean_delay: "~3–4s",
+    transcript_placeholder_raw: "Raw text will appear in real time...",
+    transcript_placeholder_clean: "Clean text appears with a small delay...",
     records_title: "Results",
     records_refresh: "Refresh",
     choose_folder: "Choose folder",
@@ -192,7 +199,6 @@ const i18n = {
     download_structured_raw_csv: "CSV raw",
     download_structured_clean_json: "JSON clean",
     download_structured_clean_csv: "CSV clean",
-    transcript_placeholder: "Text will appear here as recognition runs...",
     upload_title: "Conference upload",
     upload_audio_label: "Audio file",
     upload_audio_btn: "Upload audio",
@@ -227,9 +233,8 @@ const els = {
   checkSignal: document.getElementById("checkSignal"),
   meetingIdText: document.getElementById("meetingIdText"),
   chunkCount: document.getElementById("chunkCount"),
-  transcriptArea: document.getElementById("transcriptArea"),
-  viewRaw: document.getElementById("viewRaw"),
-  viewEnhanced: document.getElementById("viewEnhanced"),
+  transcriptRaw: document.getElementById("transcriptRaw"),
+  transcriptClean: document.getElementById("transcriptClean"),
   recordsSelect: document.getElementById("recordsSelect"),
   refreshRecords: document.getElementById("refreshRecords"),
   resultsRaw: document.getElementById("resultsRaw"),
@@ -479,7 +484,14 @@ const openWebSocket = () => {
         if (typeof data.seq === "number") {
           if (data.raw_text != null) state.transcript.raw.set(data.seq, data.raw_text);
           if (data.enhanced_text != null) {
-            state.transcript.enhanced.set(data.seq, data.enhanced_text);
+            if (!state.enhancedTimers.has(data.seq)) {
+              const timer = setTimeout(() => {
+                state.transcript.enhanced.set(data.seq, data.enhanced_text);
+                state.enhancedTimers.delete(data.seq);
+                renderTranscript();
+              }, 3500);
+              state.enhancedTimers.set(data.seq, timer);
+            }
           }
           renderTranscript();
         }
@@ -494,14 +506,18 @@ const openWebSocket = () => {
 };
 
 const renderTranscript = () => {
-  const source =
-    state.transcriptMode === "raw" ? state.transcript.raw : state.transcript.enhanced;
-  const ordered = Array.from(source.entries())
+  const orderedRaw = Array.from(state.transcript.raw.entries())
     .sort((a, b) => a[0] - b[0])
     .map(([, text]) => text)
     .filter(Boolean)
     .join(" ");
-  els.transcriptArea.value = ordered;
+  const orderedClean = Array.from(state.transcript.enhanced.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, text]) => text)
+    .filter(Boolean)
+    .join(" ");
+  if (els.transcriptRaw) els.transcriptRaw.value = orderedRaw;
+  if (els.transcriptClean) els.transcriptClean.value = orderedClean;
 };
 
 const resetSessionState = () => {
@@ -510,7 +526,10 @@ const resetSessionState = () => {
   els.chunkCount.textContent = "0";
   state.transcript.raw.clear();
   state.transcript.enhanced.clear();
-  els.transcriptArea.value = "";
+  state.enhancedTimers.forEach((timer) => clearTimeout(timer));
+  state.enhancedTimers.clear();
+  if (els.transcriptRaw) els.transcriptRaw.value = "";
+  if (els.transcriptClean) els.transcriptClean.value = "";
 };
 
 const startCountdown = (seconds) =>
@@ -871,7 +890,7 @@ const handleRecordAction = async (event) => {
     );
     if (!res.ok) return;
     const text = await res.text();
-    els.transcriptArea.value = text;
+    if (els.transcriptClean) els.transcriptClean.value = text;
     return;
   }
 
@@ -895,7 +914,7 @@ const handleRecordAction = async (event) => {
       { headers: buildHeaders() }
     );
     if (view.ok) {
-      els.transcriptArea.value = await view.text();
+      if (els.transcriptClean) els.transcriptClean.value = await view.text();
     }
     const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
     const filename = buildFilename({ kind: "report", source, fmt: "txt" });
@@ -984,18 +1003,6 @@ els.startBtn.addEventListener("click", async () => {
 els.stopBtn.addEventListener("click", stopRecording);
 els.checkSignal.addEventListener("click", checkSignal);
 els.uploadAudioBtn.addEventListener("click", uploadAudioFile);
-els.viewRaw.addEventListener("click", () => {
-  state.transcriptMode = "raw";
-  els.viewRaw.classList.add("active");
-  els.viewEnhanced.classList.remove("active");
-  renderTranscript();
-});
-els.viewEnhanced.addEventListener("click", () => {
-  state.transcriptMode = "enhanced";
-  els.viewEnhanced.classList.add("active");
-  els.viewRaw.classList.remove("active");
-  renderTranscript();
-});
 
 const savedTheme = (() => {
   try {

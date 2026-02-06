@@ -229,20 +229,34 @@
 
       <section class="card">
         <h2 data-i18n="transcript_title">Транскрипт</h2>
-        <div class="row transcript-controls">
-          <button id="viewRaw" class="ghost active" data-i18n="view_raw">
-            Raw
-          </button>
-          <button id="viewEnhanced" class="ghost" data-i18n="view_enhanced">
-            Clean
-          </button>
+        <div class="transcript-grid">
+          <div class="transcript-box">
+            <div class="transcript-header">
+              <span data-i18n="raw_label">Raw</span>
+              <span class="delay-note" data-i18n="raw_live">Live</span>
+            </div>
+            <textarea
+              id="transcriptRaw"
+              class="transcript-area"
+              readonly
+              placeholder="..."
+              data-i18n-placeholder="transcript_placeholder_raw"
+            ></textarea>
+          </div>
+          <div class="transcript-box">
+            <div class="transcript-header">
+              <span data-i18n="clean_label">Clean</span>
+              <span class="delay-note" data-i18n="clean_delay">~3–4 сек</span>
+            </div>
+            <textarea
+              id="transcriptClean"
+              class="transcript-area"
+              readonly
+              placeholder="..."
+              data-i18n-placeholder="transcript_placeholder_clean"
+            ></textarea>
+          </div>
         </div>
-        <textarea
-          id="transcriptArea"
-          readonly
-          placeholder="..."
-          data-i18n-placeholder="transcript_placeholder"
-        ></textarea>
       </section>
 
       <section class="card">
