@@ -9,6 +9,17 @@
   --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
 }
 
+body[data-theme="dark"] {
+  --bg: #0b0f14;
+  --card: #111827;
+  --ink-1: #e5e7eb;
+  --ink-2: #94a3b8;
+  --accent: #3b82f6;
+  --accent-2: #22d3ee;
+  --border: #1f2937;
+  --shadow: 0 12px 28px rgba(2, 6, 23, 0.4);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -30,6 +41,12 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 20px 32px 8px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .brand {
@@ -66,9 +83,20 @@ body {
   gap: 8px;
 }
 
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-label {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
 .lang-btn {
   border: 1px solid var(--border);
-  background: white;
+  background: var(--card);
   padding: 6px 14px;
   border-radius: 999px;
   font-weight: 600;
@@ -120,6 +148,8 @@ textarea {
   padding: 10px 12px;
   font-size: 14px;
   font-family: inherit;
+  background: var(--card);
+  color: var(--ink-1);
 }
 
 .row {
@@ -153,7 +183,7 @@ button {
 }
 
 .secondary {
-  background: #111827;
+  background: color-mix(in srgb, var(--ink-1) 85%, var(--bg) 15%);
   color: white;
   padding: 10px 16px;
   border-radius: 10px;
@@ -166,8 +196,8 @@ button {
 }
 
 .is-inactive {
-  background: #e5e7eb;
-  color: #64748b;
+  background: color-mix(in srgb, var(--border) 70%, var(--bg) 30%);
+  color: var(--ink-2);
 }
 
 button:disabled {
@@ -175,7 +205,7 @@ button:disabled {
 }
 
 .ghost {
-  background: white;
+  background: var(--card);
   border: 1px solid var(--border);
   padding: 8px 12px;
   border-radius: 10px;
@@ -221,7 +251,7 @@ button:disabled {
   height: 8px;
   border-radius: 999px;
   overflow: hidden;
-  background: #e5e7eb;
+  background: color-mix(in srgb, var(--border) 70%, var(--bg) 30%);
 }
 
 .meter-bar {
@@ -279,12 +309,12 @@ textarea {
   padding: 4px 10px;
   font-size: 11px;
   border: 1px solid var(--border);
-  background: #f9fafb;
+  background: color-mix(in srgb, var(--card) 90%, var(--bg) 10%);
   color: var(--ink-2);
 }
 
 .pill.muted {
-  background: #f9fafb;
+  background: color-mix(in srgb, var(--card) 90%, var(--bg) 10%);
   color: var(--ink-2);
   border-color: var(--border);
 }
@@ -320,7 +350,7 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 10px;
-  background: #f9fafb;
+  background: color-mix(in srgb, var(--card) 90%, var(--bg) 10%);
   font-size: 12px;
   color: var(--ink-2);
   display: flex;
@@ -353,6 +383,16 @@ textarea {
   font-weight: 600;
 }
 
+.driver-link {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.driver-link:hover {
+  text-decoration: underline;
+}
+
 .results-source {
   display: flex;
   align-items: center;
@@ -377,7 +417,7 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: #f9fafb;
+  background: color-mix(in srgb, var(--card) 88%, var(--bg) 12%);
 }
 
 .file-info {
@@ -410,6 +450,11 @@ textarea {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
+  }
+  .header-actions {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
   }
   .layout {
     padding: 10px 20px 30px;

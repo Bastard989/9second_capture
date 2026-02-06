@@ -84,3 +84,29 @@ def build_report(*, enhanced_transcript: str, meeting_context: dict) -> dict[str
         "risk_flags": data.get("risk_flags", []) or [],
         "recommendation": data.get("recommendation", ""),
     }
+
+
+def report_to_text(report: dict[str, Any]) -> str:
+    lines: list[str] = []
+    summary = (report.get("summary") or "").strip()
+    if summary:
+        lines.append(summary)
+    bullets = report.get("bullets") or []
+    if bullets:
+        if lines:
+            lines.append("")
+        lines.append("Bullets:")
+        lines.extend([f"- {b}" for b in bullets if b])
+    risk_flags = report.get("risk_flags") or []
+    if risk_flags:
+        if lines:
+            lines.append("")
+        lines.append("Risk flags:")
+        lines.extend([f"- {r}" for r in risk_flags if r])
+    recommendation = (report.get("recommendation") or "").strip()
+    if recommendation:
+        if lines:
+            lines.append("")
+        lines.append("Recommendation:")
+        lines.append(recommendation)
+    return "\n".join(lines).strip() + "\n"

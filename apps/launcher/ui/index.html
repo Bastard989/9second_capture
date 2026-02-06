@@ -88,6 +88,7 @@
       <div class="card">
         <div>Статус: <span id="status" class="status">idle</span></div>
         <div id="error" style="color:#ff7b7b; margin-top:8px;"></div>
+        <div id="appUrl" style="margin-top:8px; color:#bdbdbd;"></div>
         <div style="margin-top:12px;">
           <button id="startBtn" class="secondary">Запустить агент</button>
           <button id="openBtn" class="secondary">Открыть UI</button>
@@ -103,6 +104,7 @@
     <script>
       const statusEl = document.getElementById("status");
       const errorEl = document.getElementById("error");
+      const appUrlEl = document.getElementById("appUrl");
       const logEl = document.getElementById("log");
       const startBtn = document.getElementById("startBtn");
       const openBtn = document.getElementById("openBtn");
@@ -121,6 +123,14 @@
         const data = await res.json();
         setStatus(data.state, data.error);
         logEl.textContent = data.log || "—";
+        if (data.app_url) {
+          appUrlEl.innerHTML = `UI: <a href="${data.app_url}" target="_blank" rel="noopener noreferrer">${data.app_url}</a>`;
+        } else {
+          appUrlEl.textContent = "UI: —";
+        }
+        startBtn.disabled = Boolean(data.app_running);
+        openBtn.disabled = !data.app_url;
+        stopBtn.disabled = !data.app_running;
       };
 
       document.getElementById("installBase").onclick = async () => {
@@ -132,6 +142,10 @@
       startBtn.onclick = async () => {
         const res = await fetch("/api/start", { method: "POST" });
         const data = await res.json();
+        if (!data.ok) {
+          setStatus("error", data.error || "start_failed");
+          return;
+        }
         if (data.url) {
           window.open(data.url, "_blank");
         }

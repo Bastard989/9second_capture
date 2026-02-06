@@ -21,9 +21,22 @@
           </div>
         </div>
       </div>
-      <div class="lang-toggle">
-        <button class="lang-btn" data-lang="ru">RU</button>
-        <button class="lang-btn" data-lang="en">EN</button>
+      <div class="header-actions">
+        <div class="theme-toggle">
+          <span class="theme-label" data-i18n="theme_label">Тема</span>
+          <div class="segmented">
+            <button id="themeLight" class="ghost active" data-theme="light">
+              Light
+            </button>
+            <button id="themeDark" class="ghost" data-theme="dark">
+              Dark
+            </button>
+          </div>
+        </div>
+        <div class="lang-toggle">
+          <button class="lang-btn" data-lang="ru">RU</button>
+          <button class="lang-btn" data-lang="en">EN</button>
+        </div>
       </div>
     </header>
 
@@ -82,6 +95,14 @@
             <div data-i18n="driver_mac_2">
               Выход системы → Multi‑Output, вход агента → BlackHole.
             </div>
+            <a
+              class="driver-link"
+              href="https://existential.audio/blackhole/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              BlackHole — скачать
+            </a>
           </div>
           <div class="driver-panel hidden" data-os="win">
             <div data-i18n="driver_win_1">
@@ -90,6 +111,14 @@
             <div data-i18n="driver_win_2">
               Выход системы → CABLE Input, вход агента → CABLE Output.
             </div>
+            <a
+              class="driver-link"
+              href="https://vb-audio.com/Cable/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              VB‑CABLE — скачать
+            </a>
           </div>
           <div class="driver-panel hidden" data-os="linux">
             <div data-i18n="driver_linux_1">
@@ -98,6 +127,22 @@
             <div data-i18n="driver_linux_2">
               Если нет monitor — включите loopback в PulseAudio/PipeWire.
             </div>
+            <a
+              class="driver-link"
+              href="https://wiki.archlinux.org/title/PulseAudio/Examples#Loopback"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              PulseAudio loopback
+            </a>
+            <a
+              class="driver-link"
+              href="https://docs.pipewire.org/page_pulse.html"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              PipeWire (PulseAudio)
+            </a>
           </div>
         </div>
       </section>
@@ -115,6 +160,9 @@
               <input type="radio" name="captureMode" value="screen" />
               <span data-i18n="capture_mode_screen">Экран + звук</span>
             </label>
+          </div>
+          <div class="hint" data-i18n="capture_mode_hint">
+            Для экрана со звуком включите “Share audio” в окне браузера.
           </div>
         </div>
         <div class="status">
@@ -258,26 +306,6 @@
         </div>
       </section>
 
-      <section class="card">
-        <h2 data-i18n="help_title">Как настроить звук</h2>
-        <ul class="plain-list">
-          <li data-i18n="help_item_1">
-            Установите драйвер loopback (BlackHole / VB-Cable / PulseAudio).
-          </li>
-          <li data-i18n="help_item_2">
-            macOS: BlackHole + Multi‑Output Device (колонки + BlackHole).
-          </li>
-          <li data-i18n="help_item_3">
-            Windows: VB‑CABLE, вывод системы → CABLE Input, вход агента → CABLE Output.
-          </li>
-          <li data-i18n="help_item_4">
-            Linux: выберите “Monitor of …” для нужного sink.
-          </li>
-          <li data-i18n="help_item_5">
-            Нажмите «Проверить захват» и убедитесь, что уровень не нулевой.
-          </li>
-        </ul>
-      </section>
     </main>
 
     <footer class="footer">

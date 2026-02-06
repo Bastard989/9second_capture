@@ -72,6 +72,8 @@ def list_artifacts(meeting_id: str) -> dict[str, bool]:
         "clean": exists(meeting_id, "clean.txt"),
         "report_raw": exists(meeting_id, "report_raw.json"),
         "report_clean": exists(meeting_id, "report_clean.json"),
+        "report_raw_txt": exists(meeting_id, "report_raw.txt"),
+        "report_clean_txt": exists(meeting_id, "report_clean.txt"),
         "structured_raw_json": exists(meeting_id, "structured_raw.json"),
         "structured_raw_csv": exists(meeting_id, "structured_raw.csv"),
         "structured_clean_json": exists(meeting_id, "structured_clean.json"),

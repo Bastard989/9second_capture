@@ -14,7 +14,7 @@ from interview_analytics_agent.processing.aggregation import (
     build_enhanced_transcript,
     build_raw_transcript,
 )
-from interview_analytics_agent.processing.analytics import build_report
+from interview_analytics_agent.processing.analytics import build_report, report_to_text
 from interview_analytics_agent.processing.structured import build_structured_rows, structured_to_csv
 from interview_analytics_agent.storage import records
 from interview_analytics_agent.storage.db import db_session
@@ -118,6 +118,8 @@ def generate_report(
     report = build_report(enhanced_transcript=transcript, meeting_context={"source": req.source})
     filename = "report_raw.json" if req.source == "raw" else "report_clean.json"
     records.write_json(meeting_id, filename, report)
+    text_name = "report_raw.txt" if req.source == "raw" else "report_clean.txt"
+    records.write_text(meeting_id, text_name, report_to_text(report))
     return {"ok": True, "report": report, "source": req.source}
 
 
@@ -159,7 +161,17 @@ def download_artifact(
     elif kind == "report":
         if not source:
             raise HTTPException(status_code=400, detail="source_required")
-        filename = "report_raw.json" if source == "raw" else "report_clean.json"
+        if fmt not in {"txt", "json"}:
+            raise HTTPException(status_code=400, detail="format_required")
+        if fmt == "txt":
+            filename = "report_raw.txt" if source == "raw" else "report_clean.txt"
+            if not records.exists(meeting_id, filename):
+                json_name = "report_raw.json" if source == "raw" else "report_clean.json"
+                if records.exists(meeting_id, json_name):
+                    report = records.read_json(meeting_id, json_name)
+                    records.write_text(meeting_id, filename, report_to_text(report))
+        else:
+            filename = "report_raw.json" if source == "raw" else "report_clean.json"
     else:
         if not source:
             raise HTTPException(status_code=400, detail="source_required")

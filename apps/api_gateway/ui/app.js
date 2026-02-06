@@ -1,5 +1,6 @@
 const state = {
   lang: "ru",
+  theme: "light",
   ws: null,
   recorder: null,
   stream: null,
@@ -30,6 +31,9 @@ const state = {
 const i18n = {
   ru: {
     subtitle: "Локальный агент записи встреч",
+    theme_label: "Тема",
+    theme_light: "Светлая",
+    theme_dark: "Тёмная",
     connection_title: "Подключение",
     api_key_label: "API ключ (опционально)",
     api_key_placeholder: "X-API-Key",
@@ -63,10 +67,12 @@ const i18n = {
     capture_mode_label: "Режим захвата",
     capture_mode_system: "Системный звук",
     capture_mode_screen: "Экран + звук",
+    capture_mode_hint: "Для экрана со звуком включите “Share audio” в окне браузера.",
     countdown_label: "Отсчёт:",
     signal_waiting: "Сигнал: ожидание",
     signal_ok: "Сигнал: есть",
     signal_low: "Сигнал: слабый",
+    signal_no_audio: "Сигнал: нет аудио",
     signal_check: "Проверить захват",
     meeting_id_label: "Meeting ID:",
     chunks_label: "Чанки:",
@@ -115,6 +121,9 @@ const i18n = {
   },
   en: {
     subtitle: "Local meeting capture agent",
+    theme_label: "Theme",
+    theme_light: "Light",
+    theme_dark: "Dark",
     connection_title: "Connection",
     api_key_label: "API key (optional)",
     api_key_placeholder: "X-API-Key",
@@ -148,10 +157,12 @@ const i18n = {
     capture_mode_label: "Capture mode",
     capture_mode_system: "System audio",
     capture_mode_screen: "Screen + audio",
+    capture_mode_hint: "For screen + audio enable “Share audio” in the browser dialog.",
     countdown_label: "Countdown:",
     signal_waiting: "Signal: waiting",
     signal_ok: "Signal: ok",
     signal_low: "Signal: low",
+    signal_no_audio: "Signal: no audio",
     signal_check: "Check capture",
     meeting_id_label: "Meeting ID:",
     chunks_label: "Chunks:",
@@ -233,6 +244,8 @@ const els = {
   uploadAudioBtn: document.getElementById("uploadAudioBtn"),
   uploadVideo: document.getElementById("uploadVideo"),
   uploadVideoBtn: document.getElementById("uploadVideoBtn"),
+  themeLight: document.getElementById("themeLight"),
+  themeDark: document.getElementById("themeDark"),
 };
 
 const updateI18n = () => {
@@ -248,6 +261,8 @@ const updateI18n = () => {
   });
   setDriverStatus(state.driverStatusKey, state.driverStatusStyle);
   setFolderStatus(state.folderStatusKey, state.folderStatusStyle);
+  if (els.themeLight) els.themeLight.textContent = dict.theme_light || "Light";
+  if (els.themeDark) els.themeDark.textContent = dict.theme_dark || "Dark";
 };
 
 const setStatus = (statusKey, style) => {
@@ -275,6 +290,23 @@ const setFolderStatus = (statusKey, style) => {
   els.folderStatus.className = `pill ${style || "muted"}`;
   state.folderStatusKey = statusKey;
   state.folderStatusStyle = style || "muted";
+};
+
+const applyTheme = (theme) => {
+  const next = theme === "dark" ? "dark" : "light";
+  state.theme = next;
+  document.body.dataset.theme = next;
+  if (els.themeLight) {
+    els.themeLight.classList.toggle("active", next === "light");
+  }
+  if (els.themeDark) {
+    els.themeDark.classList.toggle("active", next === "dark");
+  }
+  try {
+    localStorage.setItem("ui_theme", next);
+  } catch (err) {
+    // ignore storage errors
+  }
 };
 
 const setRecordingButtons = (isRecording) => {
@@ -347,6 +379,10 @@ const ensureStream = async (mode) => {
       video: true,
       audio: true,
     });
+    if (!state.stream.getAudioTracks().length) {
+      setSignal("signal_no_audio");
+      console.warn("screen capture started without audio track");
+    }
   } else {
     const deviceId = els.deviceSelect.value;
     const constraints = {
@@ -779,7 +815,7 @@ const buildFilename = ({ kind, source, fmt }) => {
   if (kind === "raw") return "raw.txt";
   if (kind === "clean") return "clean.txt";
   if (kind === "report") {
-    return source === "raw" ? "report_raw.json" : "report_clean.json";
+    return source === "raw" ? "report_raw.txt" : "report_clean.txt";
   }
   if (kind === "structured") {
     return `structured_${source}.${fmt}`;
@@ -855,14 +891,14 @@ const handleRecordAction = async (event) => {
       body: JSON.stringify({ source }),
     });
     const view = await fetch(
-      `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=json`,
+      `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`,
       { headers: buildHeaders() }
     );
     if (view.ok) {
       els.transcriptArea.value = await view.text();
     }
-    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=json`;
-    const filename = buildFilename({ kind: "report", source, fmt: "json" });
+    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
+    const filename = buildFilename({ kind: "report", source, fmt: "txt" });
     await downloadArtifact(url, filename);
     await fetchRecords();
     return;
@@ -898,6 +934,12 @@ document.querySelectorAll('input[name="captureMode"]').forEach((el) => {
 
 els.refreshDevices.addEventListener("click", listDevices);
 els.checkDriver.addEventListener("click", checkDriver);
+if (els.themeLight) {
+  els.themeLight.addEventListener("click", () => applyTheme("light"));
+}
+if (els.themeDark) {
+  els.themeDark.addEventListener("click", () => applyTheme("dark"));
+}
 if (els.driverHelpBtn) {
   els.driverHelpBtn.addEventListener("click", toggleDriverHelp);
 }
@@ -955,6 +997,16 @@ els.viewEnhanced.addEventListener("click", () => {
   renderTranscript();
 });
 
+const savedTheme = (() => {
+  try {
+    return localStorage.getItem("ui_theme");
+  } catch (err) {
+    return null;
+  }
+})();
+const prefersDark =
+  window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+applyTheme(savedTheme || (prefersDark ? "dark" : "light"));
 updateI18n();
 listDevices();
 updateCaptureUi();
