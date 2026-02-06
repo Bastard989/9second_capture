@@ -21,8 +21,10 @@ tools/packaging/build_linux.sh
 
 ## Иконка
 
-Иконка пока не задана. Позже можно добавить флаг:
-`--icon path/to/icon` (png/ico/icns).
+Иконка задана в `assets/icon/`:
+- macOS: `icon.icns`
+- Windows: `icon.ico`
+- Linux: `icon_1024.png`
 
 ## Примечание
 
