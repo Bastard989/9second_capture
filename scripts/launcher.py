@@ -55,6 +55,15 @@ def _log(line: str) -> None:
         pass
 
 
+def _write_url_file(url: str) -> None:
+    try:
+        root = _user_root()
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "launcher.url").write_text(url + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _set_state(state: str, error: str | None = None) -> None:
     global INSTALL_STATE, INSTALL_ERROR
     with STATE_LOCK:
@@ -144,6 +153,25 @@ def _install(mode: str) -> None:
 
 def _pick_port() -> int:
     for port in range(8010, 8099):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _pick_launcher_port() -> int:
+    env_port = os.environ.get("LAUNCHER_PORT")
+    if env_port:
+        try:
+            return int(env_port)
+        except ValueError:
+            pass
+    for port in range(8799, 8899):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             try:
                 sock.bind(("127.0.0.1", port))
@@ -269,11 +297,26 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    port = 8799
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    _log("[launcher] starting...")
+    port = _pick_launcher_port()
     url = f"http://127.0.0.1:{port}"
+    _write_url_file(url)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except Exception as e:
+        _log(f"[launcher] bind failed: {e}")
+        raise
     print(f"[launcher] UI: {url}")
-    webbrowser.open(url, new=2)
+    opened = False
+    try:
+        opened = webbrowser.open(url, new=2)
+    except Exception as e:
+        _log(f"[launcher] webbrowser failed: {e}")
+    if not opened and sys.platform == "darwin":
+        try:
+            subprocess.Popen(["open", url])
+        except Exception as e:
+            _log(f"[launcher] open failed: {e}")
     server.serve_forever()
 
 
