@@ -15,12 +15,16 @@ API Gateway (FastAPI).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from apps.api_gateway.routers.admin import router as admin_router
+from apps.api_gateway.routers.artifacts import router as artifacts_router
 from apps.api_gateway.routers.meetings import router as meetings_router
 from apps.api_gateway.routers.realtime import router as realtime_router
 from apps.api_gateway.ws import ws_router
@@ -89,7 +93,16 @@ def _create_app() -> FastAPI:
     def health() -> dict[str, Any]:
         return {"ok": True}
 
+    ui_dir = Path(__file__).parent / "ui"
+    if ui_dir.exists():
+        app.mount("/ui", StaticFiles(directory=ui_dir), name="ui")
+
+        @app.get("/")
+        def ui_index() -> FileResponse:
+            return FileResponse(ui_dir / "index.html")
+
     app.include_router(meetings_router, prefix="/v1")
+    app.include_router(artifacts_router, prefix="/v1")
     app.include_router(realtime_router, prefix="/v1")
     app.include_router(admin_router, prefix="/v1")
     app.include_router(ws_router, prefix="/v1")

@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>9second_capture — Local Agent</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <div class="bg-layer"></div>
+    <header class="header">
+      <div class="brand">
+        <div class="brand-mark">9s</div>
+        <div class="brand-text">
+          <div class="brand-title">9second_capture</div>
+          <div class="brand-subtitle" data-i18n="subtitle">
+            Локальный агент записи встреч
+          </div>
+        </div>
+      </div>
+      <div class="lang-toggle">
+        <button class="lang-btn" data-lang="ru">RU</button>
+        <button class="lang-btn" data-lang="en">EN</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card">
+        <h2 data-i18n="connection_title">Подключение</h2>
+        <div class="field">
+          <label for="apiKey" data-i18n="api_key_label">API ключ (опционально)</label>
+          <input
+            id="apiKey"
+            type="password"
+            autocomplete="off"
+            placeholder="X-API-Key"
+            data-i18n-placeholder="api_key_placeholder"
+          />
+        </div>
+        <div class="field">
+          <label for="deviceSelect" data-i18n="device_label">Источник аудио</label>
+          <div class="row">
+            <select id="deviceSelect"></select>
+            <button id="refreshDevices" class="ghost" data-i18n="refresh_devices">
+              Обновить
+            </button>
+          </div>
+        </div>
+        <div class="hint" data-i18n="device_hint">
+          Выберите виртуальный драйвер захвата системного звука.
+        </div>
+        <div class="row">
+          <button id="checkDriver" class="ghost" data-i18n="driver_check">
+            Проверить драйвер
+          </button>
+          <span id="driverStatus" class="pill muted" data-i18n="driver_unknown">
+            Драйвер не проверен
+          </span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="recording_title">Запись</h2>
+        <div class="field">
+          <label data-i18n="capture_mode_label">Режим захвата</label>
+          <div class="row">
+            <label class="radio">
+              <input type="radio" name="captureMode" value="system" checked />
+              <span data-i18n="capture_mode_system">Системный звук</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="captureMode" value="screen" />
+              <span data-i18n="capture_mode_screen">Экран + звук</span>
+            </label>
+          </div>
+        </div>
+        <div class="status">
+          <span data-i18n="status_label">Статус:</span>
+          <span id="statusText" class="status-pill idle" data-i18n="status_idle"
+            >Ожидание</span
+          >
+        </div>
+        <div class="countdown">
+          <span data-i18n="countdown_label">Отсчёт:</span>
+          <span id="countdownValue">—</span>
+        </div>
+        <div class="controls">
+          <button id="startBtn" class="primary" data-i18n="start_btn">Старт</button>
+          <button id="stopBtn" class="secondary" data-i18n="stop_btn" disabled>
+            Стоп
+          </button>
+        </div>
+        <div class="meter">
+          <div class="meter-bar" id="levelBar"></div>
+        </div>
+        <div class="signal-row">
+          <span id="signalText" data-i18n="signal_waiting">Сигнал: ожидание</span>
+          <button id="checkSignal" class="ghost" data-i18n="signal_check">
+            Проверить захват
+          </button>
+        </div>
+        <div class="meta">
+          <div>
+            <span data-i18n="meeting_id_label">Meeting ID:</span>
+            <span id="meetingIdText">—</span>
+          </div>
+          <div>
+            <span data-i18n="chunks_label">Чанки:</span>
+            <span id="chunkCount">0</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="upload_title">Загрузка конференции</h2>
+        <div class="field">
+          <label data-i18n="upload_audio_label">Аудио файл</label>
+          <div class="row">
+            <input id="uploadAudio" type="file" accept="audio/*" />
+            <button id="uploadAudioBtn" class="ghost" data-i18n="upload_audio_btn">
+              Загрузить аудио
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <label data-i18n="upload_video_label">Видео файл</label>
+          <div class="row">
+            <input id="uploadVideo" type="file" accept="video/*" disabled />
+            <button id="uploadVideoBtn" class="ghost" disabled data-i18n="upload_video_btn">
+              Видео (в разработке)
+            </button>
+          </div>
+        </div>
+        <div class="hint" data-i18n="upload_hint">
+          Видео‑анализ появится после интеграции мультимодальной LLM.
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="transcript_title">Транскрипт</h2>
+        <div class="row transcript-controls">
+          <button id="viewRaw" class="ghost active" data-i18n="view_raw">
+            Raw
+          </button>
+          <button id="viewEnhanced" class="ghost" data-i18n="view_enhanced">
+            Clean
+          </button>
+        </div>
+        <textarea
+          id="transcriptArea"
+          readonly
+          placeholder="..."
+          data-i18n-placeholder="transcript_placeholder"
+        ></textarea>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="records_title">Результаты</h2>
+        <div class="row">
+          <select id="recordsSelect"></select>
+          <button id="refreshRecords" class="ghost" data-i18n="records_refresh">
+            Обновить
+          </button>
+        </div>
+        <div class="actions-grid">
+          <button class="ghost" data-action="view" data-kind="raw" data-i18n="view_raw">
+            Raw
+          </button>
+          <button
+            class="ghost"
+            data-action="view"
+            data-kind="clean"
+            data-i18n="view_enhanced"
+          >
+            Clean
+          </button>
+          <button class="ghost" data-action="download" data-kind="raw" data-i18n="download_raw">
+            Скачать raw
+          </button>
+          <button
+            class="ghost"
+            data-action="download"
+            data-kind="clean"
+            data-i18n="download_clean"
+          >
+            Скачать clean
+          </button>
+          <button
+            class="ghost"
+            data-action="report"
+            data-source="raw"
+            data-i18n="gen_report_raw"
+          >
+            Отчёт raw
+          </button>
+          <button
+            class="ghost"
+            data-action="report"
+            data-source="clean"
+            data-i18n="gen_report_clean"
+          >
+            Отчёт clean
+          </button>
+          <button
+            class="ghost"
+            data-action="download-report"
+            data-source="raw"
+            data-i18n="download_report_raw"
+          >
+            Скачать отчёт raw
+          </button>
+          <button
+            class="ghost"
+            data-action="download-report"
+            data-source="clean"
+            data-i18n="download_report_clean"
+          >
+            Скачать отчёт clean
+          </button>
+          <button
+            class="ghost"
+            data-action="structured"
+            data-source="raw"
+            data-i18n="gen_structured_raw"
+          >
+            Таблицы raw
+          </button>
+          <button
+            class="ghost"
+            data-action="structured"
+            data-source="clean"
+            data-i18n="gen_structured_clean"
+          >
+            Таблицы clean
+          </button>
+          <button
+            class="ghost"
+            data-action="download-structured-json"
+            data-source="raw"
+            data-i18n="download_structured_raw_json"
+          >
+            JSON raw
+          </button>
+          <button
+            class="ghost"
+            data-action="download-structured-csv"
+            data-source="raw"
+            data-i18n="download_structured_raw_csv"
+          >
+            CSV raw
+          </button>
+          <button
+            class="ghost"
+            data-action="download-structured-json"
+            data-source="clean"
+            data-i18n="download_structured_clean_json"
+          >
+            JSON clean
+          </button>
+          <button
+            class="ghost"
+            data-action="download-structured-csv"
+            data-source="clean"
+            data-i18n="download_structured_clean_csv"
+          >
+            CSV clean
+          </button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 data-i18n="help_title">Как настроить звук</h2>
+        <ul class="plain-list">
+          <li data-i18n="help_item_1">
+            Установите драйвер loopback (BlackHole / VB-Cable / PulseAudio).
+          </li>
+          <li data-i18n="help_item_2">
+            Выберите этот источник в списке устройств.
+          </li>
+          <li data-i18n="help_item_3">
+            Нажмите «Проверить захват» и убедитесь, что уровень не нулевой.
+          </li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span data-i18n="footer_note">
+        Данные остаются локально. Для записи требуется разрешение браузера.
+      </span>
+    </footer>
+
+    <script src="/ui/app.js"></script>
+  </body>
+</html>

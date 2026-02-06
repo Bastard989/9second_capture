@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://redis:6379/0", alias="REDIS_URL")
 
     chunks_dir: str = Field(default="./data/chunks", alias="CHUNKS_DIR")
+    records_dir: str = Field(default="./data/records", alias="RECORDS_DIR")
     storage_mode: str = Field(default="local_fs", alias="STORAGE_MODE")  # local_fs|shared_fs
     storage_shared_fs_dir: str | None = Field(default=None, alias="STORAGE_SHARED_FS_DIR")
     storage_require_shared_in_prod: bool = Field(
@@ -182,6 +183,7 @@ class Settings(BaseSettings):
     # LLM (OpenAI-compatible)
     # -------------------------------------------------------------------------
     llm_enabled: bool = Field(default=True, alias="LLM_ENABLED")
+    llm_live_enabled: bool = Field(default=False, alias="LLM_LIVE_ENABLED")
     openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     llm_model_id: str = Field(default="llama3:8b", alias="LLM_MODEL_ID")
@@ -193,6 +195,13 @@ class Settings(BaseSettings):
     llm_request_timeout_sec: int = Field(default=30, alias="LLM_REQUEST_TIMEOUT_SEC")
     llm_retries: int = Field(default=2, alias="LLM_RETRIES")
     llm_retry_backoff_ms: int = Field(default=250, alias="LLM_RETRY_BACKOFF_MS")
+
+    # -------------------------------------------------------------------------
+    # Speaker inference
+    # -------------------------------------------------------------------------
+    speaker_response_window_sec: int = Field(
+        default=8, alias="SPEAKER_RESPONSE_WINDOW_SEC"
+    )
 
     # -------------------------------------------------------------------------
     # OTEL (OpenTelemetry)

@@ -16,11 +16,13 @@ import time
 from contextlib import suppress
 
 from interview_analytics_agent.common.logging import get_project_logger, setup_logging
+from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.metrics import QUEUE_TASKS_TOTAL, track_stage_latency
 from interview_analytics_agent.common.otel import maybe_setup_otel
 from interview_analytics_agent.common.tracing import start_trace_from_payload
 from interview_analytics_agent.processing.enhancer import enhance_text
 from interview_analytics_agent.processing.quality import quality_score
+from interview_analytics_agent.processing.speaker_rules import infer_speakers
 from interview_analytics_agent.queue.dispatcher import Q_ENHANCER, enqueue_analytics
 from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.queue.retry import requeue_with_backoff
@@ -58,10 +60,25 @@ def run_loop() -> None:
                     srepo = TranscriptSegmentRepository(session)
                     segs = srepo.list_by_meeting(meeting_id)
 
+                    settings = get_settings()
+                    decisions = infer_speakers(
+                        [(seg.seq, seg.raw_text or "", seg.enhanced_text or "") for seg in segs],
+                        response_window_sec=settings.speaker_response_window_sec,
+                    )
+                    speaker_map = {
+                        d.seq: d.speaker for d in decisions if d.speaker is not None
+                    }
+
                     for seg in segs:
                         enh, meta = enhance_text(seg.raw_text or "")
-                        if enh != (seg.enhanced_text or ""):
+                        enh_changed = enh != (seg.enhanced_text or "")
+                        if enh_changed:
                             seg.enhanced_text = enh
+                        inferred = speaker_map.get(seg.seq)
+                        speaker_changed = bool(inferred and inferred != (seg.speaker or ""))
+                        if speaker_changed:
+                            seg.speaker = inferred
+                        if enh_changed or speaker_changed:
                             q = quality_score(seg.raw_text or "", enh)
                             _publish_update(
                                 meeting_id,

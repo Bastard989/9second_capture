@@ -36,6 +36,34 @@ def enhance_text(raw_text: str) -> tuple[str, dict]:
 
     text = raw_text
 
+    # 0) LLM live (опционально)
+    if settings.llm_enabled and settings.llm_live_enabled:
+        try:
+            from interview_analytics_agent.llm.mock import MockLLMProvider
+            from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
+            from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
+
+            provider = (
+                OpenAICompatProvider()
+                if (settings.openai_api_key or "")
+                else MockLLMProvider()
+            )
+            orch = LLMOrchestrator(provider)
+            system = (
+                "Ты помогаешь очистить транскрипт. Верни ТОЛЬКО JSON: "
+                "{clean_text: str}. Убери слова-паразиты и лишние повторы, "
+                "сохрани смысл. Не добавляй нового."
+            )
+            user = f"Текст:\n{text}"
+            data = orch.complete_json(system=system, user=user)
+            clean_text = (data.get("clean_text") or "").strip()
+            if clean_text:
+                meta["applied"].append("llm_live_cleanup")
+                text = clean_text
+        except Exception:
+            # fallback на эвристики ниже
+            pass
+
     # 1) удаляем слова-паразиты
     text2 = FILLER_RE.sub("", text)
     if text2 != text:
