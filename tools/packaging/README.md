@@ -32,3 +32,5 @@ tools/packaging/build_linux.sh
 - backend зависимости доступны (uvicorn, fastapi, etc.)
 - порт выбирается автоматически (логика уже в run_local_agent.py)
 - UI открывается автоматически (LOCAL_AGENT_AUTO_OPEN=true)
+
+Сборка использует `--onedir` (рекомендуется для macOS .app).
