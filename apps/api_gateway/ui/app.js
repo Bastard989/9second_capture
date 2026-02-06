@@ -82,8 +82,11 @@ const i18n = {
     upload_hint: "Видео‑анализ появится после интеграции мультимодальной LLM.",
     help_title: "Как настроить звук",
     help_item_1: "Установите драйвер loopback (BlackHole / VB-Cable / PulseAudio).",
-    help_item_2: "Выберите этот источник в списке устройств.",
-    help_item_3: "Нажмите «Проверить захват» и убедитесь, что уровень не нулевой.",
+    help_item_2: "macOS: BlackHole + Multi‑Output Device (колонки + BlackHole).",
+    help_item_3:
+      "Windows: VB‑CABLE, вывод системы → CABLE Input, вход агента → CABLE Output.",
+    help_item_4: "Linux: выберите “Monitor of …” для нужного sink.",
+    help_item_5: "Нажмите «Проверить захват» и убедитесь, что уровень не нулевой.",
     footer_note:
       "Данные остаются локально. Для записи требуется разрешение браузера.",
   },
@@ -145,8 +148,11 @@ const i18n = {
     upload_hint: "Video analysis will arrive with multimodal LLM support.",
     help_title: "Audio setup",
     help_item_1: "Install a loopback driver (BlackHole / VB-Cable / PulseAudio).",
-    help_item_2: "Pick that source in the device list.",
-    help_item_3: "Click “Check capture” and confirm the level is not zero.",
+    help_item_2: "macOS: BlackHole + Multi‑Output Device (speakers + BlackHole).",
+    help_item_3:
+      "Windows: VB‑CABLE, system output → CABLE Input, agent input → CABLE Output.",
+    help_item_4: "Linux: choose “Monitor of …” for the sink.",
+    help_item_5: "Click “Check capture” and confirm the level is not zero.",
     footer_note: "Data stays local. Browser permission is required to record.",
   },
 };
