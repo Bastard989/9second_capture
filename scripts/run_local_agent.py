@@ -88,8 +88,18 @@ def main() -> None:
     if auto_open:
         threading.Timer(0.8, lambda: webbrowser.open(url, new=2)).start()
 
+    try:
+        from apps.api_gateway.main import app as fastapi_app
+    except Exception:
+        # В PyInstaller нужные пути лежат в sys._MEIPASS
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            sys.path.insert(0, meipass)
+            sys.path.insert(0, os.path.join(meipass, "src"))
+        from apps.api_gateway.main import app as fastapi_app
+
     uvicorn.run(
-        "apps.api_gateway.main:app",
+        fastapi_app,
         host="127.0.0.1",
         port=port,
         log_level=os.getenv("LOG_LEVEL", "info").lower(),
