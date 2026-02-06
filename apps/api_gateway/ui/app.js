@@ -15,6 +15,7 @@ const state = {
   isCountingDown: false,
   isUploading: false,
   transcriptMode: "enhanced",
+  resultsSource: "raw",
   driverStatusKey: "driver_unknown",
   driverStatusStyle: "muted",
   folderStatusKey: "folder_not_selected",
@@ -36,6 +37,16 @@ const i18n = {
     refresh_devices: "Обновить",
     device_hint: "Выберите виртуальный драйвер захвата системного звука.",
     driver_check: "Проверить драйвер",
+    driver_help_btn: "Инструкция",
+    os_mac: "macOS",
+    os_windows: "Windows",
+    os_linux: "Linux",
+    driver_mac_1: "Установите BlackHole (2ch) и создайте Multi‑Output Device.",
+    driver_mac_2: "Выход системы → Multi‑Output, вход агента → BlackHole.",
+    driver_win_1: "Установите VB‑CABLE.",
+    driver_win_2: "Выход системы → CABLE Input, вход агента → CABLE Output.",
+    driver_linux_1: "Выберите “Monitor of …” для нужного sink в списке устройств.",
+    driver_linux_2: "Если нет monitor — включите loopback в PulseAudio/PipeWire.",
     driver_unknown: "Драйвер не проверен",
     driver_checking: "Проверяем...",
     driver_ok: "Драйвер найден",
@@ -68,6 +79,11 @@ const i18n = {
     folder_not_selected: "Папка не выбрана",
     folder_selected: "Папка выбрана",
     folder_not_supported: "Выбор папки недоступен",
+    results_source_label: "Источник",
+    file_transcript: "Файл транскрипта",
+    file_action_download: "Скачать",
+    file_action_report: "Отчёт",
+    file_action_table: "Таблица",
     download_raw: "Скачать raw",
     download_clean: "Скачать clean",
     gen_report_raw: "Отчёт raw",
@@ -106,6 +122,16 @@ const i18n = {
     refresh_devices: "Refresh",
     device_hint: "Select the virtual driver that captures system audio.",
     driver_check: "Check driver",
+    driver_help_btn: "Instructions",
+    os_mac: "macOS",
+    os_windows: "Windows",
+    os_linux: "Linux",
+    driver_mac_1: "Install BlackHole (2ch) and create a Multi‑Output Device.",
+    driver_mac_2: "System output → Multi‑Output, agent input → BlackHole.",
+    driver_win_1: "Install VB‑CABLE.",
+    driver_win_2: "System output → CABLE Input, agent input → CABLE Output.",
+    driver_linux_1: "Choose “Monitor of …” for the target sink in devices list.",
+    driver_linux_2: "If no monitor exists, enable loopback in PulseAudio/PipeWire.",
     driver_unknown: "Driver not checked",
     driver_checking: "Checking...",
     driver_ok: "Driver found",
@@ -138,6 +164,11 @@ const i18n = {
     folder_not_selected: "Folder not selected",
     folder_selected: "Folder selected",
     folder_not_supported: "Folder chooser not supported",
+    results_source_label: "Source",
+    file_transcript: "Transcript file",
+    file_action_download: "Download",
+    file_action_report: "Report",
+    file_action_table: "Table",
     download_raw: "Download raw",
     download_clean: "Download clean",
     gen_report_raw: "Report raw",
@@ -173,6 +204,8 @@ const els = {
   deviceSelect: document.getElementById("deviceSelect"),
   refreshDevices: document.getElementById("refreshDevices"),
   checkDriver: document.getElementById("checkDriver"),
+  driverHelpBtn: document.getElementById("driverHelpBtn"),
+  driverHelp: document.getElementById("driverHelp"),
   driverStatus: document.getElementById("driverStatus"),
   startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
@@ -188,6 +221,12 @@ const els = {
   viewEnhanced: document.getElementById("viewEnhanced"),
   recordsSelect: document.getElementById("recordsSelect"),
   refreshRecords: document.getElementById("refreshRecords"),
+  resultsRaw: document.getElementById("resultsRaw"),
+  resultsClean: document.getElementById("resultsClean"),
+  resultFileName: document.getElementById("resultFileName"),
+  downloadArtifactBtn: document.getElementById("downloadArtifactBtn"),
+  reportArtifactBtn: document.getElementById("reportArtifactBtn"),
+  structuredArtifactBtn: document.getElementById("structuredArtifactBtn"),
   chooseFolder: document.getElementById("chooseFolder"),
   folderStatus: document.getElementById("folderStatus"),
   uploadAudio: document.getElementById("uploadAudio"),
@@ -236,6 +275,24 @@ const setFolderStatus = (statusKey, style) => {
   els.folderStatus.className = `pill ${style || "muted"}`;
   state.folderStatusKey = statusKey;
   state.folderStatusStyle = style || "muted";
+};
+
+const setRecordingButtons = (isRecording) => {
+  if (isRecording) {
+    els.startBtn.disabled = true;
+    els.stopBtn.disabled = false;
+    els.startBtn.classList.add("is-inactive");
+    els.startBtn.classList.remove("is-active");
+    els.stopBtn.classList.add("is-active");
+    els.stopBtn.classList.remove("is-inactive");
+  } else {
+    els.startBtn.disabled = false;
+    els.stopBtn.disabled = true;
+    els.startBtn.classList.add("is-active");
+    els.startBtn.classList.remove("is-inactive");
+    els.stopBtn.classList.add("is-inactive");
+    els.stopBtn.classList.remove("is-active");
+  }
 };
 
 const buildHeaders = () => {
@@ -448,8 +505,7 @@ const startCountdown = (seconds) =>
 
 const startRecording = async () => {
   if (state.isUploading) return;
-  els.startBtn.disabled = true;
-  els.stopBtn.disabled = false;
+  setRecordingButtons(true);
   resetSessionState();
   els.countdownValue.textContent = "9s";
 
@@ -457,8 +513,7 @@ const startRecording = async () => {
     await startCountdown(9);
   } catch (err) {
     setStatus("status_idle", "idle");
-    els.startBtn.disabled = false;
-    els.stopBtn.disabled = true;
+    setRecordingButtons(false);
     return;
   }
 
@@ -475,8 +530,7 @@ const startRecording = async () => {
   });
   if (!res.ok) {
     setStatus("status_error", "error");
-    els.startBtn.disabled = false;
-    els.stopBtn.disabled = true;
+    setRecordingButtons(false);
     throw new Error(`start meeting failed: ${res.status}`);
   }
   const data = await res.json();
@@ -542,8 +596,7 @@ const stopRecording = () => {
   stopMeter();
   setStatus("status_idle", "idle");
   els.countdownValue.textContent = "—";
-  els.startBtn.disabled = false;
-  els.stopBtn.disabled = true;
+  setRecordingButtons(false);
 };
 
 const checkSignal = async () => {
@@ -601,7 +654,7 @@ const uploadAudioFile = async () => {
   if (!res.ok) {
     setStatus("status_error", "error");
     state.isUploading = false;
-    els.startBtn.disabled = false;
+    setRecordingButtons(false);
     return;
   }
   const data = await res.json();
@@ -619,7 +672,7 @@ const uploadAudioFile = async () => {
   if (!uploadRes.ok) {
     setStatus("status_error", "error");
     state.isUploading = false;
-    els.startBtn.disabled = false;
+    setRecordingButtons(false);
     return;
   }
   state.chunkCount = 1;
@@ -633,12 +686,44 @@ const uploadAudioFile = async () => {
 
   state.isUploading = false;
   setStatus("status_idle", "idle");
-  els.startBtn.disabled = false;
+  setRecordingButtons(false);
 };
 
 const updateCaptureUi = () => {
   const mode = getCaptureMode();
   els.deviceSelect.disabled = mode === "screen";
+};
+
+const toggleDriverHelp = () => {
+  if (!els.driverHelp) return;
+  els.driverHelp.classList.toggle("hidden");
+};
+
+const setDriverHelpTab = (os) => {
+  document.querySelectorAll(".driver-tab").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.os === os);
+  });
+  document.querySelectorAll(".driver-panel").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.os !== os);
+  });
+};
+
+const syncResultsState = () => {
+  if (!els.resultsRaw || !els.resultsClean) return;
+  const source = state.resultsSource;
+  els.resultsRaw.classList.toggle("active", source === "raw");
+  els.resultsClean.classList.toggle("active", source === "clean");
+  const filename = buildFilename({ kind: source, fmt: "txt" });
+  if (els.resultFileName) els.resultFileName.textContent = filename;
+  if (els.downloadArtifactBtn) els.downloadArtifactBtn.dataset.kind = source;
+  if (els.reportArtifactBtn) els.reportArtifactBtn.dataset.source = source;
+  if (els.structuredArtifactBtn) els.structuredArtifactBtn.dataset.source = source;
+  const hasMeeting = Boolean(getSelectedMeeting());
+  [els.downloadArtifactBtn, els.reportArtifactBtn, els.structuredArtifactBtn].forEach(
+    (btn) => {
+      if (btn) btn.disabled = !hasMeeting;
+    }
+  );
 };
 
 const chooseFolder = async () => {
@@ -667,6 +752,7 @@ const fetchRecords = async () => {
       opt.value = "";
       opt.textContent = "—";
       els.recordsSelect.appendChild(opt);
+      syncResultsState();
       return;
     }
     items.forEach((item) => {
@@ -679,6 +765,7 @@ const fetchRecords = async () => {
       }
       els.recordsSelect.appendChild(opt);
     });
+    syncResultsState();
   } catch (err) {
     console.warn("fetch records failed", err);
   }
@@ -761,7 +848,7 @@ const handleRecordAction = async (event) => {
   }
 
   if (action === "report") {
-    const source = button.dataset.source;
+    const source = button.dataset.source || state.resultsSource;
     await fetch(`/v1/meetings/${meetingId}/report`, {
       method: "POST",
       headers: buildHeaders(),
@@ -774,49 +861,25 @@ const handleRecordAction = async (event) => {
     if (view.ok) {
       els.transcriptArea.value = await view.text();
     }
+    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=json`;
+    const filename = buildFilename({ kind: "report", source, fmt: "json" });
+    await downloadArtifact(url, filename);
     await fetchRecords();
     return;
   }
 
-  if (action === "download-report") {
-    const source = button.dataset.source;
-    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=json`;
-    const filename = buildFilename({ kind: "report", source, fmt: "json" });
-    await downloadArtifact(url, filename);
-    return;
-  }
-
   if (action === "structured") {
-    const source = button.dataset.source;
+    const source = button.dataset.source || state.resultsSource;
     await fetch(`/v1/meetings/${meetingId}/structured`, {
       method: "POST",
       headers: buildHeaders(),
       body: JSON.stringify({ source }),
     });
-    const view = await fetch(
-      `/v1/meetings/${meetingId}/artifact?kind=structured&source=${source}&fmt=json`,
-      { headers: buildHeaders() }
-    );
-    if (view.ok) {
-      els.transcriptArea.value = await view.text();
-    }
-    await fetchRecords();
-    return;
-  }
-
-  if (action === "download-structured-json") {
-    const source = button.dataset.source;
-    const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${source}&fmt=json`;
-    const filename = buildFilename({ kind: "structured", source, fmt: "json" });
-    await downloadArtifact(url, filename);
-    return;
-  }
-
-  if (action === "download-structured-csv") {
-    const source = button.dataset.source;
     const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${source}&fmt=csv`;
     const filename = buildFilename({ kind: "structured", source, fmt: "csv" });
     await downloadArtifact(url, filename);
+    await fetchRecords();
+    return;
   }
 };
 
@@ -825,6 +888,7 @@ document.querySelectorAll(".lang-btn").forEach((btn) => {
     state.lang = btn.dataset.lang;
     updateI18n();
     renderTranscript();
+    syncResultsState();
   });
 });
 
@@ -834,13 +898,34 @@ document.querySelectorAll('input[name="captureMode"]').forEach((el) => {
 
 els.refreshDevices.addEventListener("click", listDevices);
 els.checkDriver.addEventListener("click", checkDriver);
+if (els.driverHelpBtn) {
+  els.driverHelpBtn.addEventListener("click", toggleDriverHelp);
+}
+document.querySelectorAll(".driver-tab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    setDriverHelpTab(tab.dataset.os);
+  });
+});
 els.refreshRecords.addEventListener("click", fetchRecords);
 els.recordsSelect.addEventListener("change", () => {
   const meetingId = getSelectedMeeting();
   if (meetingId) {
     els.meetingIdText.textContent = meetingId;
   }
+  syncResultsState();
 });
+if (els.resultsRaw) {
+  els.resultsRaw.addEventListener("click", () => {
+    state.resultsSource = "raw";
+    syncResultsState();
+  });
+}
+if (els.resultsClean) {
+  els.resultsClean.addEventListener("click", () => {
+    state.resultsSource = "clean";
+    syncResultsState();
+  });
+}
 els.chooseFolder.addEventListener("click", chooseFolder);
 document.querySelectorAll("[data-action]").forEach((btn) => {
   btn.addEventListener("click", handleRecordAction);
@@ -851,6 +936,7 @@ els.startBtn.addEventListener("click", async () => {
   } catch (err) {
     console.error(err);
     setStatus("status_error", "error");
+    setRecordingButtons(false);
   }
 });
 els.stopBtn.addEventListener("click", stopRecording);
@@ -873,6 +959,9 @@ updateI18n();
 listDevices();
 updateCaptureUi();
 fetchRecords();
+setRecordingButtons(false);
+setDriverHelpTab("mac");
+syncResultsState();
 if (!window.showDirectoryPicker) {
   setFolderStatus("folder_not_supported", "bad");
 }

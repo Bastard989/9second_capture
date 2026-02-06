@@ -56,9 +56,49 @@
           <button id="checkDriver" class="ghost" data-i18n="driver_check">
             Проверить драйвер
           </button>
+          <button id="driverHelpBtn" class="ghost" data-i18n="driver_help_btn">
+            Инструкция
+          </button>
           <span id="driverStatus" class="pill muted" data-i18n="driver_unknown">
             Драйвер не проверен
           </span>
+        </div>
+        <div id="driverHelp" class="driver-help hidden">
+          <div class="driver-tabs">
+            <button class="driver-tab active" data-os="mac" data-i18n="os_mac">
+              macOS
+            </button>
+            <button class="driver-tab" data-os="win" data-i18n="os_windows">
+              Windows
+            </button>
+            <button class="driver-tab" data-os="linux" data-i18n="os_linux">
+              Linux
+            </button>
+          </div>
+          <div class="driver-panel" data-os="mac">
+            <div data-i18n="driver_mac_1">
+              Установите BlackHole (2ch) и создайте Multi‑Output Device.
+            </div>
+            <div data-i18n="driver_mac_2">
+              Выход системы → Multi‑Output, вход агента → BlackHole.
+            </div>
+          </div>
+          <div class="driver-panel hidden" data-os="win">
+            <div data-i18n="driver_win_1">
+              Установите VB‑CABLE.
+            </div>
+            <div data-i18n="driver_win_2">
+              Выход системы → CABLE Input, вход агента → CABLE Output.
+            </div>
+          </div>
+          <div class="driver-panel hidden" data-os="linux">
+            <div data-i18n="driver_linux_1">
+              Выберите “Monitor of …” для нужного sink в списке устройств.
+            </div>
+            <div data-i18n="driver_linux_2">
+              Если нет monitor — включите loopback в PulseAudio/PipeWire.
+            </div>
+          </div>
         </div>
       </section>
 
@@ -173,109 +213,48 @@
             Обновить
           </button>
         </div>
-        <div class="actions-grid">
-          <button class="ghost" data-action="view" data-kind="raw" data-i18n="view_raw">
-            Raw
-          </button>
-          <button
-            class="ghost"
-            data-action="view"
-            data-kind="clean"
-            data-i18n="view_enhanced"
-          >
-            Clean
-          </button>
-          <button class="ghost" data-action="download" data-kind="raw" data-i18n="download_raw">
-            Скачать raw
-          </button>
-          <button
-            class="ghost"
-            data-action="download"
-            data-kind="clean"
-            data-i18n="download_clean"
-          >
-            Скачать clean
-          </button>
-          <button
-            class="ghost"
-            data-action="report"
-            data-source="raw"
-            data-i18n="gen_report_raw"
-          >
-            Отчёт raw
-          </button>
-          <button
-            class="ghost"
-            data-action="report"
-            data-source="clean"
-            data-i18n="gen_report_clean"
-          >
-            Отчёт clean
-          </button>
-          <button
-            class="ghost"
-            data-action="download-report"
-            data-source="raw"
-            data-i18n="download_report_raw"
-          >
-            Скачать отчёт raw
-          </button>
-          <button
-            class="ghost"
-            data-action="download-report"
-            data-source="clean"
-            data-i18n="download_report_clean"
-          >
-            Скачать отчёт clean
-          </button>
-          <button
-            class="ghost"
-            data-action="structured"
-            data-source="raw"
-            data-i18n="gen_structured_raw"
-          >
-            Таблицы raw
-          </button>
-          <button
-            class="ghost"
-            data-action="structured"
-            data-source="clean"
-            data-i18n="gen_structured_clean"
-          >
-            Таблицы clean
-          </button>
-          <button
-            class="ghost"
-            data-action="download-structured-json"
-            data-source="raw"
-            data-i18n="download_structured_raw_json"
-          >
-            JSON raw
-          </button>
-          <button
-            class="ghost"
-            data-action="download-structured-csv"
-            data-source="raw"
-            data-i18n="download_structured_raw_csv"
-          >
-            CSV raw
-          </button>
-          <button
-            class="ghost"
-            data-action="download-structured-json"
-            data-source="clean"
-            data-i18n="download_structured_clean_json"
-          >
-            JSON clean
-          </button>
-          <button
-            class="ghost"
-            data-action="download-structured-csv"
-            data-source="clean"
-            data-i18n="download_structured_clean_csv"
-          >
-            CSV clean
-          </button>
+        <div class="results-source">
+          <span class="label" data-i18n="results_source_label">Источник</span>
+          <div class="segmented">
+            <button id="resultsRaw" class="ghost active" data-source="raw">
+              Raw
+            </button>
+            <button id="resultsClean" class="ghost" data-source="clean">
+              Clean
+            </button>
+          </div>
+        </div>
+        <div class="file-row">
+          <div class="file-info">
+            <div class="file-title" data-i18n="file_transcript">Файл транскрипта</div>
+            <div id="resultFileName" class="file-name">raw.txt</div>
+          </div>
+          <div class="file-actions">
+            <button
+              id="downloadArtifactBtn"
+              class="ghost"
+              data-action="download"
+              data-i18n="file_action_download"
+            >
+              Скачать
+            </button>
+            <button
+              id="reportArtifactBtn"
+              class="ghost"
+              data-action="report"
+              data-i18n="file_action_report"
+            >
+              Отчёт
+            </button>
+            <button
+              id="structuredArtifactBtn"
+              class="ghost"
+              data-action="structured"
+              data-i18n="file_action_table"
+            >
+              Таблица
+            </button>
+          </div>
         </div>
       </section>
 
