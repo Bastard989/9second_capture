@@ -2,6 +2,10 @@
 set -euo pipefail
 
 python3 -m pip install pyinstaller
+
+# Убираем AppleDouble (._*) из исходников, чтобы не тащить их в bundle
+find . -name "._*" -delete || true
+
 pyinstaller --onedir --windowed --noconfirm --clean \
   --name 9second_capture \
   --icon assets/icon/icon.icns \
@@ -14,8 +18,9 @@ pyinstaller --onedir --windowed --noconfirm --clean \
 
 APP_PATH="dist/9second_capture.app"
 if [ -d "$APP_PATH" ]; then
-  # Убираем extended attributes (resource fork/Finder info),
-  # иначе codesign может падать.
+  # Убираем AppleDouble и extended attributes (resource fork/Finder info),
+  # иначе codesign падает.
+  find "$APP_PATH" -name "._*" -delete || true
   xattr -cr "$APP_PATH" || true
   /usr/bin/codesign --force --deep --sign - "$APP_PATH" || true
 fi
