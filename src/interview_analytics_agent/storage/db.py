@@ -21,16 +21,28 @@ from interview_analytics_agent.common.config import get_settings
 # =============================================================================
 _settings = get_settings()
 
-engine = create_engine(
-    _settings.postgres_dsn,
-    pool_pre_ping=True,
-)
+if _settings.postgres_dsn.startswith("sqlite"):
+    engine = create_engine(
+        _settings.postgres_dsn,
+        connect_args={"check_same_thread": False},
+    )
+else:
+    engine = create_engine(
+        _settings.postgres_dsn,
+        pool_pre_ping=True,
+    )
 
 SessionLocal = sessionmaker(
     bind=engine,
     autocommit=False,
     autoflush=False,
 )
+
+if _settings.postgres_dsn.startswith("sqlite"):
+    # для локального режима создаём таблицы автоматически
+    from interview_analytics_agent.storage.models import Base
+
+    Base.metadata.create_all(bind=engine)
 
 
 # =============================================================================

@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from apps.api_gateway.deps import auth_dep
+from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.domain.enums import PipelineStatus
 from interview_analytics_agent.processing.aggregation import (
     build_enhanced_transcript,
@@ -99,6 +100,8 @@ def finish_meeting(
             m.finished_at = datetime.utcnow()
         if m.status != PipelineStatus.done:
             m.status = PipelineStatus.processing
+            if (get_settings().queue_mode or "").strip().lower() == "inline":
+                m.status = PipelineStatus.done
         repo.save(m)
     _ensure_transcripts(meeting_id)
     return {"ok": True, "meeting_id": meeting_id}

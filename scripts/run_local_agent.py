@@ -76,6 +76,9 @@ def main() -> None:
     os.environ.setdefault("API_HOST", "127.0.0.1")
     os.environ["API_PORT"] = str(port)
     os.environ.setdefault("AUTH_MODE", "none")
+    os.environ.setdefault("QUEUE_MODE", "inline")
+    os.environ.setdefault("POSTGRES_DSN", "sqlite:///./data/local_agent/agent.db")
+    _state_dir().mkdir(parents=True, exist_ok=True)
 
     url = f"http://127.0.0.1:{port}"
     print(f"[local-agent] UI: {url}")

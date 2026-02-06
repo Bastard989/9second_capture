@@ -84,6 +84,7 @@ class Settings(BaseSettings):
         alias="POSTGRES_DSN",
     )
     redis_url: str = Field(default="redis://redis:6379/0", alias="REDIS_URL")
+    queue_mode: str = Field(default="redis", alias="QUEUE_MODE")  # redis|inline
 
     chunks_dir: str = Field(default="./data/chunks", alias="CHUNKS_DIR")
     records_dir: str = Field(default="./data/records", alias="RECORDS_DIR")

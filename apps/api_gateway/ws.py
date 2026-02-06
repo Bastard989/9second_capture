@@ -101,10 +101,21 @@ async def _forward_pubsub_to_ws(ws: WebSocket, meeting_id: str) -> None:
     Фоновая задача: читает pubsub канал ws:<meeting_id> и шлёт сообщения в websocket.
     Реализация через asyncio.to_thread, потому что redis_client() синхронный.
     """
+    settings = get_settings()
+    if (settings.queue_mode or "").strip().lower() == "inline":
+        return
+
     channel = f"ws:{meeting_id}"
-    r = redis_client()
-    pubsub = r.pubsub()
-    pubsub.subscribe(channel)
+    try:
+        r = redis_client()
+        pubsub = r.pubsub()
+        pubsub.subscribe(channel)
+    except Exception as e:
+        log.warning(
+            "ws_pubsub_unavailable",
+            extra={"payload": {"meeting_id": meeting_id, "err": str(e)[:200]}},
+        )
+        return
 
     try:
         while True:
@@ -284,7 +295,7 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                 meeting_checked = True
 
             # Запускаем forward только один раз, когда получили meeting_id
-            if forward_task is None:
+            if forward_task is None and (get_settings().queue_mode or "").strip().lower() != "inline":
                 forward_task = asyncio.create_task(_forward_pubsub_to_ws(ws, meeting_id))
 
             seq = int(event.get("seq", 0))
@@ -337,6 +348,13 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
 
             if result.is_duplicate:
                 continue
+
+            if result.inline_updates:
+                for payload in result.inline_updates:
+                    try:
+                        await ws.send_text(json.dumps(payload, ensure_ascii=False))
+                    except Exception:
+                        break
 
     except WebSocketDisconnect:
         pass

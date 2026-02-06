@@ -110,8 +110,10 @@ Linux (PulseAudio / PipeWire):
 - UI откроется по адресу вида `http://127.0.0.1:<порт>`.
 
 Важно:
-- Запущенный UI использует тот же backend, поэтому Redis/Postgres/воркеры должны быть доступны
-  (проще всего поднять через `docker compose up -d --build`).
+- `run_local_agent.py` по умолчанию включает `QUEUE_MODE=inline` — локальная обработка без Redis/воркеров.
+- Локальная БД — `sqlite` по пути `./data/local_agent/agent.db` (создаётся автоматически).
+- Если нужен полный пайплайн через очереди, задай `QUEUE_MODE=redis` и подними зависимости
+  (проще всего `docker compose up -d --build`).
 
 Минимальный `.env` для старта:
 - `APP_ENV=dev`

@@ -13,6 +13,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 from interview_analytics_agent.common.config import get_settings
 
 from .redis import redis_client
@@ -21,6 +24,24 @@ _settings = get_settings()
 
 # TTL по умолчанию (сек) для идемпотентных ключей
 DEFAULT_TTL_SEC = 60 * 60 * 24  # 24 часа
+
+_local_cache: dict[str, float] = {}
+_local_lock = threading.Lock()
+
+
+def _local_check_and_set(key: str, ttl_sec: int) -> bool:
+    now = time.time()
+    with _local_lock:
+        exp = _local_cache.get(key)
+        if exp is not None and exp > now:
+            return False
+        _local_cache[key] = now + ttl_sec
+        # простая очистка при росте словаря
+        if len(_local_cache) > 10_000:
+            for k, v in list(_local_cache.items()):
+                if v <= now:
+                    _local_cache.pop(k, None)
+    return True
 
 
 def check_and_set(
@@ -33,6 +54,12 @@ def check_and_set(
     Использует SET NX.
     """
     key = f"idem:{scope}:{meeting_id}:{idem_key}"
-    r = redis_client()
-    ok = r.set(name=key, value="1", nx=True, ex=ttl_sec)
-    return bool(ok)
+    settings = get_settings()
+    if (settings.queue_mode or "").strip().lower() == "inline":
+        return _local_check_and_set(key, ttl_sec)
+    try:
+        r = redis_client()
+        ok = r.set(name=key, value="1", nx=True, ex=ttl_sec)
+        return bool(ok)
+    except Exception:
+        return _local_check_and_set(key, ttl_sec)
