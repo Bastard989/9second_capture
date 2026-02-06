@@ -17,7 +17,7 @@ find . -name "._*" -delete || true
 
 export COPYFILE_DISABLE=1
 
-python -m pyinstaller --onedir --windowed --noconfirm --clean \
+python -m PyInstaller --onedir --windowed --noconfirm --clean \
   --name 9second_capture \
   --icon assets/icon/icon.icns \
   --add-data "apps:bundle/apps" \
