@@ -220,6 +220,7 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
     meeting_id: str | None = None
     meeting_checked = False
     forward_task: asyncio.Task | None = None
+    accepted_chunks = 0
 
     try:
         while True:
@@ -348,6 +349,7 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
 
             if result.is_duplicate:
                 continue
+            accepted_chunks += 1
 
             if result.inline_updates:
                 for payload in result.inline_updates:
@@ -357,7 +359,15 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                         break
 
     except WebSocketDisconnect:
-        pass
+        log.info(
+            "ws_client_disconnected",
+            extra={
+                "payload": {
+                    "meeting_id": meeting_id,
+                    "accepted_chunks": accepted_chunks,
+                }
+            },
+        )
     except Exception as e:
         log.error(
             "ws_fatal",

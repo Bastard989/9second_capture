@@ -12,8 +12,11 @@ source "$VENV_DIR/bin/activate"
 python -m pip install -U pip
 python -m pip install pyinstaller
 
-# Убираем AppleDouble (._*) из исходников, чтобы не тащить их в bundle
+# Убираем AppleDouble (._*) и xattr из исходников, чтобы не тащить мусор в bundle
 find . -name "._*" -delete || true
+if command -v xattr >/dev/null 2>&1; then
+  xattr -cr apps src scripts assets tools/packaging requirements.app.txt requirements.whisper.txt 2>/dev/null || true
+fi
 
 export COPYFILE_DISABLE=1
 

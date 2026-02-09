@@ -5,28 +5,43 @@ const state = {
   recorder: null,
   stream: null,
   streamMode: "system",
+  streamDeviceId: "",
   audioContext: null,
   analyser: null,
+  meterMode: "",
   levelTimer: null,
+  signalPeak: 0,
   seq: 0,
   meetingId: null,
   chunkCount: 0,
   countdownTimer: null,
   countdownValue: null,
   isCountingDown: false,
+  stopRequested: false,
+  signalCheckInProgress: false,
   isUploading: false,
+  captureEngine: null,
+  captureStopper: null,
   enhancedTimers: new Map(),
   resultsSource: "raw",
   driverStatusKey: "driver_unknown",
   driverStatusStyle: "muted",
   folderStatusKey: "folder_not_selected",
   folderStatusStyle: "muted",
+  statusHintKey: "",
+  statusHintText: "",
+  statusHintStyle: "muted",
   downloadDirHandle: null,
   transcript: {
     raw: new Map(),
     enhanced: new Map(),
   },
+  nonEmptyRawUpdates: 0,
+  pendingChunks: [],
 };
+
+const PREFER_PCM_CAPTURE = true;
+const CHUNK_TIMESLICE_MS = 2000;
 
 const i18n = {
   ru: {
@@ -74,6 +89,9 @@ const i18n = {
     signal_low: "Сигнал: слабый",
     signal_no_audio: "Сигнал: нет аудио",
     signal_check: "Проверить захват",
+    signal_check_running: "Проверка захвата...",
+    signal_check_ok: "Захват работает: уровень сигнала обнаружен.",
+    signal_check_fail: "Захват не обнаружил аудио. Проверьте источник/Share audio.",
     meeting_id_label: "Meeting ID:",
     chunks_label: "Чанки:",
     transcript_title: "Транскрипт",
@@ -92,7 +110,7 @@ const i18n = {
     results_source_label: "Источник",
     file_transcript: "Файл транскрипта",
     file_action_download: "Скачать",
-    file_action_report: "Отчёт",
+    file_action_report: "Экспорт TXT",
     file_action_table: "Таблица",
     download_raw: "Скачать raw",
     download_clean: "Скачать clean",
@@ -121,6 +139,24 @@ const i18n = {
     help_item_5: "Нажмите «Проверить захват» и убедитесь, что уровень не нулевой.",
     footer_note:
       "Данные остаются локально. Для записи требуется разрешение браузера.",
+    err_media_denied:
+      "Браузер не дал доступ к аудио. Разрешите микрофон/захват экрана и повторите.",
+    err_media_not_found:
+      "Аудиоустройство не найдено. Проверьте выбранный источник и драйвер.",
+    err_media_not_readable:
+      "Источник аудио занят другим приложением или недоступен.",
+    err_no_device_selected:
+      "Не выбран источник аудио. Выберите устройство и повторите.",
+    err_screen_audio_missing:
+      "В режиме «Экран + звук» включите «Share audio» в окне выбора экрана.",
+    err_server_start: "Не удалось создать встречу на локальном API.",
+    err_network: "Сбой сети/локального API. Попробуйте ещё раз.",
+    err_recorder_init:
+      "MediaRecorder не поддерживается для текущего источника. Попробуйте другой режим.",
+    err_generic: "Не удалось начать запись. Проверьте права браузера и источник аудио.",
+    hint_recording_ok: "Запись запущена. Транскрипт будет обновляться в реальном времени.",
+    hint_no_speech_yet:
+      "Пока нет распознанной речи. Проверьте источник звука или включите Share audio.",
   },
   en: {
     subtitle: "Local meeting capture agent",
@@ -167,6 +203,9 @@ const i18n = {
     signal_low: "Signal: low",
     signal_no_audio: "Signal: no audio",
     signal_check: "Check capture",
+    signal_check_running: "Checking capture...",
+    signal_check_ok: "Capture is working: audio level detected.",
+    signal_check_fail: "No audio detected. Check source/Share audio.",
     meeting_id_label: "Meeting ID:",
     chunks_label: "Chunks:",
     transcript_title: "Transcript",
@@ -185,7 +224,7 @@ const i18n = {
     results_source_label: "Source",
     file_transcript: "Transcript file",
     file_action_download: "Download",
-    file_action_report: "Report",
+    file_action_report: "Export TXT",
     file_action_table: "Table",
     download_raw: "Download raw",
     download_clean: "Download clean",
@@ -213,6 +252,22 @@ const i18n = {
     help_item_4: "Linux: choose “Monitor of …” for the sink.",
     help_item_5: "Click “Check capture” and confirm the level is not zero.",
     footer_note: "Data stays local. Browser permission is required to record.",
+    err_media_denied:
+      "Browser denied audio access. Allow microphone/screen capture and retry.",
+    err_media_not_found: "Audio device not found. Check selected source and driver.",
+    err_media_not_readable: "Audio source is busy or unavailable.",
+    err_no_device_selected:
+      "Audio source is not selected. Choose a device and retry.",
+    err_screen_audio_missing:
+      "In “Screen + audio” mode, enable “Share audio” in browser capture dialog.",
+    err_server_start: "Unable to create meeting on local API.",
+    err_network: "Network/local API error. Please retry.",
+    err_recorder_init:
+      "MediaRecorder is not supported for this source. Try another mode.",
+    err_generic: "Unable to start recording. Check browser permissions and source.",
+    hint_recording_ok: "Recording started. Transcript updates in real time.",
+    hint_no_speech_yet:
+      "No recognized speech yet. Check audio source or enable Share audio.",
   },
 };
 
@@ -227,6 +282,7 @@ const els = {
   startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
   statusText: document.getElementById("statusText"),
+  statusHint: document.getElementById("statusHint"),
   countdownValue: document.getElementById("countdownValue"),
   levelBar: document.getElementById("levelBar"),
   signalText: document.getElementById("signalText"),
@@ -266,6 +322,14 @@ const updateI18n = () => {
   });
   setDriverStatus(state.driverStatusKey, state.driverStatusStyle);
   setFolderStatus(state.folderStatusKey, state.folderStatusStyle);
+  if (state.statusHintKey) {
+    setStatusHint(state.statusHintKey, state.statusHintStyle);
+  } else if (state.statusHintText) {
+    setStatusHint(state.statusHintText, state.statusHintStyle, true);
+  }
+  if (els.checkSignal && state.signalCheckInProgress) {
+    els.checkSignal.textContent = dict.signal_check_running || "Checking capture...";
+  }
   if (els.themeLight) els.themeLight.textContent = dict.theme_light || "Light";
   if (els.themeDark) els.themeDark.textContent = dict.theme_dark || "Dark";
 };
@@ -274,6 +338,30 @@ const setStatus = (statusKey, style) => {
   const dict = i18n[state.lang];
   els.statusText.textContent = dict[statusKey] || statusKey;
   els.statusText.className = `status-pill ${style}`;
+};
+
+const setStatusHint = (messageKeyOrText = "", style = "muted", isRaw = false) => {
+  if (!els.statusHint) return;
+  const dict = i18n[state.lang];
+  if (!messageKeyOrText) {
+    els.statusHint.textContent = "";
+    els.statusHint.className = "status-hint";
+    state.statusHintKey = "";
+    state.statusHintText = "";
+    state.statusHintStyle = "muted";
+    return;
+  }
+  if (!isRaw && dict[messageKeyOrText]) {
+    els.statusHint.textContent = dict[messageKeyOrText];
+    state.statusHintKey = messageKeyOrText;
+    state.statusHintText = "";
+  } else {
+    els.statusHint.textContent = messageKeyOrText;
+    state.statusHintKey = "";
+    state.statusHintText = messageKeyOrText;
+  }
+  state.statusHintStyle = style;
+  els.statusHint.className = `status-hint ${style}`;
 };
 
 const setSignal = (statusKey) => {
@@ -350,6 +438,7 @@ const listDevices = async () => {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const inputs = devices.filter((d) => d.kind === "audioinput");
+    const prevValue = els.deviceSelect.value;
     els.deviceSelect.innerHTML = "";
     inputs.forEach((device) => {
       const opt = document.createElement("option");
@@ -362,6 +451,11 @@ const listDevices = async () => {
       opt.value = "";
       opt.textContent = "—";
       els.deviceSelect.appendChild(opt);
+      return;
+    }
+    const hasPrev = inputs.some((d) => d.deviceId === prevValue);
+    if (hasPrev) {
+      els.deviceSelect.value = prevValue;
     }
   } catch (err) {
     console.warn("device list failed", err);
@@ -373,11 +467,19 @@ const getCaptureMode = () => {
   return el ? el.value : "system";
 };
 
-const ensureStream = async (mode) => {
-  if (state.stream && state.streamMode === mode) return state.stream;
+const ensureStream = async (mode, options = {}) => {
+  const { force = false } = options;
+  const selectedDeviceId = mode === "system" ? els.deviceSelect.value || "" : "";
+  const canReuse =
+    !force &&
+    state.stream &&
+    state.streamMode === mode &&
+    (mode !== "system" || state.streamDeviceId === selectedDeviceId);
+  if (canReuse) return state.stream;
   if (state.stream) {
     state.stream.getTracks().forEach((t) => t.stop());
     state.stream = null;
+    state.streamDeviceId = "";
   }
   if (mode === "screen") {
     state.stream = await navigator.mediaDevices.getDisplayMedia({
@@ -388,25 +490,59 @@ const ensureStream = async (mode) => {
       setSignal("signal_no_audio");
       console.warn("screen capture started without audio track");
     }
+    state.streamDeviceId = "";
   } else {
     const deviceId = els.deviceSelect.value;
     const constraints = {
       audio: deviceId ? { deviceId: { exact: deviceId } } : true,
     };
     state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    state.streamDeviceId = deviceId || "";
   }
   state.streamMode = mode;
   return state.stream;
 };
 
-const buildAudioMeter = async (mode) => {
-  if (state.audioContext) return;
-  const stream = await ensureStream(mode);
-  state.audioContext = new AudioContext();
+const closeAudioMeter = () => {
+  stopMeter();
+  if (state.audioContext) {
+    state.audioContext.close().catch(() => {});
+  }
+  state.audioContext = null;
+  state.analyser = null;
+  state.meterMode = "";
+};
+
+const mapStartError = (err, mode) => {
+  const name = err && typeof err === "object" ? err.name || "" : "";
+  const message = err && typeof err === "object" ? err.message || "" : String(err || "");
+  if (name === "NotAllowedError" || name === "SecurityError") return "err_media_denied";
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "err_media_not_found";
+  if (name === "NotReadableError" || name === "AbortError") return "err_media_not_readable";
+  if (message.includes("no_device_selected")) return "err_no_device_selected";
+  if (message.includes("start meeting failed")) return "err_server_start";
+  if (message.includes("ws_open_failed")) return "err_network";
+  if (message.includes("Failed to fetch") || message.includes("NetworkError")) return "err_network";
+  if (name === "NotSupportedError" || name === "TypeError") return "err_recorder_init";
+  if (message.includes("MediaRecorder")) return "err_recorder_init";
+  if (mode === "screen" && message.includes("no audio track")) return "err_screen_audio_missing";
+  return "err_generic";
+};
+
+const buildAudioMeter = async (mode, options = {}) => {
+  const { force = false } = options;
+  if (state.audioContext && !force && state.meterMode === mode) return;
+  closeAudioMeter();
+  const stream = await ensureStream(mode, { force });
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  state.audioContext = new Ctx();
   const source = state.audioContext.createMediaStreamSource(stream);
   state.analyser = state.audioContext.createAnalyser();
   state.analyser.fftSize = 1024;
   source.connect(state.analyser);
+  state.meterMode = mode;
+  state.signalPeak = 0;
 };
 
 const updateMeter = () => {
@@ -420,6 +556,7 @@ const updateMeter = () => {
   }
   const rms = Math.sqrt(sum / buffer.length);
   const level = Math.min(1, rms * 2.5);
+  state.signalPeak = Math.max(state.signalPeak, level);
   els.levelBar.style.transform = `scaleX(${level})`;
   if (level > 0.08) {
     setSignal("signal_ok");
@@ -441,6 +578,22 @@ const stopMeter = () => {
   els.levelBar.style.transform = "scaleX(0)";
 };
 
+const flushPendingChunks = () => {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  while (state.pendingChunks.length > 0) {
+    const payload = state.pendingChunks.shift();
+    state.ws.send(JSON.stringify(payload));
+  }
+};
+
+const queueOrSendChunk = (payload) => {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify(payload));
+    return;
+  }
+  state.pendingChunks.push(payload);
+};
+
 const toBase64 = async (blob) => {
   const buffer = await blob.arrayBuffer();
   const bytes = new Uint8Array(buffer);
@@ -452,7 +605,6 @@ const toBase64 = async (blob) => {
 };
 
 const sendChunk = async (blob, mimeType) => {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
   if (!state.meetingId) return;
   const content_b64 = await toBase64(blob);
   const payload = {
@@ -466,23 +618,35 @@ const sendChunk = async (blob, mimeType) => {
     channels: 1,
     content_b64,
   };
-  state.ws.send(JSON.stringify(payload));
+  queueOrSendChunk(payload);
   state.seq += 1;
   state.chunkCount += 1;
   els.chunkCount.textContent = String(state.chunkCount);
+  if (state.chunkCount >= 4 && state.nonEmptyRawUpdates === 0) {
+    setSignal("signal_no_audio");
+    setStatusHint("hint_no_speech_yet", "bad");
+  }
 };
 
 const openWebSocket = () => {
-  if (state.ws) return;
+  if (state.ws) return state.ws;
   const base = window.location.origin.replace("http", "ws");
   const ws = new WebSocket(`${base}/v1/ws`);
   state.ws = ws;
+  ws.onopen = () => {
+    flushPendingChunks();
+  };
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
       if (data.event_type === "transcript.update") {
         if (typeof data.seq === "number") {
-          if (data.raw_text != null) state.transcript.raw.set(data.seq, data.raw_text);
+          if (typeof data.raw_text === "string") {
+            state.transcript.raw.set(data.seq, data.raw_text);
+            if (data.raw_text.trim()) {
+              state.nonEmptyRawUpdates += 1;
+            }
+          }
           if (data.enhanced_text != null) {
             if (!state.enhancedTimers.has(data.seq)) {
               const timer = setTimeout(() => {
@@ -501,8 +665,273 @@ const openWebSocket = () => {
     }
   };
   ws.onclose = () => {
+    if (state.captureStopper) {
+      setStatus("status_error", "error");
+      setStatusHint("err_network", "bad");
+    }
     state.ws = null;
   };
+  return ws;
+};
+
+const waitForWsOpen = (timeoutMs = 4000) =>
+  new Promise((resolve, reject) => {
+    const ws = openWebSocket();
+    if (ws.readyState === WebSocket.OPEN) {
+      resolve();
+      return;
+    }
+    if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+      reject(new Error("ws_open_failed"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("ws_open_failed"));
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.removeEventListener("open", onOpen);
+      ws.removeEventListener("error", onError);
+      ws.removeEventListener("close", onClose);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("ws_open_failed"));
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("ws_open_failed"));
+    };
+    ws.addEventListener("open", onOpen);
+    ws.addEventListener("error", onError);
+    ws.addEventListener("close", onClose);
+  });
+
+const createRecorderWithFallback = (stream) => {
+  const candidates = [
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/mp4;codecs=mp4a.40.2",
+    "audio/mp4",
+    "video/mp4",
+  ];
+
+  const tryCreate = (targetStream) => {
+    let lastError = null;
+    for (const mimeType of candidates) {
+      if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(mimeType)) {
+        continue;
+      }
+      try {
+        const recorder = new MediaRecorder(targetStream, { mimeType });
+        return { recorder, mimeType };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    try {
+      return { recorder: new MediaRecorder(targetStream), mimeType: "" };
+    } catch (err) {
+      if (lastError) throw lastError;
+      throw err;
+    }
+  };
+
+  try {
+    return tryCreate(stream);
+  } catch (err) {
+    const audioTracks = stream.getAudioTracks();
+    if (!audioTracks.length) throw err;
+    const audioOnlyStream = new MediaStream(audioTracks);
+    return tryCreate(audioOnlyStream);
+  }
+};
+
+const encodeWav = (samples, sampleRate) => {
+  const dataSize = samples.length * 2;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  const writeString = (offset, value) => {
+    for (let i = 0; i < value.length; i += 1) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i += 1) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+};
+
+const createPcmCapture = (stream) => {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) throw new Error("pcm_capture_unsupported");
+
+  const ctx = new Ctx();
+  const source = ctx.createMediaStreamSource(stream);
+  if (!ctx.createScriptProcessor) throw new Error("pcm_capture_unsupported");
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+  const sink = ctx.createGain();
+  sink.gain.value = 0;
+
+  const chunks = [];
+  let flushing = false;
+
+  const flush = async () => {
+    if (flushing || !chunks.length) return;
+    flushing = true;
+    try {
+      const totalLength = chunks.reduce((sum, part) => sum + part.length, 0);
+      const merged = new Float32Array(totalLength);
+      let cursor = 0;
+      chunks.splice(0).forEach((part) => {
+        merged.set(part, cursor);
+        cursor += part.length;
+      });
+      const wavBlob = encodeWav(merged, ctx.sampleRate || 48000);
+      await sendChunk(wavBlob, "audio/wav");
+    } finally {
+      flushing = false;
+    }
+  };
+
+  processor.onaudioprocess = (event) => {
+    const input = event.inputBuffer.getChannelData(0);
+    chunks.push(new Float32Array(input));
+  };
+
+  source.connect(processor);
+  processor.connect(sink);
+  sink.connect(ctx.destination);
+
+  const timer = setInterval(() => {
+    void flush();
+  }, CHUNK_TIMESLICE_MS);
+
+  return {
+    engine: "pcm",
+    stop: async () => {
+      clearInterval(timer);
+      processor.onaudioprocess = null;
+      try {
+        await flush();
+      } catch (err) {
+        console.warn("pcm flush failed", err);
+      }
+      try {
+        source.disconnect();
+      } catch (err) {
+        void err;
+      }
+      try {
+        processor.disconnect();
+      } catch (err) {
+        void err;
+      }
+      try {
+        sink.disconnect();
+      } catch (err) {
+        void err;
+      }
+      try {
+        await ctx.close();
+      } catch (err) {
+        void err;
+      }
+    },
+  };
+};
+
+const createMediaRecorderCapture = (stream) => {
+  const { recorder, mimeType } = createRecorderWithFallback(stream);
+  recorder.onerror = () => {
+    if (!state.stopRequested) {
+      setStatus("status_error", "error");
+      setStatusHint("err_recorder_init", "bad");
+    }
+  };
+  recorder.onstop = () => {
+    if (!state.stopRequested) {
+      setStatus("status_error", "error");
+      setStatusHint("err_recorder_init", "bad");
+    }
+  };
+  recorder.ondataavailable = async (e) => {
+    if (e.data && e.data.size > 0) {
+      await sendChunk(e.data, mimeType || e.data.type);
+    }
+  };
+  recorder.start(CHUNK_TIMESLICE_MS);
+  return {
+    engine: "media",
+    stop: async () => {
+      if (recorder.state === "inactive") return;
+      await new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          resolve();
+        };
+        recorder.addEventListener("stop", finish, { once: true });
+        recorder.addEventListener("error", finish, { once: true });
+        setTimeout(finish, 1200);
+        try {
+          recorder.stop();
+        } catch (err) {
+          finish();
+        }
+      });
+      await new Promise((resolve) => setTimeout(resolve, 220));
+    },
+  };
+};
+
+const createCaptureEngine = (stream) => {
+  if (PREFER_PCM_CAPTURE) {
+    try {
+      return createPcmCapture(stream);
+    } catch (err) {
+      console.warn("pcm capture fallback to MediaRecorder", err);
+    }
+  }
+  return createMediaRecorderCapture(stream);
+};
+
+const setCheckSignalBusy = (busy) => {
+  state.signalCheckInProgress = busy;
+  if (!els.checkSignal) return;
+  els.checkSignal.disabled = busy;
+  const dict = i18n[state.lang];
+  els.checkSignal.textContent = busy
+    ? dict.signal_check_running || "Checking capture..."
+    : dict.signal_check || "Check capture";
 };
 
 const renderTranscript = () => {
@@ -523,6 +952,9 @@ const renderTranscript = () => {
 const resetSessionState = () => {
   state.seq = 0;
   state.chunkCount = 0;
+  state.pendingChunks = [];
+  state.signalPeak = 0;
+  state.nonEmptyRawUpdates = 0;
   els.chunkCount.textContent = "0";
   state.transcript.raw.clear();
   state.transcript.enhanced.clear();
@@ -568,71 +1000,84 @@ const startRecording = async () => {
     await startCountdown(9);
   } catch (err) {
     setStatus("status_idle", "idle");
+    setStatusHint("");
     setRecordingButtons(false);
     return;
   }
 
   setStatus("status_recording", "recording");
+  setStatusHint("");
+  state.stopRequested = false;
 
   const captureMode = getCaptureMode();
-  const res = await fetch("/v1/meetings/start", {
-    method: "POST",
-    headers: buildHeaders(),
-    body: JSON.stringify({
-      mode: "realtime",
-      context: { source: "local_ui", locale: state.lang, capture_mode: captureMode },
-    }),
-  });
-  if (!res.ok) {
+  try {
+    if (captureMode === "system" && !els.deviceSelect.value) {
+      throw new Error("no_device_selected");
+    }
+
+    const stream = await ensureStream(captureMode, { force: true });
+    if (captureMode === "screen" && !stream.getAudioTracks().length) {
+      throw new Error("screen capture no audio track");
+    }
+    await buildAudioMeter(captureMode, { force: true });
+    startMeter();
+
+    const res = await fetch("/v1/meetings/start", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({
+        mode: "realtime",
+        context: { source: "local_ui", locale: state.lang, capture_mode: captureMode },
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`start meeting failed: ${res.status}`);
+    }
+    const data = await res.json();
+    state.meetingId = data.meeting_id;
+    els.meetingIdText.textContent = state.meetingId;
+
+    await waitForWsOpen();
+    const capture = createCaptureEngine(stream);
+    state.captureEngine = capture.engine;
+    state.captureStopper = capture.stop;
+    setStatusHint("hint_recording_ok", "good");
+  } catch (err) {
+    console.error("start recording failed", err);
     setStatus("status_error", "error");
-    setRecordingButtons(false);
-    throw new Error(`start meeting failed: ${res.status}`);
+    setStatusHint(mapStartError(err, captureMode), "bad");
+    await stopRecording({ preserveStatus: true, preserveHint: true, forceFinish: true });
+    throw err;
   }
-  const data = await res.json();
-  state.meetingId = data.meeting_id;
-  els.meetingIdText.textContent = state.meetingId;
-
-  await buildAudioMeter(captureMode);
-  startMeter();
-  openWebSocket();
-
-  const stream = await ensureStream(captureMode);
-  const preferred = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/ogg;codecs=opus",
-  ];
-  let mimeType = "";
-  for (const option of preferred) {
-    if (MediaRecorder.isTypeSupported(option)) {
-      mimeType = option;
-      break;
-    }
-  }
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-  state.recorder = recorder;
-  recorder.ondataavailable = async (e) => {
-    if (e.data && e.data.size > 0) {
-      await sendChunk(e.data, mimeType || e.data.type);
-    }
-  };
-  recorder.start(1000);
 };
 
-const stopRecording = () => {
+const stopRecording = async (options = {}) => {
+  const { preserveStatus = false, preserveHint = false, forceFinish = false } = options;
+  const wasRecording = Boolean(state.captureStopper);
+  const wasCountingDown = Boolean(state.isCountingDown);
+  const activeMeetingId = state.meetingId;
+  state.stopRequested = true;
   if (state.isCountingDown) {
     state.isCountingDown = false;
   }
-  if (state.recorder && state.recorder.state !== "inactive") {
-    state.recorder.stop();
+
+  if (state.captureStopper) {
+    try {
+      await state.captureStopper();
+    } catch (err) {
+      console.warn("capture stop failed", err);
+    }
   }
-  state.recorder = null;
+  state.captureStopper = null;
+  state.captureEngine = null;
   if (state.ws) {
+    flushPendingChunks();
     state.ws.close();
   }
   state.ws = null;
-  if (state.meetingId) {
-    fetch(`/v1/meetings/${state.meetingId}/finish`, {
+  state.pendingChunks = [];
+  if (activeMeetingId && (forceFinish || wasRecording || wasCountingDown)) {
+    fetch(`/v1/meetings/${activeMeetingId}/finish`, {
       method: "POST",
       headers: buildHeaders(),
     })
@@ -643,26 +1088,62 @@ const stopRecording = () => {
     state.stream.getTracks().forEach((t) => t.stop());
   }
   state.stream = null;
-  if (state.audioContext) {
-    state.audioContext.close();
+  state.streamDeviceId = "";
+  closeAudioMeter();
+  if (!preserveStatus) {
+    setStatus("status_idle", "idle");
   }
-  state.audioContext = null;
-  state.analyser = null;
-  stopMeter();
-  setStatus("status_idle", "idle");
-  els.countdownValue.textContent = "—";
+  if (!preserveHint) {
+    setStatusHint("");
+  }
+  els.countdownValue.textContent = preserveStatus ? "0s" : "—";
+  state.meetingId = null;
+  els.meetingIdText.textContent = "—";
   setRecordingButtons(false);
+  state.stopRequested = false;
 };
 
 const checkSignal = async () => {
+  if (state.signalCheckInProgress) return;
+  setCheckSignalBusy(true);
   const mode = getCaptureMode();
-  await buildAudioMeter(mode);
-  startMeter();
-  setTimeout(() => {
-    if (!state.recorder) {
-      stopMeter();
+  setStatusHint("signal_check_running", "muted");
+  try {
+    if (mode === "system" && !els.deviceSelect.value) {
+      throw new Error("no_device_selected");
     }
-  }, 2500);
+    const keepStream = Boolean(state.captureStopper);
+    await buildAudioMeter(mode, { force: !keepStream });
+    state.signalPeak = 0;
+    startMeter();
+    await new Promise((resolve) => setTimeout(resolve, 2400));
+
+    const peak = state.signalPeak;
+    if (peak > 0.08) {
+      setSignal("signal_ok");
+      setStatusHint("signal_check_ok", "good");
+    } else if (peak > 0.02) {
+      setSignal("signal_low");
+      setStatusHint("signal_check_ok", "good");
+    } else {
+      setSignal("signal_no_audio");
+      setStatusHint("signal_check_fail", "bad");
+    }
+
+    if (!keepStream) {
+      closeAudioMeter();
+      if (state.stream) {
+        state.stream.getTracks().forEach((t) => t.stop());
+      }
+      state.stream = null;
+      state.streamDeviceId = "";
+    }
+  } catch (err) {
+    console.warn("signal check failed", err);
+    setStatusHint(mapStartError(err, mode), "bad");
+  } finally {
+    setCheckSignalBusy(false);
+  }
 };
 
 const checkDriver = async () => {
@@ -904,20 +1385,15 @@ const handleRecordAction = async (event) => {
 
   if (action === "report") {
     const source = button.dataset.source || state.resultsSource;
-    await fetch(`/v1/meetings/${meetingId}/report`, {
-      method: "POST",
-      headers: buildHeaders(),
-      body: JSON.stringify({ source }),
-    });
     const view = await fetch(
-      `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`,
+      `/v1/meetings/${meetingId}/artifact?kind=${source}&fmt=txt`,
       { headers: buildHeaders() }
     );
     if (view.ok) {
       if (els.transcriptClean) els.transcriptClean.value = await view.text();
     }
-    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
-    const filename = buildFilename({ kind: "report", source, fmt: "txt" });
+    const url = `/v1/meetings/${meetingId}/artifact?kind=${source}&fmt=txt`;
+    const filename = source === "raw" ? "raw_export.txt" : "clean_export.txt";
     await downloadArtifact(url, filename);
     await fetchRecords();
     return;
@@ -1000,7 +1476,9 @@ els.startBtn.addEventListener("click", async () => {
     setRecordingButtons(false);
   }
 });
-els.stopBtn.addEventListener("click", stopRecording);
+els.stopBtn.addEventListener("click", () => {
+  void stopRecording();
+});
 els.checkSignal.addEventListener("click", checkSignal);
 els.uploadAudioBtn.addEventListener("click", uploadAudioFile);
 
@@ -1011,9 +1489,7 @@ const savedTheme = (() => {
     return null;
   }
 })();
-const prefersDark =
-  window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-applyTheme(savedTheme || (prefersDark ? "dark" : "light"));
+applyTheme(savedTheme || "light");
 updateI18n();
 listDevices();
 updateCaptureUi();

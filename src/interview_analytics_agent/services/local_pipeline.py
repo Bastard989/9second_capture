@@ -98,6 +98,7 @@ def process_chunk_inline(
             confidence=res.confidence,
         )
         srepo.upsert_by_meeting_seq(seg)
+        session.flush()
 
         segs = srepo.list_by_meeting(meeting_id)
         settings = get_settings()
@@ -118,7 +119,9 @@ def process_chunk_inline(
             if speaker_changed:
                 s.speaker = inferred
 
-            if enh_changed or speaker_changed:
+            # Для live-UI всегда отдаем update для текущего seq, даже если
+            # enh/speaker не изменились, чтобы raw поток показывался сразу.
+            if enh_changed or speaker_changed or s.seq == chunk_seq:
                 q = quality_score(s.raw_text or "", s.enhanced_text or "")
                 updates.append(
                     {

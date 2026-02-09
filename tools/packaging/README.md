@@ -29,8 +29,8 @@ tools/packaging/build_linux.sh
 ## Примечание
 
 В прод-сборке нужно убедиться, что:
-- backend зависимости доступны (uvicorn, fastapi, etc.)
-- порт выбирается автоматически (логика уже в run_local_agent.py)
-- UI открывается автоматически (LOCAL_AGENT_AUTO_OPEN=true)
+- собран лаунчер `scripts/launcher.py` (единый для macOS/Windows/Linux)
+- при первом запуске лаунчер ставит зависимости в `~/.9second_capture/venv`
+- порт выбирается автоматически и открывается локальный UI на `127.0.0.1`
 
-Сборка использует `--onedir` (рекомендуется для macOS .app).
+Сборка использует `--onedir` (для `.app/.exe` и Linux-бандла).

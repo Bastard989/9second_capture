@@ -15,6 +15,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from urllib.request import urlopen
 
 
 STATE_LOCK = threading.Lock()
@@ -239,11 +240,27 @@ def _start_app() -> str:
         stderr=log_fh,
     )
     _log(f"[start] agent pid={APP_PROCESS.pid} log={agent_log}")
-    time.sleep(0.8)
-    if APP_PROCESS.poll() is not None:
-        _log("[start] agent exited early, see agent.log")
-        raise RuntimeError("agent_failed_to_start")
+    _wait_app_ready(APP_URL, timeout_sec=20.0)
     return APP_URL
+
+
+def _wait_app_ready(url: str, timeout_sec: float = 20.0) -> None:
+    deadline = time.time() + timeout_sec
+    health_url = f"{url.rstrip('/')}/health"
+    while time.time() < deadline:
+        if APP_PROCESS is not None and APP_PROCESS.poll() is not None:
+            _log("[start] agent exited early, see agent.log")
+            raise RuntimeError("agent_failed_to_start")
+        try:
+            with urlopen(health_url, timeout=1.2) as response:
+                if 200 <= int(response.status) < 500:
+                    _log("[start] agent ready")
+                    return
+        except Exception:
+            pass
+        time.sleep(0.25)
+    _log("[start] timeout waiting for /health")
+    raise RuntimeError("agent_start_timeout")
 
 
 def _stop_app() -> None:
@@ -319,9 +336,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
             return
         if parsed.path == "/api/open":
-            if APP_URL:
-                webbrowser.open(APP_URL, new=2)
-            self._send_json({"ok": True})
+            try:
+                url = _start_app()
+                webbrowser.open(url, new=2)
+                self._send_json({"ok": True, "url": url})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, status=500)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 

@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <title>9second_capture — Local Agent</title>
-    <link rel="stylesheet" href="/ui/styles.css" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260209f" />
   </head>
   <body>
     <div class="bg-layer"></div>
@@ -41,7 +41,7 @@
     </header>
 
     <main class="layout">
-      <section class="card">
+      <section class="card card-connection">
         <h2 data-i18n="connection_title">Подключение</h2>
         <div class="field">
           <label for="apiKey" data-i18n="api_key_label">API ключ (опционально)</label>
@@ -147,7 +147,7 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card card-recording">
         <h2 data-i18n="recording_title">Запись</h2>
         <div class="field">
           <label data-i18n="capture_mode_label">Режим захвата</label>
@@ -171,6 +171,7 @@
             >Ожидание</span
           >
         </div>
+        <div id="statusHint" class="status-hint"></div>
         <div class="countdown">
           <span data-i18n="countdown_label">Отсчёт:</span>
           <span id="countdownValue">—</span>
@@ -202,7 +203,7 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card card-upload">
         <h2 data-i18n="upload_title">Загрузка конференции</h2>
         <div class="field">
           <label data-i18n="upload_audio_label">Аудио файл</label>
@@ -227,7 +228,7 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card card-transcript">
         <h2 data-i18n="transcript_title">Транскрипт</h2>
         <div class="transcript-grid">
           <div class="transcript-box">
@@ -259,7 +260,7 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card card-results">
         <h2 data-i18n="records_title">Результаты</h2>
         <div class="row">
           <button id="chooseFolder" class="ghost" data-i18n="choose_folder">
@@ -328,6 +329,6 @@
       </span>
     </footer>
 
-    <script src="/ui/app.js"></script>
+    <script src="/ui/app.js?v=20260209f"></script>
   </body>
 </html>

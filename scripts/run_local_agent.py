@@ -90,6 +90,9 @@ def main() -> None:
     os.environ.setdefault("AUTH_MODE", "none")
     os.environ.setdefault("QUEUE_MODE", "inline")
     os.environ.setdefault("POSTGRES_DSN", "sqlite:///./data/local_agent/agent.db")
+    # Для realtime-чанков ~1с VAD часто вырезает фразы целиком.
+    # В локальном агенте по умолчанию отключаем, чтобы transcript шел стабильно.
+    os.environ.setdefault("WHISPER_VAD_FILTER", "false")
     _state_dir().mkdir(parents=True, exist_ok=True)
 
     url = f"http://127.0.0.1:{port}"
