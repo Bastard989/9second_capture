@@ -30,6 +30,8 @@ class STTQueueEvent(BaseQueueEvent):
     queue: Literal["stt"] = "stt"
     chunk_seq: int = 0
     blob_key: str = ""
+    source_track: str = ""
+    quality_profile: str = "live"
     timestamp: str = ""
 
 

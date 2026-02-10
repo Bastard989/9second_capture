@@ -36,6 +36,8 @@ def ingest_audio_chunk_bytes(
     meeting_id: str,
     seq: int,
     audio_bytes: bytes,
+    source_track: str | None = None,
+    quality_profile: str = "live",
     idempotency_key: str | None = None,
     idempotency_scope: str = "audio_chunk_http",
     idempotency_prefix: str = "http-chunk",
@@ -62,9 +64,17 @@ def ingest_audio_chunk_bytes(
             chunk_seq=seq,
             audio_bytes=audio_bytes,
             blob_key=blob_key,
+            quality_profile=quality_profile,
+            source_track=source_track,
         )
     else:
-        enqueue_stt(meeting_id=meeting_id, chunk_seq=seq, blob_key=blob_key)
+        enqueue_stt(
+            meeting_id=meeting_id,
+            chunk_seq=seq,
+            blob_key=blob_key,
+            source_track=source_track,
+            quality_profile=quality_profile,
+        )
     return ChunkIngestResult(
         accepted=True,
         meeting_id=meeting_id,
@@ -81,6 +91,8 @@ def ingest_audio_chunk_b64(
     meeting_id: str,
     seq: int,
     content_b64: str,
+    source_track: str | None = None,
+    quality_profile: str = "live",
     idempotency_key: str | None = None,
     idempotency_scope: str = "audio_chunk_http",
     idempotency_prefix: str = "http-chunk",
@@ -93,6 +105,8 @@ def ingest_audio_chunk_b64(
         meeting_id=meeting_id,
         seq=seq,
         audio_bytes=audio_bytes,
+        source_track=source_track,
+        quality_profile=quality_profile,
         idempotency_key=idempotency_key,
         idempotency_scope=idempotency_scope,
         idempotency_prefix=idempotency_prefix,

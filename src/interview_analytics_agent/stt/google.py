@@ -12,5 +12,12 @@ from .base import STTProvider, STTResult
 
 
 class GoogleSTTProvider(STTProvider):
-    def transcribe_chunk(self, *, audio: bytes, sample_rate: int) -> STTResult:
+    def transcribe_chunk(
+        self,
+        *,
+        audio: bytes,
+        sample_rate: int,
+        quality_profile: str = "live",
+        source_track: str | None = None,
+    ) -> STTResult:
         return STTResult(text="", confidence=None)

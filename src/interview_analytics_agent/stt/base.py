@@ -20,4 +20,11 @@ class STTResult:
 
 
 class STTProvider(Protocol):
-    def transcribe_chunk(self, *, audio: bytes, sample_rate: int) -> STTResult: ...
+    def transcribe_chunk(
+        self,
+        *,
+        audio: bytes,
+        sample_rate: int,
+        quality_profile: str = "live",
+        source_track: str | None = None,
+    ) -> STTResult: ...

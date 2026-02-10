@@ -18,6 +18,7 @@ import asyncio
 import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+from starlette.websockets import WebSocketState
 
 from apps.api_gateway.tenancy import enforce_meeting_access, tenant_enforcement_enabled
 from interview_analytics_agent.common.config import get_settings
@@ -39,6 +40,20 @@ from interview_analytics_agent.storage.repositories import MeetingRepository
 log = get_project_logger()
 
 ws_router = APIRouter()
+
+
+async def _ws_send_text_safe(ws: WebSocket, text: str) -> bool:
+    if ws.application_state != WebSocketState.CONNECTED:
+        return False
+    try:
+        await ws.send_text(text)
+        return True
+    except Exception:
+        return False
+
+
+async def _ws_send_json_safe(ws: WebSocket, payload: dict) -> bool:
+    return await _ws_send_text_safe(ws, json.dumps(payload, ensure_ascii=False))
 
 
 def _is_service_ctx(ctx: AuthContext) -> bool:
@@ -228,37 +243,39 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
             try:
                 event = json.loads(raw)
             except Exception:
-                await ws.send_text(
-                    json.dumps(
-                        {"event_type": "error", "code": "bad_json", "message": "Невалидный JSON"}
-                    )
+                sent = await _ws_send_json_safe(
+                    ws, {"event_type": "error", "code": "bad_json", "message": "Невалидный JSON"}
                 )
+                if not sent:
+                    break
                 continue
 
             et = event.get("event_type")
             if et != "audio.chunk":
-                await ws.send_text(
-                    json.dumps(
-                        {
-                            "event_type": "error",
-                            "code": "bad_event",
-                            "message": "Неизвестный event_type",
-                        }
-                    )
+                sent = await _ws_send_json_safe(
+                    ws,
+                    {
+                        "event_type": "error",
+                        "code": "bad_event",
+                        "message": "Неизвестный event_type",
+                    },
                 )
+                if not sent:
+                    break
                 continue
 
             meeting_id = event.get("meeting_id")
             if not meeting_id:
-                await ws.send_text(
-                    json.dumps(
-                        {
-                            "event_type": "error",
-                            "code": "no_meeting_id",
-                            "message": "meeting_id обязателен",
-                        }
-                    )
+                sent = await _ws_send_json_safe(
+                    ws,
+                    {
+                        "event_type": "error",
+                        "code": "no_meeting_id",
+                        "message": "meeting_id обязателен",
+                    },
                 )
+                if not sent:
+                    break
                 continue
 
             if not meeting_checked and tenant_enforcement_enabled() and not service_only:
@@ -279,14 +296,13 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
 
                 ok, err = await asyncio.to_thread(_check_meeting)
                 if not ok:
-                    await ws.send_text(
-                        json.dumps(
-                            {
-                                "event_type": "error",
-                                "code": "forbidden",
-                                "message": err or "Доступ запрещён",
-                            }
-                        )
+                    await _ws_send_json_safe(
+                        ws,
+                        {
+                            "event_type": "error",
+                            "code": "forbidden",
+                            "message": err or "Доступ запрещён",
+                        },
                     )
                     await ws.close(
                         code=status.WS_1008_POLICY_VIOLATION,
@@ -301,20 +317,23 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
 
             seq = int(event.get("seq", 0))
             content_b64 = event.get("content_b64", "")
+            source_track = event.get("source_track")
+            quality_profile = str(event.get("quality_profile") or "live")
             idem_key = event.get("idempotency_key")
 
             try:
                 audio_bytes = b64_decode(content_b64)
             except Exception:
-                await ws.send_text(
-                    json.dumps(
-                        {
-                            "event_type": "error",
-                            "code": "bad_audio",
-                            "message": "content_b64 не декодируется",
-                        }
-                    )
+                sent = await _ws_send_json_safe(
+                    ws,
+                    {
+                        "event_type": "error",
+                        "code": "bad_audio",
+                        "message": "content_b64 не декодируется",
+                    },
                 )
+                if not sent:
+                    break
                 continue
 
             try:
@@ -327,6 +346,8 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                         meeting_id=meeting_id,
                         seq=seq,
                         audio_bytes=audio_bytes,
+                        source_track=source_track,
+                        quality_profile=quality_profile,
                         idempotency_key=idem_key,
                         idempotency_scope="audio_chunk_ws",
                         idempotency_prefix="ws",
@@ -336,15 +357,16 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                     "ws_ingest_failed",
                     extra={"payload": {"meeting_id": meeting_id, "err": str(e)[:200]}},
                 )
-                await ws.send_text(
-                    json.dumps(
-                        {
-                            "event_type": "error",
-                            "code": "storage_error",
-                            "message": "Ошибка записи чанка",
-                        }
-                    )
+                sent = await _ws_send_json_safe(
+                    ws,
+                    {
+                        "event_type": "error",
+                        "code": "storage_error",
+                        "message": "Ошибка записи чанка",
+                    },
                 )
+                if not sent:
+                    break
                 continue
 
             if result.is_duplicate:
@@ -354,7 +376,9 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
             if result.inline_updates:
                 for payload in result.inline_updates:
                     try:
-                        await ws.send_text(json.dumps(payload, ensure_ascii=False))
+                        sent = await _ws_send_json_safe(ws, payload)
+                        if not sent:
+                            break
                     except Exception:
                         break
 
@@ -369,6 +393,13 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
             },
         )
     except Exception as e:
+        message = str(e).lower()
+        if "websocket is not connected" in message or "need to call \"accept\" first" in message:
+            log.info(
+                "ws_disconnected_while_sending",
+                extra={"payload": {"meeting_id": meeting_id, "accepted_chunks": accepted_chunks}},
+            )
+            return
         log.error(
             "ws_fatal",
             extra={

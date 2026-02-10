@@ -99,11 +99,22 @@ def run_loop() -> None:
             ):
                 chunk_seq = int(task.get("chunk_seq", 0))
                 blob_key = task.get("blob_key") or None
+                source_track = (task.get("source_track") or None) if isinstance(task, dict) else None
+                quality_profile = (
+                    str(task.get("quality_profile") or "live")
+                    if isinstance(task, dict)
+                    else "live"
+                )
 
                 audio = get_bytes(blob_key)
 
                 # sample_rate из задачи может отсутствовать, для whisper мы всё равно ресемплим в 16k
-                res = stt.transcribe_chunk(audio=audio, sample_rate=16000)
+                res = stt.transcribe_chunk(
+                    audio=audio,
+                    sample_rate=16000,
+                    source_track=source_track,
+                    quality_profile=quality_profile,
+                )
 
                 with db_session() as session:
                     mrepo = MeetingRepository(session)

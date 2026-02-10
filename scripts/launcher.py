@@ -40,6 +40,10 @@ def _user_root() -> Path:
     return Path.home() / ".9second_capture"
 
 
+def _mode_file() -> Path:
+    return _user_root() / "install_mode.json"
+
+
 def _log(line: str) -> None:
     with STATE_LOCK:
         INSTALL_LOG.append(line.rstrip())
@@ -70,6 +74,28 @@ def _set_state(state: str, error: str | None = None) -> None:
     with STATE_LOCK:
         INSTALL_STATE = state
         INSTALL_ERROR = error
+
+
+def _save_install_mode(mode: str) -> None:
+    if mode not in {"base", "full"}:
+        return
+    try:
+        root = _user_root()
+        root.mkdir(parents=True, exist_ok=True)
+        _mode_file().write_text(json.dumps({"mode": mode}), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_install_mode() -> str:
+    try:
+        raw = json.loads(_mode_file().read_text(encoding="utf-8"))
+        mode = str(raw.get("mode", "")).strip().lower()
+        if mode in {"base", "full"}:
+            return mode
+    except Exception:
+        pass
+    return "base"
 
 
 def _venv_paths(root: Path) -> tuple[Path, Path]:
@@ -131,6 +157,28 @@ def _pip_install(python_bin: Path, req_path: Path) -> None:
         _run_and_log(cmd, env=env)
 
 
+def _venv_has_whisper(python_bin: Path) -> bool:
+    try:
+        code = subprocess.run(
+            [str(python_bin), "-c", "import faster_whisper, av"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        return code == 0
+    except Exception:
+        return False
+
+
+def _effective_install_mode(python_bin: Path) -> str:
+    mode = _load_install_mode()
+    if mode == "full":
+        return "full"
+    if _venv_has_whisper(python_bin):
+        return "full"
+    return "base"
+
+
 def _install(mode: str) -> None:
     global INSTALL_MODE
     try:
@@ -151,6 +199,8 @@ def _install(mode: str) -> None:
             _log("[install] whisper requirements...")
             _pip_install(python_bin, whisper_req)
 
+        INSTALL_MODE = mode
+        _save_install_mode(mode)
         _set_state("done")
     except Exception as e:
         _log(traceback.format_exc())
@@ -190,15 +240,22 @@ def _pick_launcher_port() -> int:
 
 
 def _start_app() -> str:
-    global APP_PROCESS, APP_URL
-    if APP_PROCESS and APP_PROCESS.poll() is None:
-        return APP_URL or ""
+    global APP_PROCESS, APP_URL, INSTALL_MODE
+    if APP_PROCESS and APP_PROCESS.poll() is None and APP_URL:
+        try:
+            _wait_app_ready(APP_URL, timeout_sec=6.0)
+            return APP_URL
+        except Exception:
+            _log("[start] existing agent is not ready, restarting...")
+            _stop_app()
 
     bundle = _bundle_root()
     root = _user_root()
     python_bin = _venv_paths(root)[1]
     if not python_bin.exists():
         raise RuntimeError("venv не установлен")
+    INSTALL_MODE = _effective_install_mode(python_bin)
+    _save_install_mode(INSTALL_MODE)
 
     port = _pick_port()
     APP_URL = f"http://127.0.0.1:{port}"
@@ -216,6 +273,13 @@ def _start_app() -> str:
     env["CHUNKS_DIR"] = str(root / "chunks")
     env["LOCAL_AGENT_STATE_DIR"] = str(root / "state")
     env["STT_PROVIDER"] = "whisper_local" if INSTALL_MODE == "full" else "mock"
+    if INSTALL_MODE == "full":
+        env["WHISPER_MODEL_SIZE"] = "medium"
+        env["WHISPER_COMPUTE_TYPE"] = "float32"
+        env["WHISPER_LANGUAGE"] = "ru"
+        env["WHISPER_VAD_FILTER"] = "false"
+        env["WHISPER_BEAM_SIZE_LIVE"] = "1"
+        env["WHISPER_BEAM_SIZE_FINAL"] = "4"
     env["LOCAL_AGENT_AUTO_OPEN"] = "false"
     env["PYTHONUNBUFFERED"] = "1"
 
@@ -231,7 +295,9 @@ def _start_app() -> str:
     _log("[start] starting agent...")
     agent_log = root / "agent.log"
     agent_log.parent.mkdir(parents=True, exist_ok=True)
-    log_fh = open(agent_log, "w", encoding="utf-8")
+    log_fh = open(agent_log, "a", encoding="utf-8")
+    log_fh.write(f"\n=== launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+    log_fh.flush()
     APP_PROCESS = subprocess.Popen(
         cmd,
         cwd=str(root),
@@ -244,20 +310,36 @@ def _start_app() -> str:
     return APP_URL
 
 
-def _wait_app_ready(url: str, timeout_sec: float = 20.0) -> None:
+def _wait_app_ready(url: str, timeout_sec: float = 24.0) -> None:
     deadline = time.time() + timeout_sec
     health_url = f"{url.rstrip('/')}/health"
+    root_url = f"{url.rstrip('/')}/"
+    stable_hits = 0
     while time.time() < deadline:
         if APP_PROCESS is not None and APP_PROCESS.poll() is not None:
             _log("[start] agent exited early, see agent.log")
             raise RuntimeError("agent_failed_to_start")
+        health_ok = False
+        root_ok = False
         try:
             with urlopen(health_url, timeout=1.2) as response:
-                if 200 <= int(response.status) < 500:
-                    _log("[start] agent ready")
-                    return
+                if 200 <= int(response.status) < 300:
+                    health_ok = True
         except Exception:
             pass
+        try:
+            with urlopen(root_url, timeout=1.2) as response:
+                if 200 <= int(response.status) < 300:
+                    root_ok = True
+        except Exception:
+            pass
+        if health_ok and root_ok:
+            stable_hits += 1
+            if stable_hits >= 2:
+                _log("[start] agent ready")
+                return
+        else:
+            stable_hits = 0
         time.sleep(0.25)
     _log("[start] timeout waiting for /health")
     raise RuntimeError("agent_start_timeout")
@@ -338,7 +420,6 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/open":
             try:
                 url = _start_app()
-                webbrowser.open(url, new=2)
                 self._send_json({"ok": True, "url": url})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, status=500)
@@ -347,6 +428,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global INSTALL_MODE
+    INSTALL_MODE = _load_install_mode()
     _log("[launcher] starting...")
     port = _pick_launcher_port()
     url = f"http://127.0.0.1:{port}"
@@ -357,6 +440,9 @@ def main() -> None:
         _log(f"[launcher] bind failed: {e}")
         raise
     print(f"[launcher] UI: {url}")
+    serve_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    serve_thread.start()
+    time.sleep(0.3)
     opened = False
     try:
         opened = webbrowser.open(url, new=2)
@@ -367,7 +453,7 @@ def main() -> None:
             subprocess.Popen(["open", url])
         except Exception as e:
             _log(f"[launcher] open failed: {e}")
-    server.serve_forever()
+    serve_thread.join()
 
 
 if __name__ == "__main__":

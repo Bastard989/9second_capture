@@ -16,6 +16,10 @@ from interview_analytics_agent.processing.aggregation import (
 )
 from interview_analytics_agent.processing.analytics import build_report, report_to_text
 from interview_analytics_agent.processing.structured import build_structured_rows, structured_to_csv
+from interview_analytics_agent.services.local_pipeline import (
+    recover_transcript_from_backup_audio,
+    retranscribe_meeting_high_quality,
+)
 from interview_analytics_agent.storage import records
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import MeetingRepository, TranscriptSegmentRepository
@@ -103,6 +107,10 @@ def finish_meeting(
             if (get_settings().queue_mode or "").strip().lower() == "inline":
                 m.status = PipelineStatus.done
         repo.save(m)
+    if (get_settings().queue_mode or "").strip().lower() == "inline":
+        retranscribe_meeting_high_quality(meeting_id=meeting_id)
+        if bool(get_settings().backup_audio_recovery_enabled):
+            recover_transcript_from_backup_audio(meeting_id=meeting_id)
     _ensure_transcripts(meeting_id)
     return {"ok": True, "meeting_id": meeting_id}
 

@@ -109,17 +109,36 @@ class Settings(BaseSettings):
 
     # Локальный Whisper (faster-whisper)
     whisper_model_size: str = Field(
-        default="small", alias="WHISPER_MODEL_SIZE"
+        default="medium", alias="WHISPER_MODEL_SIZE"
     )  # tiny|base|small|medium|large-v3
     whisper_device: str = Field(default="cpu", alias="WHISPER_DEVICE")  # cpu|cuda
     whisper_compute_type: str = Field(
-        default="int8", alias="WHISPER_COMPUTE_TYPE"
+        default="float32", alias="WHISPER_COMPUTE_TYPE"
     )  # int8|int8_float16|float16|float32
     whisper_language: str = Field(default="ru", alias="WHISPER_LANGUAGE")  # ru|en|auto
     whisper_vad_filter: bool = Field(
         default=True, alias="WHISPER_VAD_FILTER"
     )  # VAD для улучшения качества сегментов
-    whisper_beam_size: int = Field(default=1, alias="WHISPER_BEAM_SIZE")
+    whisper_beam_size: int = Field(default=3, alias="WHISPER_BEAM_SIZE")
+    whisper_beam_size_live: int = Field(default=1, alias="WHISPER_BEAM_SIZE_LIVE")
+    whisper_beam_size_final: int = Field(default=4, alias="WHISPER_BEAM_SIZE_FINAL")
+    whisper_audio_hpf_enabled: bool = Field(default=True, alias="WHISPER_AUDIO_HPF_ENABLED")
+    whisper_audio_hpf_cutoff_hz: int = Field(default=80, alias="WHISPER_AUDIO_HPF_CUTOFF_HZ")
+    whisper_audio_noise_suppress_enabled: bool = Field(
+        default=True, alias="WHISPER_AUDIO_NOISE_SUPPRESS_ENABLED"
+    )
+    whisper_audio_noise_gate_db: float = Field(
+        default=-42.0, alias="WHISPER_AUDIO_NOISE_GATE_DB"
+    )
+    whisper_audio_spectral_denoise_enabled: bool = Field(
+        default=True, alias="WHISPER_AUDIO_SPECTRAL_DENOISE_ENABLED"
+    )
+    whisper_audio_spectral_denoise_strength: float = Field(
+        default=0.32, alias="WHISPER_AUDIO_SPECTRAL_DENOISE_STRENGTH"
+    )
+    backup_audio_recovery_enabled: bool = Field(
+        default=True, alias="BACKUP_AUDIO_RECOVERY_ENABLED"
+    )
 
     # -------------------------------------------------------------------------
     # Meeting connector (SberJazz target)

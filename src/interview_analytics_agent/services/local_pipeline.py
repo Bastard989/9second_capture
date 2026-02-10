@@ -9,6 +9,7 @@ from interview_analytics_agent.processing.enhancer import enhance_text
 from interview_analytics_agent.processing.quality import quality_score
 from interview_analytics_agent.processing.speaker_rules import infer_speakers
 from interview_analytics_agent.storage.blob import get_bytes
+from interview_analytics_agent.storage import records
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.models import TranscriptSegment
 from interview_analytics_agent.storage.repositories import (
@@ -20,6 +21,36 @@ from interview_analytics_agent.stt.mock import MockSTTProvider
 log = get_project_logger()
 
 _stt_provider = None
+_TRACK_SPEAKERS = {"system", "mic", "mixed"}
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join((value or "").split()).strip()
+
+
+def _extract_missing_tail(*, existing_text: str, backup_text: str) -> str:
+    existing_norm = _normalize_text(existing_text)
+    backup_norm = _normalize_text(backup_text)
+    if not backup_norm:
+        return ""
+    if not existing_norm:
+        return backup_norm
+    if backup_norm.startswith(existing_norm):
+        return backup_norm[len(existing_norm) :].strip()
+    found_idx = backup_norm.rfind(existing_norm)
+    if found_idx >= 0:
+        return backup_norm[found_idx + len(existing_norm) :].strip()
+
+    existing_tokens = existing_norm.split()
+    backup_tokens = backup_norm.split()
+    max_overlap = min(len(existing_tokens), len(backup_tokens), 120)
+    for token_count in range(max_overlap, 2, -1):
+        if existing_tokens[-token_count:] == backup_tokens[:token_count]:
+            return " ".join(backup_tokens[token_count:]).strip()
+
+    if len(backup_norm) > int(len(existing_norm) * 1.3):
+        return backup_norm
+    return ""
 
 
 def _build_stt_provider():
@@ -63,6 +94,8 @@ def process_chunk_inline(
     chunk_seq: int,
     audio_bytes: bytes | None = None,
     blob_key: str | None = None,
+    quality_profile: str = "live",
+    source_track: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Локальная обработка чанка без Redis-очередей.
@@ -75,7 +108,15 @@ def process_chunk_inline(
         audio_bytes = get_bytes(blob_key)
 
     stt = _get_stt_provider()
-    res = stt.transcribe_chunk(audio=audio_bytes, sample_rate=16000)
+    res = stt.transcribe_chunk(
+        audio=audio_bytes,
+        sample_rate=16000,
+        quality_profile=quality_profile,
+        source_track=source_track,
+    )
+    text = (res.text or "").strip()
+    if not text:
+        return []
 
     updates: list[dict[str, Any]] = []
 
@@ -93,8 +134,8 @@ def process_chunk_inline(
             speaker=res.speaker,
             start_ms=None,
             end_ms=None,
-            raw_text=res.text or "",
-            enhanced_text=res.text or "",
+            raw_text=text,
+            enhanced_text=text,
             confidence=res.confidence,
         )
         srepo.upsert_by_meeting_seq(seg)
@@ -115,7 +156,11 @@ def process_chunk_inline(
                 s.enhanced_text = enh
 
             inferred = speaker_map.get(s.seq)
-            speaker_changed = bool(inferred and inferred != (s.speaker or ""))
+            speaker_changed = bool(
+                inferred
+                and inferred != (s.speaker or "")
+                and (s.speaker or "").strip().lower() not in _TRACK_SPEAKERS
+            )
             if speaker_changed:
                 s.speaker = inferred
 
@@ -139,3 +184,158 @@ def process_chunk_inline(
                 )
 
     return updates
+
+
+def retranscribe_meeting_high_quality(*, meeting_id: str) -> int:
+    """
+    Перетранскрибация встречи в финальном (более точном) профиле.
+
+    Используется после Stop/Finish, чтобы улучшить итоговые raw/clean тексты.
+    """
+    stt = _get_stt_provider()
+    updated_segments = 0
+
+    with db_session() as session:
+        mrepo = MeetingRepository(session)
+        srepo = TranscriptSegmentRepository(session)
+        meeting = mrepo.get(meeting_id)
+        if not meeting:
+            return 0
+
+        segs = srepo.list_by_meeting(meeting_id)
+        if not segs:
+            return 0
+
+        for seg in segs:
+            blob_key = f"meetings/{meeting_id}/chunks/{seg.seq}.bin"
+            try:
+                audio_bytes = get_bytes(blob_key)
+            except Exception:
+                continue
+
+            current_speaker = (seg.speaker or "").strip().lower()
+            source_track = current_speaker if current_speaker in _TRACK_SPEAKERS else None
+
+            try:
+                res = stt.transcribe_chunk(
+                    audio=audio_bytes,
+                    sample_rate=16000,
+                    quality_profile="final",
+                    source_track=source_track,
+                )
+            except Exception:
+                continue
+
+            next_text = (res.text or "").strip()
+            if not next_text:
+                continue
+
+            changed = False
+            if next_text != (seg.raw_text or ""):
+                seg.raw_text = next_text
+                changed = True
+            if next_text != (seg.enhanced_text or ""):
+                seg.enhanced_text = next_text
+                changed = True
+            if res.confidence is not None and res.confidence != seg.confidence:
+                seg.confidence = res.confidence
+                changed = True
+            if res.speaker and current_speaker not in _TRACK_SPEAKERS:
+                if res.speaker != seg.speaker:
+                    seg.speaker = res.speaker
+                    changed = True
+            if changed:
+                updated_segments += 1
+
+        session.flush()
+        segs = srepo.list_by_meeting(meeting_id)
+        settings = get_settings()
+        decisions = infer_speakers(
+            [(s.seq, s.raw_text or "", s.enhanced_text or "") for s in segs],
+            response_window_sec=settings.speaker_response_window_sec,
+        )
+        speaker_map = {d.seq: d.speaker for d in decisions if d.speaker is not None}
+        for seg in segs:
+            speaker = (seg.speaker or "").strip().lower()
+            if speaker in _TRACK_SPEAKERS:
+                continue
+            inferred = speaker_map.get(seg.seq)
+            if inferred and inferred != seg.speaker:
+                seg.speaker = inferred
+
+    if updated_segments:
+        log.info(
+            "meeting_retranscribed_high_quality",
+            extra={"payload": {"meeting_id": meeting_id, "updated_segments": updated_segments}},
+        )
+    return updated_segments
+
+
+def recover_transcript_from_backup_audio(*, meeting_id: str) -> int:
+    """
+    Fallback: если live-поток оборвался/потерял часть чанков, добиваем хвост
+    из резервной записи backup_audio.* после завершения встречи.
+    """
+    backup_candidates = (
+        "backup_audio.webm",
+        "backup_audio.wav",
+        "backup_audio.mp4",
+        "backup_audio.ogg",
+        "backup_audio.m4a",
+    )
+    backup_path = None
+    for name in backup_candidates:
+        if records.exists(meeting_id, name):
+            backup_path = records.artifact_path(meeting_id, name)
+            break
+    if backup_path is None or not backup_path.exists():
+        return 0
+
+    try:
+        backup_audio = backup_path.read_bytes()
+    except Exception:
+        return 0
+    if not backup_audio:
+        return 0
+
+    stt = _get_stt_provider()
+    try:
+        res = stt.transcribe_chunk(
+            audio=backup_audio,
+            sample_rate=16000,
+            quality_profile="final",
+            source_track="mixed",
+        )
+    except Exception:
+        return 0
+
+    backup_text = (res.text or "").strip()
+    if not backup_text:
+        return 0
+
+    with db_session() as session:
+        srepo = TranscriptSegmentRepository(session)
+        segs = srepo.list_by_meeting(meeting_id)
+        existing_text = "\n".join((seg.raw_text or "").strip() for seg in segs if (seg.raw_text or "").strip())
+        missing_tail = _extract_missing_tail(existing_text=existing_text, backup_text=backup_text)
+        if not missing_tail:
+            return 0
+
+        next_seq = max((seg.seq for seg in segs), default=-1) + 1
+        segment = TranscriptSegment(
+            meeting_id=meeting_id,
+            seq=next_seq,
+            speaker="mixed",
+            start_ms=None,
+            end_ms=None,
+            raw_text=missing_tail,
+            enhanced_text=missing_tail,
+            confidence=res.confidence,
+        )
+        srepo.upsert_by_meeting_seq(segment)
+
+    log.info(
+        "meeting_recovered_from_backup_audio",
+        extra={"payload": {"meeting_id": meeting_id, "added_seq": next_seq}},
+    )
+    return 1

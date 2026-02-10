@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <title>9second_capture — Local Agent</title>
-    <link rel="stylesheet" href="/ui/styles.css?v=20260209f" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260211d" />
   </head>
   <body>
     <div class="bg-layer"></div>
@@ -163,6 +163,19 @@
           </div>
           <div class="hint" data-i18n="capture_mode_hint">
             Для экрана со звуком включите “Share audio” в окне браузера.
+          </div>
+          <div class="hint" data-i18n="capture_mode_system_note">
+            Важно: «Системный звук» пишет только выбранный виртуальный источник (не прямой микрофон).
+          </div>
+          <label class="checkbox include-mic">
+            <input id="includeMic" type="checkbox" checked />
+            <span data-i18n="include_mic_label">Добавлять микрофон в запись</span>
+          </label>
+          <div class="field mic-picker">
+            <label for="micSelect" data-i18n="mic_input_label">Микрофон</label>
+            <select id="micSelect">
+              <option value="" data-i18n="mic_input_auto">Авто (рекомендуется)</option>
+            </select>
           </div>
         </div>
         <div class="status">
@@ -329,6 +342,6 @@
       </span>
     </footer>
 
-    <script src="/ui/app.js?v=20260209f"></script>
+    <script src="/ui/app.js?v=20260211d"></script>
   </body>
 </html>

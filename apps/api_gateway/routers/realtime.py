@@ -9,6 +9,8 @@ HTTP ingestion endpoints for post-meeting uploads.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
@@ -21,6 +23,7 @@ from interview_analytics_agent.services.chunk_ingest_service import (
     ingest_audio_chunk_b64,
     ingest_audio_chunk_bytes,
 )
+from interview_analytics_agent.storage import records
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import MeetingRepository
 
@@ -34,6 +37,8 @@ class ChunkIngestRequest(BaseModel):
     codec: str = "pcm"
     sample_rate: int = 16000
     channels: int = 1
+    source_track: str | None = None
+    quality_profile: str = "live"
     idempotency_key: str | None = None
 
 
@@ -43,6 +48,14 @@ class ChunkIngestResponse(BaseModel):
     seq: int
     idempotency_key: str
     blob_key: str
+    inline_updates: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BackupAudioUploadResponse(BaseModel):
+    ok: bool
+    meeting_id: str
+    filename: str
+    size_bytes: int
 
 
 def _ingest_chunk_impl(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestResponse:
@@ -52,6 +65,8 @@ def _ingest_chunk_impl(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestR
                 meeting_id=meeting_id,
                 seq=req.seq,
                 content_b64=req.content_b64,
+                source_track=req.source_track,
+                quality_profile=req.quality_profile,
                 idempotency_key=req.idempotency_key,
                 idempotency_scope="audio_chunk_http",
                 idempotency_prefix="http-chunk",
@@ -79,6 +94,7 @@ def _ingest_chunk_impl(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestR
             seq=result.seq,
             idempotency_key=result.idempotency_key,
             blob_key=result.blob_key,
+            inline_updates=list(getattr(result, "inline_updates", None) or []),
         )
 
 
@@ -128,6 +144,29 @@ async def upload_audio(
         seq=result.seq,
         idempotency_key=result.idempotency_key,
         blob_key=result.blob_key,
+        inline_updates=list(getattr(result, "inline_updates", None) or []),
+    )
+
+
+@router.post("/meetings/{meeting_id}/backup-audio", response_model=BackupAudioUploadResponse)
+async def upload_backup_audio(
+    meeting_id: str,
+    file: UploadFile = File(...),
+    ctx: AuthContext = Depends(auth_dep),
+) -> BackupAudioUploadResponse:
+    _ensure_meeting_access(ctx, meeting_id)
+    payload = await file.read()
+    filename = "backup_audio.webm"
+    if file.filename and "." in file.filename:
+        ext = file.filename.rsplit(".", 1)[-1].strip().lower()
+        if ext and ext.isalnum():
+            filename = f"backup_audio.{ext}"
+    records.write_bytes(meeting_id, filename, payload)
+    return BackupAudioUploadResponse(
+        ok=True,
+        meeting_id=meeting_id,
+        filename=filename,
+        size_bytes=len(payload),
     )
 
 

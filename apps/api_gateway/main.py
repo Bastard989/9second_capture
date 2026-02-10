@@ -87,6 +87,10 @@ def _create_app() -> FastAPI:
             trace_id = current_trace_id()
             if trace_id:
                 response.headers["X-Trace-Id"] = trace_id
+            if request.url.path == "/" or request.url.path.startswith("/ui/"):
+                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
             return response
 
     @app.get("/health")

@@ -6,9 +6,15 @@ const state = {
   stream: null,
   streamMode: "system",
   streamDeviceId: "",
+  streamKey: "",
+  screenAudioMissing: false,
+  micAdded: false,
+  inputStreams: [],
   audioContext: null,
   analyser: null,
   meterMode: "",
+  mixContext: null,
+  mixNodes: [],
   levelTimer: null,
   signalPeak: 0,
   seq: 0,
@@ -38,10 +44,25 @@ const state = {
   },
   nonEmptyRawUpdates: 0,
   pendingChunks: [],
+  wsReconnectTimer: null,
+  wsReconnectAttempts: 0,
+  httpDrainTimer: null,
+  httpDrainInProgress: false,
+  backupRecorder: null,
 };
 
 const PREFER_PCM_CAPTURE = true;
-const CHUNK_TIMESLICE_MS = 2000;
+const CHUNK_TIMESLICE_MS = 3000;
+const HTTP_DRAIN_INTERVAL_MS = 1400;
+const VIRTUAL_DEVICE_PATTERNS = [
+  "blackhole",
+  "vb-cable",
+  "cable input",
+  "pulse",
+  "monitor of",
+  "loopback",
+  "virtual",
+];
 
 const i18n = {
   ru: {
@@ -83,6 +104,11 @@ const i18n = {
     capture_mode_system: "Системный звук",
     capture_mode_screen: "Экран + звук",
     capture_mode_hint: "Для экрана со звуком включите “Share audio” в окне браузера.",
+    capture_mode_system_note:
+      "Важно: в режиме «Системный звук» микрофон добавляется автоматически, чтобы записывать и голос, и системный трек.",
+    include_mic_label: "Добавлять микрофон в запись",
+    mic_input_label: "Микрофон",
+    mic_input_auto: "Авто (рекомендуется)",
     countdown_label: "Отсчёт:",
     signal_waiting: "Сигнал: ожидание",
     signal_ok: "Сигнал: есть",
@@ -90,8 +116,13 @@ const i18n = {
     signal_no_audio: "Сигнал: нет аудио",
     signal_check: "Проверить захват",
     signal_check_running: "Проверка захвата...",
+    signal_check_blocked_recording: "Проверка захвата доступна только до старта записи.",
     signal_check_ok: "Захват работает: уровень сигнала обнаружен.",
     signal_check_fail: "Захват не обнаружил аудио. Проверьте источник/Share audio.",
+    signal_check_mic_only:
+      "Системный источник молчит. Слышен только микрофон. Проверьте loopback/драйвер.",
+    signal_check_system_only:
+      "Системный источник слышен, но микрофон не добавлен. Проверьте доступ к микрофону.",
     meeting_id_label: "Meeting ID:",
     chunks_label: "Чанки:",
     transcript_title: "Транскрипт",
@@ -153,10 +184,22 @@ const i18n = {
     err_network: "Сбой сети/локального API. Попробуйте ещё раз.",
     err_recorder_init:
       "MediaRecorder не поддерживается для текущего источника. Попробуйте другой режим.",
+    err_mic_same_as_system:
+      "Микрофон совпадает с системным источником. Выберите другой микрофон или режим «Авто».",
+    warn_mic_not_added:
+      "Микрофон не удалось добавить. Разрешите доступ к микрофону и проверьте выбранный вход.",
+    warn_screen_audio_mic_only:
+      "Системный звук экрана не передаётся (Share audio выключен). Записывается только микрофон.",
+    warn_media_fallback_pcm:
+      "MediaRecorder недоступен, переключились на PCM-захват. Нагрузка на CPU может быть выше.",
+    warn_capture_stream_interrupted:
+      "Один из потоков захвата остановился. Продолжаем запись доступных дорожек.",
+    warn_backup_upload_failed:
+      "Резервный аудиофайл не удалось отправить. Часть хвоста записи может не попасть в финальный текст.",
     err_generic: "Не удалось начать запись. Проверьте права браузера и источник аудио.",
     hint_recording_ok: "Запись запущена. Транскрипт будет обновляться в реальном времени.",
     hint_no_speech_yet:
-      "Пока нет распознанной речи. Проверьте источник звука или включите Share audio.",
+      "Пока нет распознанной речи. Проверьте источник: в «Системном звуке» звук встречи должен идти в BlackHole/VB-CABLE; в «Экран + звук» включите Share audio; для голоса убедитесь, что микрофон добавлен.",
   },
   en: {
     subtitle: "Local meeting capture agent",
@@ -197,6 +240,11 @@ const i18n = {
     capture_mode_system: "System audio",
     capture_mode_screen: "Screen + audio",
     capture_mode_hint: "For screen + audio enable “Share audio” in the browser dialog.",
+    capture_mode_system_note:
+      "Important: in “System audio” mode microphone is added automatically to capture both voice and system track.",
+    include_mic_label: "Include microphone in recording",
+    mic_input_label: "Microphone",
+    mic_input_auto: "Auto (recommended)",
     countdown_label: "Countdown:",
     signal_waiting: "Signal: waiting",
     signal_ok: "Signal: ok",
@@ -204,8 +252,13 @@ const i18n = {
     signal_no_audio: "Signal: no audio",
     signal_check: "Check capture",
     signal_check_running: "Checking capture...",
+    signal_check_blocked_recording: "Capture check is available only before recording starts.",
     signal_check_ok: "Capture is working: audio level detected.",
     signal_check_fail: "No audio detected. Check source/Share audio.",
+    signal_check_mic_only:
+      "System source is silent. Only microphone is audible. Check loopback/driver.",
+    signal_check_system_only:
+      "System source is audible, but microphone is missing. Check microphone permission.",
     meeting_id_label: "Meeting ID:",
     chunks_label: "Chunks:",
     transcript_title: "Transcript",
@@ -232,7 +285,6 @@ const i18n = {
     gen_report_clean: "Report clean",
     download_report_raw: "Download report raw",
     download_report_clean: "Download report clean",
-    gen_structured_raw: "Tables raw",
     gen_structured_clean: "Tables clean",
     download_structured_raw_json: "JSON raw",
     download_structured_raw_csv: "CSV raw",
@@ -264,10 +316,22 @@ const i18n = {
     err_network: "Network/local API error. Please retry.",
     err_recorder_init:
       "MediaRecorder is not supported for this source. Try another mode.",
+    err_mic_same_as_system:
+      "Microphone matches system source. Choose another microphone or keep Auto mode.",
+    warn_mic_not_added:
+      "Microphone could not be added. Allow microphone access and verify selected input.",
+    warn_screen_audio_mic_only:
+      "Screen system audio is not shared (Share audio is off). Recording microphone only.",
+    warn_media_fallback_pcm:
+      "MediaRecorder is unavailable, switched to PCM capture. CPU usage may be higher.",
+    warn_capture_stream_interrupted:
+      "One capture stream stopped unexpectedly. Continuing with remaining tracks.",
+    warn_backup_upload_failed:
+      "Backup audio upload failed. A tail part of recording may be missing in final transcript.",
     err_generic: "Unable to start recording. Check browser permissions and source.",
     hint_recording_ok: "Recording started. Transcript updates in real time.",
     hint_no_speech_yet:
-      "No recognized speech yet. Check audio source or enable Share audio.",
+      "No recognized speech yet. Verify source routing: in “System audio” route meeting output to BlackHole/VB-CABLE; in “Screen + audio” enable Share audio; for voice capture ensure microphone is added.",
   },
 };
 
@@ -276,6 +340,8 @@ const els = {
   deviceSelect: document.getElementById("deviceSelect"),
   refreshDevices: document.getElementById("refreshDevices"),
   checkDriver: document.getElementById("checkDriver"),
+  includeMic: document.getElementById("includeMic"),
+  micSelect: document.getElementById("micSelect"),
   driverHelpBtn: document.getElementById("driverHelpBtn"),
   driverHelp: document.getElementById("driverHelp"),
   driverStatus: document.getElementById("driverStatus"),
@@ -327,8 +393,12 @@ const updateI18n = () => {
   } else if (state.statusHintText) {
     setStatusHint(state.statusHintText, state.statusHintStyle, true);
   }
-  if (els.checkSignal && state.signalCheckInProgress) {
-    els.checkSignal.textContent = dict.signal_check_running || "Checking capture...";
+  syncCheckSignalButton();
+  if (els.micSelect) {
+    const first = els.micSelect.querySelector('option[value=""]');
+    if (first) {
+      first.textContent = dict.mic_input_auto || "Auto (recommended)";
+    }
   }
   if (els.themeLight) els.themeLight.textContent = dict.theme_light || "Light";
   if (els.themeDark) els.themeDark.textContent = dict.theme_dark || "Dark";
@@ -402,6 +472,23 @@ const applyTheme = (theme) => {
   }
 };
 
+const isRecordingFlowActive = () =>
+  state.isCountingDown ||
+  Boolean(state.captureStopper) ||
+  Boolean(state.meetingId) ||
+  !els.stopBtn.disabled;
+
+const syncCheckSignalButton = () => {
+  if (!els.checkSignal) return;
+  const dict = i18n[state.lang];
+  const busy = state.signalCheckInProgress;
+  const recordingBlocked = isRecordingFlowActive();
+  els.checkSignal.disabled = busy || recordingBlocked;
+  els.checkSignal.textContent = busy
+    ? dict.signal_check_running || "Checking capture..."
+    : dict.signal_check || "Check capture";
+};
+
 const setRecordingButtons = (isRecording) => {
   if (isRecording) {
     els.startBtn.disabled = true;
@@ -418,6 +505,7 @@ const setRecordingButtons = (isRecording) => {
     els.stopBtn.classList.add("is-inactive");
     els.stopBtn.classList.remove("is-active");
   }
+  syncCheckSignalButton();
 };
 
 const buildHeaders = () => {
@@ -434,11 +522,47 @@ const buildAuthHeaders = () => {
   return headers;
 };
 
+const isVirtualAudioDevice = (label = "") => {
+  const normalized = String(label || "").toLowerCase();
+  if (!normalized) return false;
+  return VIRTUAL_DEVICE_PATTERNS.some((pattern) => normalized.includes(pattern));
+};
+
+const pickPreferredMicDeviceId = async (excludeDeviceId = "") => {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const inputs = devices.filter((device) => device.kind === "audioinput");
+  const exactExclude = String(excludeDeviceId || "");
+  const nonVirtual = inputs.find((device) => {
+    if (!device.deviceId || device.deviceId === exactExclude) return false;
+    return !isVirtualAudioDevice(device.label);
+  });
+  if (nonVirtual && nonVirtual.deviceId) return nonVirtual.deviceId;
+  const fallback = inputs.find((device) => device.deviceId && device.deviceId !== exactExclude);
+  return fallback ? fallback.deviceId : "";
+};
+
+const pickMicDeviceId = async (excludeDeviceId = "", selectedMicId = "") => {
+  const normalizedSelected = String(selectedMicId || "").trim();
+  const normalizedExclude = String(excludeDeviceId || "").trim();
+  if (normalizedSelected && normalizedSelected !== normalizedExclude) {
+    return normalizedSelected;
+  }
+  const preferred = await pickPreferredMicDeviceId(normalizedExclude);
+  return preferred || "";
+};
+
 const listDevices = async () => {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const inputs = devices.filter((d) => d.kind === "audioinput");
+    const inputs = devices
+      .filter((d) => d.kind === "audioinput")
+      .sort((left, right) => {
+        const lv = isVirtualAudioDevice(left.label) ? 1 : 0;
+        const rv = isVirtualAudioDevice(right.label) ? 1 : 0;
+        return rv - lv;
+      });
     const prevValue = els.deviceSelect.value;
+    const prevMicValue = els.micSelect ? els.micSelect.value : "";
     els.deviceSelect.innerHTML = "";
     inputs.forEach((device) => {
       const opt = document.createElement("option");
@@ -451,11 +575,53 @@ const listDevices = async () => {
       opt.value = "";
       opt.textContent = "—";
       els.deviceSelect.appendChild(opt);
+      if (els.micSelect) {
+        els.micSelect.innerHTML = "";
+        const autoOpt = document.createElement("option");
+        autoOpt.value = "";
+        autoOpt.textContent = i18n[state.lang].mic_input_auto || "Auto (recommended)";
+        els.micSelect.appendChild(autoOpt);
+      }
       return;
     }
     const hasPrev = inputs.some((d) => d.deviceId === prevValue);
     if (hasPrev) {
       els.deviceSelect.value = prevValue;
+    } else {
+      const firstVirtual = inputs.find((device) => isVirtualAudioDevice(device.label));
+      if (firstVirtual && firstVirtual.deviceId) {
+        els.deviceSelect.value = firstVirtual.deviceId;
+      }
+    }
+
+    if (els.micSelect) {
+      const selectedSystemDeviceId = els.deviceSelect.value || "";
+      const micCandidates = inputs
+        .filter((device) => device.deviceId && device.deviceId !== selectedSystemDeviceId)
+        .sort((left, right) => {
+          const lv = isVirtualAudioDevice(left.label) ? 1 : 0;
+          const rv = isVirtualAudioDevice(right.label) ? 1 : 0;
+          return lv - rv;
+        });
+      els.micSelect.innerHTML = "";
+      const autoOpt = document.createElement("option");
+      autoOpt.value = "";
+      autoOpt.textContent = i18n[state.lang].mic_input_auto || "Auto (recommended)";
+      els.micSelect.appendChild(autoOpt);
+      micCandidates.forEach((device, index) => {
+        const opt = document.createElement("option");
+        opt.value = device.deviceId;
+        opt.textContent = device.label || `Mic ${index + 1}`;
+        els.micSelect.appendChild(opt);
+      });
+      if (
+        prevMicValue &&
+        micCandidates.some((device) => device.deviceId === prevMicValue)
+      ) {
+        els.micSelect.value = prevMicValue;
+      } else {
+        els.micSelect.value = "";
+      }
     }
   } catch (err) {
     console.warn("device list failed", err);
@@ -467,39 +633,179 @@ const getCaptureMode = () => {
   return el ? el.value : "system";
 };
 
+const closeMixGraph = () => {
+  if (state.mixNodes && state.mixNodes.length) {
+    state.mixNodes.forEach((node) => {
+      try {
+        node.disconnect();
+      } catch (err) {
+        void err;
+      }
+    });
+  }
+  state.mixNodes = [];
+  if (state.mixContext) {
+    state.mixContext.close().catch(() => {});
+  }
+  state.mixContext = null;
+};
+
+const stopInputStreams = () => {
+  state.inputStreams.forEach((input) => {
+    try {
+      input.getTracks().forEach((track) => track.stop());
+    } catch (err) {
+      void err;
+    }
+  });
+  state.inputStreams = [];
+};
+
+const ensureAudioContextActive = async (ctx) => {
+  if (!ctx || typeof ctx.resume !== "function") return;
+  if (ctx.state !== "suspended") return;
+  try {
+    await ctx.resume();
+  } catch (err) {
+    console.warn("audio context resume failed", err);
+  }
+};
+
+const buildMixedAudioStream = async (baseStream, includeMic, selectedMicId = "") => {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return { stream: baseStream, micAdded: false, micError: "" };
+
+  const context = new Ctx();
+  const destination = context.createMediaStreamDestination();
+  const nodes = [destination];
+  let micAdded = false;
+  let micStream = null;
+  let micError = "";
+
+  const connectStream = (stream, gainValue = 1) => {
+    const source = context.createMediaStreamSource(stream);
+    const gain = context.createGain();
+    gain.gain.value = gainValue;
+    source.connect(gain);
+    gain.connect(destination);
+    nodes.push(source, gain);
+  };
+
+  connectStream(baseStream, 1);
+
+  if (includeMic) {
+    const selectedSystemDeviceId = state.streamDeviceId || (els.deviceSelect && els.deviceSelect.value) || "";
+    try {
+      let preferredMicId = await pickMicDeviceId(selectedSystemDeviceId, selectedMicId);
+      if (
+        preferredMicId &&
+        selectedSystemDeviceId &&
+        preferredMicId === selectedSystemDeviceId
+      ) {
+        preferredMicId = await pickPreferredMicDeviceId(selectedSystemDeviceId);
+      }
+      if (
+        preferredMicId &&
+        selectedSystemDeviceId &&
+        preferredMicId === selectedSystemDeviceId
+      ) {
+        throw new Error("mic_same_as_system");
+      }
+      if (!preferredMicId && selectedSystemDeviceId) {
+        throw new Error("mic_not_found");
+      }
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: preferredMicId ? { deviceId: { exact: preferredMicId } } : true,
+      });
+      connectStream(micStream, 1);
+      micAdded = true;
+    } catch (err) {
+      micError = err && err.message ? String(err.message) : "mic_add_failed";
+      console.warn("unable to add microphone to mixed stream", err);
+    }
+  }
+
+  await ensureAudioContextActive(context);
+  state.mixContext = context;
+  state.mixNodes = nodes;
+  state.inputStreams = micStream ? [baseStream, micStream] : [baseStream];
+
+  const mixed = destination.stream;
+  if (!mixed.getAudioTracks().length) {
+    closeMixGraph();
+    stopInputStreams();
+    return { stream: baseStream, micAdded: false, micError };
+  }
+  return { stream: mixed, micAdded, micError };
+};
+
 const ensureStream = async (mode, options = {}) => {
   const { force = false } = options;
   const selectedDeviceId = mode === "system" ? els.deviceSelect.value || "" : "";
+  const includeMic =
+    mode === "system"
+      ? true
+      : Boolean(els.includeMic ? els.includeMic.checked : true);
+  const selectedMicId =
+    includeMic && els.micSelect ? String(els.micSelect.value || "").trim() : "";
+  const nextStreamKey = `${mode}:${selectedDeviceId}:${includeMic ? "mic" : "nomic"}:${selectedMicId || "auto"}`;
   const canReuse =
     !force &&
     state.stream &&
-    state.streamMode === mode &&
-    (mode !== "system" || state.streamDeviceId === selectedDeviceId);
+    state.streamKey === nextStreamKey;
   if (canReuse) return state.stream;
+
   if (state.stream) {
-    state.stream.getTracks().forEach((t) => t.stop());
-    state.stream = null;
-    state.streamDeviceId = "";
+    try {
+      state.stream.getTracks().forEach((track) => track.stop());
+    } catch (err) {
+      void err;
+    }
   }
+  state.stream = null;
+  state.streamDeviceId = "";
+  state.streamKey = "";
+  state.screenAudioMissing = false;
+  state.micAdded = false;
+  closeMixGraph();
+  stopInputStreams();
+
+  let baseStream;
   if (mode === "screen") {
-    state.stream = await navigator.mediaDevices.getDisplayMedia({
+    baseStream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
       audio: true,
     });
-    if (!state.stream.getAudioTracks().length) {
+    state.screenAudioMissing = !baseStream.getAudioTracks().length;
+    if (state.screenAudioMissing) {
       setSignal("signal_no_audio");
       console.warn("screen capture started without audio track");
     }
-    state.streamDeviceId = "";
   } else {
     const deviceId = els.deviceSelect.value;
     const constraints = {
       audio: deviceId ? { deviceId: { exact: deviceId } } : true,
     };
-    state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    baseStream = await navigator.mediaDevices.getUserMedia(constraints);
     state.streamDeviceId = deviceId || "";
   }
+
+  if (includeMic) {
+    const mixed = await buildMixedAudioStream(baseStream, true, selectedMicId);
+    state.stream = mixed.stream;
+    state.micAdded = mixed.micAdded;
+    if (!mixed.micAdded && mixed.micError === "mic_same_as_system") {
+      setStatusHint("err_mic_same_as_system", "bad");
+    } else if (!mixed.micAdded) {
+      setStatusHint("warn_mic_not_added", "bad");
+    }
+  } else {
+    state.stream = baseStream;
+    state.inputStreams = [baseStream];
+    state.micAdded = false;
+  }
   state.streamMode = mode;
+  state.streamKey = nextStreamKey;
   return state.stream;
 };
 
@@ -513,6 +819,24 @@ const closeAudioMeter = () => {
   state.meterMode = "";
 };
 
+const releasePreparedCapture = () => {
+  if (state.stream) {
+    try {
+      state.stream.getTracks().forEach((track) => track.stop());
+    } catch (err) {
+      void err;
+    }
+  }
+  state.stream = null;
+  state.streamDeviceId = "";
+  state.streamKey = "";
+  state.screenAudioMissing = false;
+  state.micAdded = false;
+  closeMixGraph();
+  stopInputStreams();
+  closeAudioMeter();
+};
+
 const mapStartError = (err, mode) => {
   const name = err && typeof err === "object" ? err.name || "" : "";
   const message = err && typeof err === "object" ? err.message || "" : String(err || "");
@@ -522,7 +846,10 @@ const mapStartError = (err, mode) => {
   if (message.includes("no_device_selected")) return "err_no_device_selected";
   if (message.includes("start meeting failed")) return "err_server_start";
   if (message.includes("ws_open_failed")) return "err_network";
+  if (message.includes("stream_missing_after_countdown")) return "err_media_not_readable";
   if (message.includes("Failed to fetch") || message.includes("NetworkError")) return "err_network";
+  if (message.includes("pcm_capture_unsupported")) return "err_recorder_init";
+  if (message.includes("mic_same_as_system")) return "err_mic_same_as_system";
   if (name === "NotSupportedError" || name === "TypeError") return "err_recorder_init";
   if (message.includes("MediaRecorder")) return "err_recorder_init";
   if (mode === "screen" && message.includes("no audio track")) return "err_screen_audio_missing";
@@ -537,6 +864,7 @@ const buildAudioMeter = async (mode, options = {}) => {
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
   state.audioContext = new Ctx();
+  await ensureAudioContextActive(state.audioContext);
   const source = state.audioContext.createMediaStreamSource(stream);
   state.analyser = state.audioContext.createAnalyser();
   state.analyser.fftSize = 1024;
@@ -582,16 +910,77 @@ const flushPendingChunks = () => {
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
   while (state.pendingChunks.length > 0) {
     const payload = state.pendingChunks.shift();
-    state.ws.send(JSON.stringify(payload));
+    try {
+      state.ws.send(JSON.stringify(payload));
+    } catch (err) {
+      state.pendingChunks.unshift(payload);
+      break;
+    }
   }
+};
+
+const clearHttpDrainTimer = () => {
+  if (state.httpDrainTimer) {
+    clearTimeout(state.httpDrainTimer);
+  }
+  state.httpDrainTimer = null;
+};
+
+const clearWsReconnectTimer = () => {
+  if (state.wsReconnectTimer) {
+    clearTimeout(state.wsReconnectTimer);
+  }
+  state.wsReconnectTimer = null;
+};
+
+const scheduleWsReconnect = () => {
+  if (state.stopRequested || !state.captureStopper) return;
+  if (state.wsReconnectTimer) return;
+  const attempt = Math.min(state.wsReconnectAttempts + 1, 8);
+  state.wsReconnectAttempts = attempt;
+  const delayMs = Math.min(3800, 350 * 2 ** (attempt - 1));
+
+  state.wsReconnectTimer = setTimeout(async () => {
+    state.wsReconnectTimer = null;
+    if (state.stopRequested || !state.captureStopper) return;
+    try {
+      await waitForWsOpen(5200);
+      state.wsReconnectAttempts = 0;
+      flushPendingChunks();
+      if (state.statusHintKey === "err_network") {
+        setStatusHint("hint_recording_ok", "good");
+      }
+    } catch (err) {
+      scheduleWsReconnect();
+    }
+  }, delayMs);
+};
+
+const scheduleHttpDrain = () => {
+  if (state.stopRequested || !state.captureStopper) return;
+  if (!state.pendingChunks.length) return;
+  if (state.httpDrainTimer || state.httpDrainInProgress) return;
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
+  state.httpDrainTimer = setTimeout(async () => {
+    state.httpDrainTimer = null;
+    await drainPendingChunksHttp(state.meetingId, { force: false, reschedule: true });
+  }, HTTP_DRAIN_INTERVAL_MS);
 };
 
 const queueOrSendChunk = (payload) => {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify(payload));
-    return;
+    try {
+      state.ws.send(JSON.stringify(payload));
+      return;
+    } catch (err) {
+      state.pendingChunks.push(payload);
+      scheduleWsReconnect();
+      return;
+    }
   }
   state.pendingChunks.push(payload);
+  scheduleWsReconnect();
+  scheduleHttpDrain();
 };
 
 const toBase64 = async (blob) => {
@@ -604,8 +993,12 @@ const toBase64 = async (blob) => {
   return btoa(binary);
 };
 
-const sendChunk = async (blob, mimeType) => {
+const sendChunk = async (blob, mimeType, sourceTrack = "mixed") => {
   if (!state.meetingId) return;
+  if (state.stopRequested && (!state.ws || state.ws.readyState !== WebSocket.OPEN)) {
+    return;
+  }
+  const track = String(sourceTrack || "mixed").trim().toLowerCase();
   const content_b64 = await toBase64(blob);
   const payload = {
     schema_version: "v1",
@@ -616,6 +1009,9 @@ const sendChunk = async (blob, mimeType) => {
     codec: mimeType || "audio/webm",
     sample_rate: state.audioContext ? state.audioContext.sampleRate : 48000,
     channels: 1,
+    source_track: track,
+    quality_profile: "live",
+    idempotency_key: `${state.meetingId}:${state.seq}:${Date.now()}`,
     content_b64,
   };
   queueOrSendChunk(payload);
@@ -624,7 +1020,21 @@ const sendChunk = async (blob, mimeType) => {
   els.chunkCount.textContent = String(state.chunkCount);
   if (state.chunkCount >= 4 && state.nonEmptyRawUpdates === 0) {
     setSignal("signal_no_audio");
-    setStatusHint("hint_no_speech_yet", "bad");
+    const protectedHints = new Set([
+      "warn_mic_not_added",
+      "warn_screen_audio_mic_only",
+      "err_media_denied",
+      "err_media_not_found",
+      "err_media_not_readable",
+      "err_screen_audio_missing",
+      "err_recorder_init",
+      "err_network",
+      "err_server_start",
+      "err_no_device_selected",
+    ]);
+    if (!protectedHints.has(state.statusHintKey)) {
+      setStatusHint("hint_no_speech_yet", "bad");
+    }
   }
 };
 
@@ -634,40 +1044,25 @@ const openWebSocket = () => {
   const ws = new WebSocket(`${base}/v1/ws`);
   state.ws = ws;
   ws.onopen = () => {
+    clearWsReconnectTimer();
+    clearHttpDrainTimer();
+    state.wsReconnectAttempts = 0;
     flushPendingChunks();
   };
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      if (data.event_type === "transcript.update") {
-        if (typeof data.seq === "number") {
-          if (typeof data.raw_text === "string") {
-            state.transcript.raw.set(data.seq, data.raw_text);
-            if (data.raw_text.trim()) {
-              state.nonEmptyRawUpdates += 1;
-            }
-          }
-          if (data.enhanced_text != null) {
-            if (!state.enhancedTimers.has(data.seq)) {
-              const timer = setTimeout(() => {
-                state.transcript.enhanced.set(data.seq, data.enhanced_text);
-                state.enhancedTimers.delete(data.seq);
-                renderTranscript();
-              }, 3500);
-              state.enhancedTimers.set(data.seq, timer);
-            }
-          }
-          renderTranscript();
-        }
-      }
+      handleTranscriptUpdate(data);
     } catch (err) {
       console.warn("ws message parse failed", err);
     }
   };
-  ws.onclose = () => {
-    if (state.captureStopper) {
-      setStatus("status_error", "error");
+  ws.onclose = (event) => {
+    const normalCloseCode = 1000;
+    if (state.captureStopper && !state.stopRequested && (!event || event.code !== normalCloseCode)) {
       setStatusHint("err_network", "bad");
+      scheduleWsReconnect();
+      scheduleHttpDrain();
     }
     state.ws = null;
   };
@@ -789,7 +1184,7 @@ const encodeWav = (samples, sampleRate) => {
   return new Blob([buffer], { type: "audio/wav" });
 };
 
-const createPcmCapture = (stream) => {
+const createPcmCapture = (stream, sourceTrack = "mixed") => {
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) throw new Error("pcm_capture_unsupported");
 
@@ -815,7 +1210,7 @@ const createPcmCapture = (stream) => {
         cursor += part.length;
       });
       const wavBlob = encodeWav(merged, ctx.sampleRate || 48000);
-      await sendChunk(wavBlob, "audio/wav");
+      await sendChunk(wavBlob, "audio/wav", sourceTrack);
     } finally {
       flushing = false;
     }
@@ -829,6 +1224,7 @@ const createPcmCapture = (stream) => {
   source.connect(processor);
   processor.connect(sink);
   sink.connect(ctx.destination);
+  void ensureAudioContextActive(ctx);
 
   const timer = setInterval(() => {
     void flush();
@@ -868,23 +1264,21 @@ const createPcmCapture = (stream) => {
   };
 };
 
-const createMediaRecorderCapture = (stream) => {
+const createMediaRecorderCapture = (stream, sourceTrack = "mixed") => {
   const { recorder, mimeType } = createRecorderWithFallback(stream);
   recorder.onerror = () => {
     if (!state.stopRequested) {
-      setStatus("status_error", "error");
-      setStatusHint("err_recorder_init", "bad");
+      setStatusHint("warn_capture_stream_interrupted", "bad");
     }
   };
   recorder.onstop = () => {
     if (!state.stopRequested) {
-      setStatus("status_error", "error");
-      setStatusHint("err_recorder_init", "bad");
+      setStatusHint("warn_capture_stream_interrupted", "bad");
     }
   };
   recorder.ondataavailable = async (e) => {
     if (e.data && e.data.size > 0) {
-      await sendChunk(e.data, mimeType || e.data.type);
+      await sendChunk(e.data, mimeType || e.data.type, sourceTrack);
     }
   };
   recorder.start(CHUNK_TIMESLICE_MS);
@@ -913,25 +1307,107 @@ const createMediaRecorderCapture = (stream) => {
   };
 };
 
-const createCaptureEngine = (stream) => {
+const createCaptureEngine = (stream, options = {}) => {
+  const { sourceTrack = "mixed" } = options;
   if (PREFER_PCM_CAPTURE) {
     try {
-      return createPcmCapture(stream);
+      return { ...createPcmCapture(stream, sourceTrack), fallbackToPcm: false, sourceTrack };
     } catch (err) {
       console.warn("pcm capture fallback to MediaRecorder", err);
     }
   }
-  return createMediaRecorderCapture(stream);
+  try {
+    return {
+      ...createMediaRecorderCapture(stream, sourceTrack),
+      fallbackToPcm: false,
+      sourceTrack,
+    };
+  } catch (mediaErr) {
+    console.warn("media capture fallback to pcm", mediaErr);
+    return { ...createPcmCapture(stream, sourceTrack), fallbackToPcm: true, sourceTrack };
+  }
+};
+
+const startBackupRecorder = () => {
+  if (!state.stream) return;
+  try {
+    const { recorder, mimeType } = createRecorderWithFallback(state.stream);
+    const chunks = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        chunks.push(event.data);
+      }
+    };
+    recorder.start(1000);
+    state.backupRecorder = {
+      recorder,
+      chunks,
+      mimeType: mimeType || "audio/webm",
+    };
+  } catch (err) {
+    console.warn("backup recorder init failed", err);
+    state.backupRecorder = null;
+  }
+};
+
+const stopBackupRecorder = async () => {
+  const current = state.backupRecorder;
+  state.backupRecorder = null;
+  if (!current) return null;
+  const { recorder, chunks, mimeType } = current;
+
+  if (recorder && recorder.state !== "inactive") {
+    await new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      recorder.addEventListener("stop", done, { once: true });
+      recorder.addEventListener("error", done, { once: true });
+      setTimeout(done, 1600);
+      try {
+        recorder.stop();
+      } catch (err) {
+        done();
+      }
+    });
+  }
+
+  if (!chunks || !chunks.length) return null;
+  const mediaType = mimeType || chunks[0]?.type || "audio/webm";
+  return new Blob(chunks, { type: mediaType });
+};
+
+const uploadBackupAudio = async (meetingId, blob) => {
+  if (!meetingId || !blob || blob.size <= 8192) return true;
+  const extFromType = (() => {
+    if (!blob.type) return "webm";
+    if (blob.type.includes("ogg")) return "ogg";
+    if (blob.type.includes("wav")) return "wav";
+    if (blob.type.includes("mp4")) return "mp4";
+    if (blob.type.includes("mpeg")) return "mp3";
+    return "webm";
+  })();
+  const filename = `backup_audio.${extFromType}`;
+  const form = new FormData();
+  form.append("file", blob, filename);
+  try {
+    const res = await fetch(`/v1/meetings/${meetingId}/backup-audio`, {
+      method: "POST",
+      headers: buildAuthHeaders(),
+      body: form,
+    });
+    return res.ok;
+  } catch (err) {
+    return false;
+  }
 };
 
 const setCheckSignalBusy = (busy) => {
   state.signalCheckInProgress = busy;
-  if (!els.checkSignal) return;
-  els.checkSignal.disabled = busy;
-  const dict = i18n[state.lang];
-  els.checkSignal.textContent = busy
-    ? dict.signal_check_running || "Checking capture..."
-    : dict.signal_check || "Check capture";
+  syncCheckSignalButton();
 };
 
 const renderTranscript = () => {
@@ -939,20 +1415,62 @@ const renderTranscript = () => {
     .sort((a, b) => a[0] - b[0])
     .map(([, text]) => text)
     .filter(Boolean)
-    .join(" ");
+    .join("\n");
   const orderedClean = Array.from(state.transcript.enhanced.entries())
     .sort((a, b) => a[0] - b[0])
     .map(([, text]) => text)
     .filter(Boolean)
-    .join(" ");
-  if (els.transcriptRaw) els.transcriptRaw.value = orderedRaw;
-  if (els.transcriptClean) els.transcriptClean.value = orderedClean;
+    .join("\n");
+  const setAreaValue = (area, nextValue) => {
+    if (!area) return;
+    const pinnedToBottom = area.scrollTop + area.clientHeight >= area.scrollHeight - 80;
+    area.value = nextValue;
+    if (pinnedToBottom) {
+      area.scrollTop = area.scrollHeight;
+    }
+  };
+  setAreaValue(els.transcriptRaw, orderedRaw);
+  setAreaValue(els.transcriptClean, orderedClean);
+};
+
+const handleTranscriptUpdate = (data) => {
+  if (!data || data.event_type !== "transcript.update") return;
+  if (typeof data.seq !== "number") return;
+
+  if (typeof data.raw_text === "string") {
+    state.transcript.raw.set(data.seq, data.raw_text);
+    if (data.raw_text.trim()) {
+      state.nonEmptyRawUpdates += 1;
+      setSignal("signal_ok");
+      if (state.statusHintKey === "hint_no_speech_yet" || state.statusHintKey === "signal_check_fail") {
+        setStatusHint("hint_recording_ok", "good");
+      }
+    }
+  }
+
+  if (data.enhanced_text != null) {
+    if (state.enhancedTimers.has(data.seq)) {
+      clearTimeout(state.enhancedTimers.get(data.seq));
+      state.enhancedTimers.delete(data.seq);
+    }
+    const timer = setTimeout(() => {
+      state.transcript.enhanced.set(data.seq, data.enhanced_text);
+      state.enhancedTimers.delete(data.seq);
+      renderTranscript();
+    }, 3500);
+    state.enhancedTimers.set(data.seq, timer);
+  }
+
+  renderTranscript();
 };
 
 const resetSessionState = () => {
+  state.backupRecorder = null;
   state.seq = 0;
   state.chunkCount = 0;
   state.pendingChunks = [];
+  state.httpDrainInProgress = false;
+  clearHttpDrainTimer();
   state.signalPeak = 0;
   state.nonEmptyRawUpdates = 0;
   els.chunkCount.textContent = "0";
@@ -962,6 +1480,88 @@ const resetSessionState = () => {
   state.enhancedTimers.clear();
   if (els.transcriptRaw) els.transcriptRaw.value = "";
   if (els.transcriptClean) els.transcriptClean.value = "";
+};
+
+const buildCaptureTargets = (captureMode) => {
+  const targets = [];
+  const hasInputStreams = Array.isArray(state.inputStreams) && state.inputStreams.length > 0;
+  if (hasInputStreams) {
+    const systemStream = state.inputStreams[0] || null;
+    const micStream =
+      state.inputStreams.length > 1 ? state.inputStreams[state.inputStreams.length - 1] : null;
+    if (systemStream && systemStream.getAudioTracks().length) {
+      targets.push({ stream: systemStream, sourceTrack: "system" });
+    }
+    if (micStream && micStream.getAudioTracks().length) {
+      targets.push({ stream: micStream, sourceTrack: "mic" });
+    }
+  }
+
+  if (!targets.length && state.stream) {
+    let fallbackTrack = "mixed";
+    if (captureMode === "screen" && state.screenAudioMissing && state.micAdded) {
+      fallbackTrack = "mic";
+    } else if (!state.micAdded) {
+      fallbackTrack = "system";
+    }
+    targets.push({ stream: state.stream, sourceTrack: fallbackTrack });
+  }
+
+  const unique = [];
+  targets.forEach((item) => {
+    if (!item.stream) return;
+    const exists = unique.some(
+      (prev) => prev.stream === item.stream && prev.sourceTrack === item.sourceTrack
+    );
+    if (!exists) unique.push(item);
+  });
+  return unique;
+};
+
+const drainPendingChunksHttp = async (meetingId, options = {}) => {
+  const { force = false, reschedule = false } = options;
+  if (!meetingId || !state.pendingChunks.length) return;
+  if (state.httpDrainInProgress) return;
+  if (!force && state.ws && state.ws.readyState === WebSocket.OPEN) return;
+
+  state.httpDrainInProgress = true;
+  const pending = [...state.pendingChunks];
+  state.pendingChunks = [];
+  for (const payload of pending) {
+    try {
+      const res = await fetch(`/v1/meetings/${meetingId}/chunks`, {
+        method: "POST",
+        headers: buildHeaders(),
+        body: JSON.stringify({
+          seq: payload.seq,
+          content_b64: payload.content_b64,
+          codec: payload.codec,
+          sample_rate: payload.sample_rate,
+          channels: payload.channels,
+          source_track: payload.source_track || "mixed",
+          quality_profile: "live",
+          idempotency_key: payload.idempotency_key,
+        }),
+      });
+      if (!res.ok) {
+        state.pendingChunks.push(payload);
+      } else {
+        try {
+          const body = await res.json();
+          const updates = Array.isArray(body.inline_updates) ? body.inline_updates : [];
+          updates.forEach((u) => handleTranscriptUpdate(u));
+        } catch (_err) {
+          // ignore parse errors: chunk can be accepted without inline_updates
+        }
+      }
+    } catch (err) {
+      state.pendingChunks.push(payload);
+    }
+  }
+  state.httpDrainInProgress = false;
+  if (reschedule && state.pendingChunks.length && state.captureStopper && !state.stopRequested) {
+    scheduleHttpDrain();
+  }
 };
 
 const startCountdown = (seconds) =>
@@ -995,13 +1595,30 @@ const startRecording = async () => {
   setRecordingButtons(true);
   resetSessionState();
   els.countdownValue.textContent = "9s";
+  const captureMode = getCaptureMode();
 
   try {
+    if (captureMode === "system" && !els.deviceSelect.value) {
+      throw new Error("no_device_selected");
+    }
+    await ensureStream(captureMode, { force: true });
+    if (captureMode === "screen" && state.screenAudioMissing && !state.micAdded) {
+      throw new Error("screen capture no audio track");
+    }
+    await buildAudioMeter(captureMode, { force: true });
+    startMeter();
+
     await startCountdown(9);
   } catch (err) {
+    releasePreparedCapture();
     setStatus("status_idle", "idle");
     setStatusHint("");
     setRecordingButtons(false);
+    if (String(err || "").includes("countdown_cancelled")) {
+      return;
+    }
+    setStatus("status_error", "error");
+    setStatusHint(mapStartError(err, captureMode), "bad");
     return;
   }
 
@@ -1009,19 +1626,7 @@ const startRecording = async () => {
   setStatusHint("");
   state.stopRequested = false;
 
-  const captureMode = getCaptureMode();
   try {
-    if (captureMode === "system" && !els.deviceSelect.value) {
-      throw new Error("no_device_selected");
-    }
-
-    const stream = await ensureStream(captureMode, { force: true });
-    if (captureMode === "screen" && !stream.getAudioTracks().length) {
-      throw new Error("screen capture no audio track");
-    }
-    await buildAudioMeter(captureMode, { force: true });
-    startMeter();
-
     const res = await fetch("/v1/meetings/start", {
       method: "POST",
       headers: buildHeaders(),
@@ -1038,10 +1643,39 @@ const startRecording = async () => {
     els.meetingIdText.textContent = state.meetingId;
 
     await waitForWsOpen();
-    const capture = createCaptureEngine(stream);
-    state.captureEngine = capture.engine;
-    state.captureStopper = capture.stop;
-    setStatusHint("hint_recording_ok", "good");
+    const stream = state.stream;
+    if (!stream) {
+      throw new Error("stream_missing_after_countdown");
+    }
+    const captureTargets = buildCaptureTargets(captureMode);
+    if (!captureTargets.length) {
+      throw new Error("stream_missing_after_countdown");
+    }
+    const captureEngines = captureTargets.map((target) =>
+      createCaptureEngine(target.stream, { sourceTrack: target.sourceTrack })
+    );
+    state.captureEngine = captureEngines.map((item) => `${item.engine}:${item.sourceTrack}`).join(",");
+    state.captureStopper = async () => {
+      for (const item of captureEngines) {
+        try {
+          await item.stop();
+        } catch (err) {
+          console.warn("capture engine stop failed", err);
+        }
+      }
+    };
+    startBackupRecorder();
+    const hasFallbackPcm = captureEngines.some((item) => item.fallbackToPcm);
+    if (hasFallbackPcm) {
+      setStatusHint("warn_media_fallback_pcm", "bad");
+    } else if (captureMode === "screen" && state.screenAudioMissing && state.micAdded) {
+      setSignal("signal_low");
+      setStatusHint("warn_screen_audio_mic_only", "bad");
+    } else if (els.includeMic && els.includeMic.checked && !state.micAdded) {
+      setStatusHint("warn_mic_not_added", "bad");
+    } else {
+      setStatusHint("hint_recording_ok", "good");
+    }
   } catch (err) {
     console.error("start recording failed", err);
     setStatus("status_error", "error");
@@ -1070,26 +1704,38 @@ const stopRecording = async (options = {}) => {
   }
   state.captureStopper = null;
   state.captureEngine = null;
+  const backupBlob = await stopBackupRecorder();
+  clearWsReconnectTimer();
+  clearHttpDrainTimer();
+  state.wsReconnectAttempts = 0;
   if (state.ws) {
     flushPendingChunks();
     state.ws.close();
   }
   state.ws = null;
-  state.pendingChunks = [];
+  await drainPendingChunksHttp(activeMeetingId, { force: true, reschedule: false });
+  if (activeMeetingId && backupBlob) {
+    const uploaded = await uploadBackupAudio(activeMeetingId, backupBlob);
+    if (!uploaded) {
+      setStatusHint("warn_backup_upload_failed", "bad");
+    }
+  }
   if (activeMeetingId && (forceFinish || wasRecording || wasCountingDown)) {
-    fetch(`/v1/meetings/${activeMeetingId}/finish`, {
-      method: "POST",
-      headers: buildHeaders(),
-    })
-      .then(() => fetchRecords())
-      .catch(() => {});
+    try {
+      await fetch(`/v1/meetings/${activeMeetingId}/finish`, {
+        method: "POST",
+        headers: buildHeaders(),
+      });
+      await fetchRecords();
+    } catch (err) {
+      // ignore and keep local UI responsive
+    }
   }
   if (state.stream) {
-    state.stream.getTracks().forEach((t) => t.stop());
+    releasePreparedCapture();
+  } else {
+    closeAudioMeter();
   }
-  state.stream = null;
-  state.streamDeviceId = "";
-  closeAudioMeter();
   if (!preserveStatus) {
     setStatus("status_idle", "idle");
   }
@@ -1105,6 +1751,10 @@ const stopRecording = async (options = {}) => {
 
 const checkSignal = async () => {
   if (state.signalCheckInProgress) return;
+  if (isRecordingFlowActive()) {
+    setStatusHint("signal_check_blocked_recording", "muted");
+    return;
+  }
   setCheckSignalBusy(true);
   const mode = getCaptureMode();
   setStatusHint("signal_check_running", "muted");
@@ -1119,12 +1769,77 @@ const checkSignal = async () => {
     await new Promise((resolve) => setTimeout(resolve, 2400));
 
     const peak = state.signalPeak;
+    const systemStream = state.inputStreams.length ? state.inputStreams[0] : null;
+    const micStream =
+      state.inputStreams.length > 1 ? state.inputStreams[state.inputStreams.length - 1] : null;
+    let systemPeak = 0;
+    let micPeak = 0;
+
+    const measurePeak = async (stream) => {
+      if (!stream) return 0;
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return 0;
+      const meterCtx = new Ctx();
+      await ensureAudioContextActive(meterCtx);
+      const source = meterCtx.createMediaStreamSource(stream);
+      const analyser = meterCtx.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      const endAt = Date.now() + 700;
+      let maxLevel = 0;
+      const buffer = new Uint8Array(analyser.fftSize);
+      while (Date.now() < endAt) {
+        analyser.getByteTimeDomainData(buffer);
+        let sum = 0;
+        for (let i = 0; i < buffer.length; i += 1) {
+          const value = (buffer[i] - 128) / 128;
+          sum += value * value;
+        }
+        const rms = Math.sqrt(sum / buffer.length);
+        const level = Math.min(1, rms * 2.5);
+        if (level > maxLevel) maxLevel = level;
+        await new Promise((resolve) => setTimeout(resolve, 45));
+      }
+      try {
+        source.disconnect();
+      } catch (err) {
+        void err;
+      }
+      try {
+        analyser.disconnect();
+      } catch (err) {
+        void err;
+      }
+      try {
+        await meterCtx.close();
+      } catch (err) {
+        void err;
+      }
+      return maxLevel;
+    };
+
+    if (mode === "system" && els.includeMic && els.includeMic.checked) {
+      [systemPeak, micPeak] = await Promise.all([measurePeak(systemStream), measurePeak(micStream)]);
+    }
+
     if (peak > 0.08) {
       setSignal("signal_ok");
-      setStatusHint("signal_check_ok", "good");
+      if (systemPeak < 0.015 && micPeak > 0.04) {
+        setStatusHint("signal_check_mic_only", "bad");
+      } else if (systemPeak > 0.04 && micPeak < 0.015) {
+        setStatusHint("signal_check_system_only", "bad");
+      } else {
+        setStatusHint("signal_check_ok", "good");
+      }
     } else if (peak > 0.02) {
       setSignal("signal_low");
-      setStatusHint("signal_check_ok", "good");
+      if (systemPeak < 0.015 && micPeak > 0.03) {
+        setStatusHint("signal_check_mic_only", "bad");
+      } else if (systemPeak > 0.03 && micPeak < 0.015) {
+        setStatusHint("signal_check_system_only", "bad");
+      } else {
+        setStatusHint("signal_check_ok", "good");
+      }
     } else {
       setSignal("signal_no_audio");
       setStatusHint("signal_check_fail", "bad");
@@ -1133,10 +1848,19 @@ const checkSignal = async () => {
     if (!keepStream) {
       closeAudioMeter();
       if (state.stream) {
-        state.stream.getTracks().forEach((t) => t.stop());
+        try {
+          state.stream.getTracks().forEach((track) => track.stop());
+        } catch (err) {
+          void err;
+        }
       }
       state.stream = null;
       state.streamDeviceId = "";
+      state.streamKey = "";
+      state.screenAudioMissing = false;
+      state.micAdded = false;
+      closeMixGraph();
+      stopInputStreams();
     }
   } catch (err) {
     console.warn("signal check failed", err);
@@ -1228,6 +1952,14 @@ const uploadAudioFile = async () => {
 const updateCaptureUi = () => {
   const mode = getCaptureMode();
   els.deviceSelect.disabled = mode === "screen";
+  if (els.includeMic) {
+    if (mode === "system") {
+      els.includeMic.checked = true;
+      els.includeMic.disabled = true;
+    } else {
+      els.includeMic.disabled = false;
+    }
+  }
 };
 
 const toggleDriverHelp = () => {
@@ -1390,7 +2122,12 @@ const handleRecordAction = async (event) => {
       { headers: buildHeaders() }
     );
     if (view.ok) {
-      if (els.transcriptClean) els.transcriptClean.value = await view.text();
+      const text = await view.text();
+      if (source === "raw" && els.transcriptRaw) {
+        els.transcriptRaw.value = text;
+      } else if (source === "clean" && els.transcriptClean) {
+        els.transcriptClean.value = text;
+      }
     }
     const url = `/v1/meetings/${meetingId}/artifact?kind=${source}&fmt=txt`;
     const filename = source === "raw" ? "raw_export.txt" : "clean_export.txt";
@@ -1428,6 +2165,11 @@ document.querySelectorAll('input[name="captureMode"]').forEach((el) => {
 });
 
 els.refreshDevices.addEventListener("click", listDevices);
+if (els.deviceSelect) {
+  els.deviceSelect.addEventListener("change", () => {
+    void listDevices();
+  });
+}
 els.checkDriver.addEventListener("click", checkDriver);
 if (els.themeLight) {
   els.themeLight.addEventListener("click", () => applyTheme("light"));

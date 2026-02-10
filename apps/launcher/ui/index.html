@@ -114,6 +114,29 @@
         errorEl.textContent = err || "";
       };
 
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const waitAppReady = async (baseUrl, timeoutMs = 12000) => {
+        const startAt = Date.now();
+        const normalized = String(baseUrl || "").replace(/\/+$/, "");
+        const healthUrl = `${normalized}/health`;
+        const rootUrl = `${normalized}/`;
+
+        while (Date.now() - startAt < timeoutMs) {
+          try {
+            const [health, root] = await Promise.all([
+              fetch(healthUrl, { cache: "no-store" }),
+              fetch(rootUrl, { cache: "no-store" }),
+            ]);
+            if (health.ok && root.ok) return true;
+          } catch (err) {
+            // wait and retry
+          }
+          await sleep(300);
+        }
+        return false;
+      };
+
       const refresh = async () => {
         const res = await fetch("/api/status");
         const data = await res.json();
@@ -135,13 +158,19 @@
       };
       openBtn.onclick = async () => {
         try {
-          const startRes = await fetch("/api/start", { method: "POST" });
+          const startRes = await fetch("/api/open", { method: "POST" });
           const startData = await startRes.json();
           if (!startData.ok || !startData.url) {
             setStatus("error", startData.error || "start_failed");
             return;
           }
-          window.open(startData.url, "_blank");
+          setStatus("running", "");
+          const ready = await waitAppReady(startData.url);
+          if (!ready) {
+            setStatus("error", "Агент не ответил вовремя. Нажмите «Открыть веб‑интерфейс» ещё раз.");
+            return;
+          }
+          window.location.href = startData.url;
         } catch (err) {
           setStatus("error", String(err));
         }

@@ -16,20 +16,20 @@
 }
 
 body[data-theme="dark"] {
-  --bg: #151920;
-  --bg-accent: #1f2530;
-  --card: #1f2631;
-  --card-soft: #27313f;
-  --ink-1: #f3f6fc;
-  --ink-2: #bec8d8;
-  --accent: #6a97ff;
-  --accent-2: #4cb6ff;
-  --border: #3a4658;
-  --shadow: 0 14px 30px rgba(4, 8, 14, 0.42);
-  --ok-bg: #274636;
-  --ok-ink: #d9f9e7;
-  --bad-bg: #5d3742;
-  --bad-ink: #ffe9ee;
+  --bg: #171c24;
+  --bg-accent: #283548;
+  --card: #243143;
+  --card-soft: #2f3d52;
+  --ink-1: #f4f7fd;
+  --ink-2: #c8d3e6;
+  --accent: #78abff;
+  --accent-2: #5ec1ff;
+  --border: #4f627e;
+  --shadow: 0 16px 36px rgba(8, 11, 20, 0.4);
+  --ok-bg: #2a5b45;
+  --ok-ink: #ecfff3;
+  --bad-bg: #6f3a48;
+  --bad-ink: #fff3f6;
 }
 
 * {
@@ -43,14 +43,14 @@ body {
   color: var(--ink-1);
   background:
     radial-gradient(
-      1200px 600px at 85% -120px,
-      color-mix(in srgb, var(--bg-accent) 65%, transparent),
-      transparent 60%
+      1200px 620px at 85% -120px,
+      color-mix(in srgb, var(--bg-accent) 56%, transparent),
+      transparent 62%
     ),
     radial-gradient(
-      900px 420px at -10% -180px,
-      color-mix(in srgb, var(--accent-2) 12%, transparent),
-      transparent 70%
+      980px 480px at -10% -200px,
+      color-mix(in srgb, var(--accent-2) 10%, transparent),
+      transparent 72%
     ),
     var(--bg);
 }
@@ -63,26 +63,32 @@ body {
   background:
     linear-gradient(
       to bottom,
-      color-mix(in srgb, var(--accent) 3%, transparent),
-      transparent 22%
+      color-mix(in srgb, var(--accent) 5%, transparent),
+      transparent 26%
     ),
     repeating-linear-gradient(
       to right,
       transparent 0,
-      transparent 39px,
-      color-mix(in srgb, var(--ink-2) 6%, transparent) 40px
+      transparent 47px,
+      color-mix(in srgb, var(--ink-2) 4%, transparent) 48px
     );
-  opacity: 0.22;
+  opacity: 0.16;
   z-index: 0;
 }
 
 body[data-theme="dark"] .bg-layer {
-  background: linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--accent) 6%, transparent),
-    transparent 45%
-  );
-  opacity: 0.18;
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--accent) 14%, transparent),
+      transparent 58%
+    ),
+    radial-gradient(
+      820px 420px at 0% -120px,
+      color-mix(in srgb, var(--accent-2) 14%, transparent),
+      transparent 74%
+    );
+  opacity: 0.2;
 }
 
 .header,
@@ -164,32 +170,29 @@ body[data-theme="dark"] .bg-layer {
   padding: 8px 28px 24px;
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-template-areas:
-    "connection connection connection recording recording recording upload upload upload results results results"
-    "transcript transcript transcript transcript transcript transcript transcript transcript transcript transcript transcript transcript";
   gap: 16px;
   align-items: start;
 }
 
 .card-connection {
-  grid-area: connection;
+  grid-column: span 3;
 }
 
 .card-recording {
-  grid-area: recording;
+  grid-column: span 3;
 }
 
 .card-upload {
-  grid-area: upload;
+  grid-column: span 3;
 }
 
 .card-results {
-  grid-area: results;
+  grid-column: span 3;
 }
 
 .card-transcript {
-  grid-area: transcript;
-  min-height: 720px;
+  grid-column: 1 / -1;
+  min-height: clamp(920px, 86vh, 1320px);
 }
 
 .card {
@@ -307,7 +310,8 @@ button:hover {
 button:disabled {
   cursor: not-allowed;
   transform: none;
-  opacity: 0.74;
+  opacity: 0.5;
+  filter: grayscale(0.18);
 }
 
 .primary,
@@ -467,6 +471,28 @@ button:disabled {
   color: var(--ink-2);
 }
 
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.include-mic {
+  margin-top: 2px;
+}
+
+.mic-picker {
+  margin-top: 4px;
+}
+
+.checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .pill {
   border-radius: 999px;
   padding: 4px 10px;
@@ -596,9 +622,9 @@ button:disabled {
 .transcript-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 18px;
   flex: 1;
-  min-height: 0;
+  min-height: clamp(900px, 84vh, 1300px);
 }
 
 .transcript-box {
@@ -624,11 +650,16 @@ button:disabled {
 
 .transcript-area {
   height: 100%;
-  min-height: 620px;
-  font-size: 16px;
-  line-height: 1.56;
+  min-height: clamp(820px, 80vh, 1180px);
+  font-size: 24px;
+  line-height: 1.75;
   padding: 14px;
   white-space: pre-wrap;
+  background: color-mix(in srgb, var(--card-soft) 90%, var(--card) 10%);
+}
+
+body[data-theme="dark"] .transcript-area {
+  background: color-mix(in srgb, var(--card-soft) 90%, var(--card) 10%);
 }
 
 .footer {
@@ -639,28 +670,52 @@ button:disabled {
   font-size: 13px;
 }
 
-@media (max-width: 1680px) {
+@media (max-width: 1780px) {
+  .card-transcript {
+    min-height: clamp(840px, 82vh, 1240px);
+  }
+}
+
+@media (max-width: 1320px) {
   .layout {
-    grid-template-columns: repeat(8, minmax(0, 1fr));
-    grid-template-areas:
-      "connection connection recording recording upload upload results results"
-      "transcript transcript transcript transcript transcript transcript transcript transcript";
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .card-connection,
+  .card-recording,
+  .card-upload,
+  .card-results {
+    grid-column: span 1;
   }
 
   .card-transcript {
-    min-height: 680px;
+    grid-column: 1 / -1;
+  }
+
+  .transcript-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .card-transcript {
+    min-height: clamp(760px, 76vh, 1080px);
+  }
+
+  .transcript-area {
+    min-height: clamp(680px, 72vh, 980px);
   }
 }
 
 @media (max-width: 1120px) {
   .layout {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      "connection"
-      "recording"
-      "upload"
-      "transcript"
-      "results";
+  }
+
+  .card-connection,
+  .card-recording,
+  .card-upload,
+  .card-results,
+  .card-transcript {
+    grid-column: 1 / -1;
   }
 
   .transcript-grid {
@@ -672,7 +727,7 @@ button:disabled {
   }
 
   .transcript-area {
-    min-height: 520px;
+    min-height: 620px;
   }
 }
 

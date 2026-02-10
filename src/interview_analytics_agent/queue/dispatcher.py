@@ -41,7 +41,14 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def enqueue_stt(*, meeting_id: str, chunk_seq: int, blob_key: str) -> str:
+def enqueue_stt(
+    *,
+    meeting_id: str,
+    chunk_seq: int,
+    blob_key: str,
+    source_track: str | None = None,
+    quality_profile: str = "live",
+) -> str:
     """
     Поставить задачу STT на обработку аудио-чанка.
     """
@@ -52,6 +59,8 @@ def enqueue_stt(*, meeting_id: str, chunk_seq: int, blob_key: str) -> str:
         "meeting_id": meeting_id,
         "chunk_seq": chunk_seq,
         "blob_key": blob_key,
+        "source_track": source_track or "",
+        "quality_profile": quality_profile or "live",
         "timestamp": _now_iso(),
     }
     inject_trace_context(payload, meeting_id=meeting_id, source="queue.stt")
@@ -62,6 +71,8 @@ def enqueue_stt(*, meeting_id: str, chunk_seq: int, blob_key: str) -> str:
             chunk_seq=chunk_seq,
             audio_bytes=audio,
             blob_key=blob_key,
+            source_track=source_track,
+            quality_profile=quality_profile,
         )
         log.info(
             "enqueue_stt_inline",

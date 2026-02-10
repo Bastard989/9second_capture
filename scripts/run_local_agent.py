@@ -92,6 +92,10 @@ def main() -> None:
     os.environ.setdefault("POSTGRES_DSN", "sqlite:///./data/local_agent/agent.db")
     # Для realtime-чанков ~1с VAD часто вырезает фразы целиком.
     # В локальном агенте по умолчанию отключаем, чтобы transcript шел стабильно.
+    os.environ.setdefault("WHISPER_MODEL_SIZE", "medium")
+    os.environ.setdefault("WHISPER_COMPUTE_TYPE", "float32")
+    os.environ.setdefault("WHISPER_BEAM_SIZE_LIVE", "1")
+    os.environ.setdefault("WHISPER_BEAM_SIZE_FINAL", "4")
     os.environ.setdefault("WHISPER_VAD_FILTER", "false")
     _state_dir().mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +106,13 @@ def main() -> None:
     auto_open = os.getenv("LOCAL_AGENT_AUTO_OPEN", "true").lower() in {"1", "true", "yes"}
     if auto_open:
         threading.Timer(0.8, lambda: webbrowser.open(url, new=2)).start()
+
+    # Локальный запуск из исходников: добавляем корень репозитория и src в PYTHONPATH.
+    repo_root = Path(__file__).resolve().parents[1]
+    for path in (repo_root, repo_root / "src"):
+        text = str(path)
+        if text not in sys.path:
+            sys.path.insert(0, text)
 
     try:
         from apps.api_gateway.main import app as fastapi_app
