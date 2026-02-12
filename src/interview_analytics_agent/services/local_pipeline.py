@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from interview_analytics_agent.common.config import get_settings
@@ -21,7 +22,15 @@ from interview_analytics_agent.stt.mock import MockSTTProvider
 log = get_project_logger()
 
 _stt_provider = None
+_stt_warmup_started = False
+_stt_warmup_lock = threading.Lock()
 _TRACK_SPEAKERS = {"system", "mic", "mixed"}
+
+
+def _status_for_chunk_processing(*, finished_at: object | None) -> PipelineStatus:
+    if finished_at is not None:
+        return PipelineStatus.done
+    return PipelineStatus.processing
 
 
 def _normalize_text(value: str) -> str:
@@ -48,9 +57,44 @@ def _extract_missing_tail(*, existing_text: str, backup_text: str) -> str:
         if existing_tokens[-token_count:] == backup_tokens[:token_count]:
             return " ".join(backup_tokens[token_count:]).strip()
 
-    if len(backup_norm) > int(len(existing_norm) * 1.3):
+    # Защита от дублей: если тексты в целом про одно и то же, не добавляем
+    # весь backup как новый сегмент.
+    existing_set = {t for t in existing_tokens if t}
+    backup_set = {t for t in backup_tokens if t}
+    if existing_set and backup_set:
+        shared = len(existing_set & backup_set)
+        min_size = min(len(existing_set), len(backup_set))
+        if min_size > 0 and shared / float(min_size) >= 0.45:
+            return ""
+
+    # Для очень коротких live-частей допустим добавление полного backup.
+    if len(existing_tokens) < 8 and len(backup_tokens) > len(existing_tokens) + 4:
         return backup_norm
     return ""
+
+
+def warmup_stt_provider_async() -> None:
+    """
+    Прогревает модель STT в фоне, чтобы первый live-чанк не зависал
+    на ленивой загрузке модели.
+    """
+    global _stt_warmup_started
+    with _stt_warmup_lock:
+        if _stt_warmup_started:
+            return
+        _stt_warmup_started = True
+
+    def _worker() -> None:
+        try:
+            _get_stt_provider()
+            log.info("stt_warmup_ready")
+        except Exception as e:
+            log.warning(
+                "stt_warmup_failed",
+                extra={"payload": {"err": str(e)[:200]}},
+            )
+
+    threading.Thread(target=_worker, name="stt-warmup", daemon=True).start()
 
 
 def _build_stt_provider():
@@ -125,7 +169,8 @@ def process_chunk_inline(
         srepo = TranscriptSegmentRepository(session)
 
         m = mrepo.ensure(meeting_id=meeting_id, meeting_context={"source": "inline_pipeline"})
-        m.status = PipelineStatus.processing
+        # Если встречу уже завершили, не возвращаем её обратно в processing.
+        m.status = _status_for_chunk_processing(finished_at=m.finished_at)
         mrepo.save(m)
 
         seg = TranscriptSegment(
@@ -229,13 +274,15 @@ def retranscribe_meeting_high_quality(*, meeting_id: str) -> int:
             next_text = (res.text or "").strip()
             if not next_text:
                 continue
+            next_enhanced, _meta = enhance_text(next_text)
+            next_enhanced = (next_enhanced or next_text).strip()
 
             changed = False
             if next_text != (seg.raw_text or ""):
                 seg.raw_text = next_text
                 changed = True
-            if next_text != (seg.enhanced_text or ""):
-                seg.enhanced_text = next_text
+            if next_enhanced != (seg.enhanced_text or ""):
+                seg.enhanced_text = next_enhanced
                 changed = True
             if res.confidence is not None and res.confidence != seg.confidence:
                 seg.confidence = res.confidence

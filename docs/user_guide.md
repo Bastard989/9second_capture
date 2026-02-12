@@ -8,16 +8,23 @@
    macOS: BlackHole или VB‑Cable.
    Windows: VB‑Cable.
    Linux: PulseAudio/PipeWire с monitor‑источником.
+3. Установи Ollama и скачай модель:
+   - `brew install --cask ollama`
+   - `open -a Ollama`
+   - `ollama pull llama3.1:8b`
 
 ## Запуск
 1. Запусти агент: `python3 scripts/run_local_agent.py`.
 2. Откроется локальный веб‑интерфейс на `http://127.0.0.1:<порт>`.
+3. В блоке `LLM модель` нажми `Сканировать`, выбери нужную модель и нажми `Сменить модель`.
+4. После старта записи первые 5-20 секунд возможна инициализация STT-модели.
 
 ## Проверка захвата
 1. Нажми `Check driver` и убедись, что драйвер найден.
 2. Выбери режим захвата:
    `System audio` — системный звук через драйвер.
    `Screen + audio` — захват экрана со звуком (fallback).
+   Если системный звук экрана недоступен, агент попробует продолжить в режиме mic-only.
 3. Нажми `Check capture` и убедись, что индикатор уровня реагирует.
 
 ## Запись встречи
@@ -34,7 +41,15 @@
 1. Выбери файл в `Upload audio`.
 2. Нажми `Upload audio`, затем работай с результатами как с обычной записью.
 
+## Quick fallback запись
+1. В блоке `Upload` заполни `Meeting URL` и `Duration`.
+2. Нажми `Quick start`.
+3. При необходимости включи:
+   - `Run local transcription`
+   - `Upload recording to agent pipeline`
+4. Для досрочной остановки нажми `Quick stop`.
+
 ## Примечания
 1. Все данные остаются локально.
 2. Кнопка `Video (in development)` пока недоступна.
-3. Для LLM‑отчётов нужно настроить `OPENAI_API_BASE` и `OPENAI_API_KEY` или использовать локальный LLM.
+3. Для LLM‑отчётов нужно настроить `OPENAI_API_BASE` и `OPENAI_API_KEY` или использовать локальный Ollama.

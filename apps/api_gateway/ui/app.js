@@ -13,6 +13,8 @@ const state = {
   audioContext: null,
   analyser: null,
   meterMode: "",
+  signalSmooth: 0,
+  signalState: "signal_waiting",
   mixContext: null,
   mixNodes: [],
   levelTimer: null,
@@ -49,11 +51,47 @@ const state = {
   httpDrainTimer: null,
   httpDrainInProgress: false,
   backupRecorder: null,
+  wsHeartbeatTimer: null,
+  wsPongTimer: null,
+  wsAwaitingPong: false,
+  wsHasServerActivity: false,
+  wsBootstrapDeadlineMs: 0,
+  wsLastServerActivityMs: 0,
+  lastAckSeq: -1,
+  deviceStatusKey: "device_status_unknown",
+  deviceStatusStyle: "muted",
+  deviceStatusCount: 0,
+  llmModels: [],
+  llmStatusKey: "llm_status_loading",
+  llmStatusStyle: "muted",
+  llmStatusText: "",
+  llmStatusParams: {},
+  quickJobId: null,
+  quickStatusKey: "quick_record_state_idle",
+  quickStatusStyle: "muted",
+  quickHintKey: "quick_record_hint_ready",
+  quickHintText: "",
+  quickHintStyle: "muted",
+  quickPollTimer: null,
+  instanceId: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+  captureLockTimer: null,
 };
 
 const PREFER_PCM_CAPTURE = true;
-const CHUNK_TIMESLICE_MS = 3000;
+const CHUNK_TIMESLICE_MS = 3800;
 const HTTP_DRAIN_INTERVAL_MS = 1400;
+const WS_HEARTBEAT_INTERVAL_MS = 12000;
+const WS_PONG_TIMEOUT_MS = 25000;
+const WS_BOOTSTRAP_GRACE_MS = 90000;
+const MEDIA_BUSY_RETRY_DELAYS_MS = [180, 420, 900];
+const SIGNAL_SMOOTHING_ALPHA = 0.24;
+const SIGNAL_OK_ENTER = 0.08;
+const SIGNAL_OK_EXIT = 0.06;
+const SIGNAL_LOW_ENTER = 0.025;
+const SIGNAL_LOW_EXIT = 0.015;
+const CAPTURE_LOCK_KEY = "9second_capture_active_lock";
+const CAPTURE_LOCK_TTL_MS = 20000;
+const CAPTURE_LOCK_HEARTBEAT_MS = 4000;
 const VIRTUAL_DEVICE_PATTERNS = [
   "blackhole",
   "vb-cable",
@@ -73,9 +111,29 @@ const i18n = {
     connection_title: "Подключение",
     api_key_label: "API ключ (опционально)",
     api_key_placeholder: "X-API-Key",
+    llm_model_label: "LLM модель",
+    llm_scan_btn: "Сканировать",
+    llm_apply_btn: "Сменить модель",
+    llm_status_loading: "Загружаем настройки LLM...",
+    llm_status_ready: "LLM включен. Текущая модель: {model}.",
+    llm_status_disabled: "LLM выключен (LLM_ENABLED=false).",
+    llm_status_scanning: "Сканируем модели...",
+    llm_status_scan_done: "Найдено моделей: {count}. Текущая: {model}.",
+    llm_status_scan_empty: "Модели не найдены. Текущая: {model}.",
+    llm_status_applied: "Модель переключена: {model}.",
+    llm_status_apply_failed: "Не удалось переключить модель.",
+    llm_status_unavailable:
+      "LLM API недоступен. Проверьте Ollama/OPENAI_API_BASE.",
+    llm_model_placeholder: "Выберите модель",
+    llm_model_missing: "Сначала выберите модель.",
     device_label: "Источник аудио",
     refresh_devices: "Обновить",
     device_hint: "Выберите виртуальный драйвер захвата системного звука.",
+    device_status_unknown: "Устройства не проверены.",
+    device_status_count: "Найдено аудиоисточников: {count}.",
+    device_status_empty: "Аудиоисточники не найдены.",
+    device_status_access_denied:
+      "Нет доступа к аудиоустройствам. Разрешите доступ в браузере и обновите список.",
     driver_check: "Проверить драйвер",
     driver_help_btn: "Инструкция",
     os_mac: "macOS",
@@ -161,6 +219,29 @@ const i18n = {
     upload_video_label: "Видео файл",
     upload_video_btn: "Видео (в разработке)",
     upload_hint: "Видео‑анализ появится после интеграции мультимодальной LLM.",
+    quick_record_title: "Quick fallback запись",
+    quick_record_url_label: "Ссылка встречи",
+    quick_record_url_placeholder: "https://...",
+    quick_record_duration_label: "Длительность (сек)",
+    quick_record_transcribe_label: "Сделать локальную транскрибацию",
+    quick_record_upload_label: "Отправить запись в пайплайн агента",
+    quick_record_start_btn: "Quick старт",
+    quick_record_stop_btn: "Quick стоп",
+    quick_record_state_idle: "Не запущено",
+    quick_record_state_running: "Идет запись",
+    quick_record_state_stopping: "Останавливаем",
+    quick_record_state_completed: "Завершено",
+    quick_record_state_failed: "Ошибка",
+    quick_record_hint_ready: "Fallback запись готова к запуску.",
+    quick_record_hint_started: "Fallback запись запущена.",
+    quick_record_hint_stopped: "Fallback запись остановлена.",
+    quick_record_hint_missing_url: "Укажите ссылку встречи (http/https).",
+    quick_record_hint_missing_duration: "Укажите корректную длительность (>= 5 сек).",
+    quick_record_hint_already_running: "Quick запись уже выполняется.",
+    quick_record_hint_start_failed: "Не удалось запустить quick запись.",
+    quick_record_hint_stop_failed: "Не удалось остановить quick запись.",
+    quick_record_hint_failed: "Quick запись завершилась с ошибкой: {error}",
+    quick_record_hint_completed: "Quick запись завершена: {path}",
     help_title: "Как настроить звук",
     help_item_1: "Установите драйвер loopback (BlackHole / VB-Cable / PulseAudio).",
     help_item_2: "macOS: BlackHole + Multi‑Output Device (колонки + BlackHole).",
@@ -176,8 +257,14 @@ const i18n = {
       "Аудиоустройство не найдено. Проверьте выбранный источник и драйвер.",
     err_media_not_readable:
       "Источник аудио занят другим приложением или недоступен.",
+    warn_system_source_fallback:
+      "Выбранный источник недоступен. Автоматически переключились на другой аудиовход.",
+    err_capture_locked_other_tab:
+      "Запись уже запущена в другом окне/вкладке. Остановите её там и повторите.",
     err_no_device_selected:
       "Не выбран источник аудио. Выберите устройство и повторите.",
+    err_system_source_not_virtual:
+      "Выбран не виртуальный системный источник. Для встреч выберите BlackHole/VB-CABLE/Monitor.",
     err_screen_audio_missing:
       "В режиме «Экран + звук» включите «Share audio» в окне выбора экрана.",
     err_server_start: "Не удалось создать встречу на локальном API.",
@@ -198,6 +285,8 @@ const i18n = {
       "Резервный аудиофайл не удалось отправить. Часть хвоста записи может не попасть в финальный текст.",
     err_generic: "Не удалось начать запись. Проверьте права браузера и источник аудио.",
     hint_recording_ok: "Запись запущена. Транскрипт будет обновляться в реальном времени.",
+    hint_stt_warmup:
+      "Инициализация распознавания... первые фразы могут появиться с задержкой 5-20 секунд.",
     hint_no_speech_yet:
       "Пока нет распознанной речи. Проверьте источник: в «Системном звуке» звук встречи должен идти в BlackHole/VB-CABLE; в «Экран + звук» включите Share audio; для голоса убедитесь, что микрофон добавлен.",
   },
@@ -209,9 +298,29 @@ const i18n = {
     connection_title: "Connection",
     api_key_label: "API key (optional)",
     api_key_placeholder: "X-API-Key",
+    llm_model_label: "LLM model",
+    llm_scan_btn: "Scan",
+    llm_apply_btn: "Switch model",
+    llm_status_loading: "Loading LLM settings...",
+    llm_status_ready: "LLM enabled. Current model: {model}.",
+    llm_status_disabled: "LLM is disabled (LLM_ENABLED=false).",
+    llm_status_scanning: "Scanning models...",
+    llm_status_scan_done: "Models found: {count}. Current: {model}.",
+    llm_status_scan_empty: "No models found. Current: {model}.",
+    llm_status_applied: "Model switched: {model}.",
+    llm_status_apply_failed: "Failed to switch model.",
+    llm_status_unavailable:
+      "LLM API is unavailable. Check Ollama/OPENAI_API_BASE.",
+    llm_model_placeholder: "Select model",
+    llm_model_missing: "Select a model first.",
     device_label: "Audio source",
     refresh_devices: "Refresh",
     device_hint: "Select the virtual driver that captures system audio.",
+    device_status_unknown: "Audio devices are not checked yet.",
+    device_status_count: "Audio sources found: {count}.",
+    device_status_empty: "No audio sources found.",
+    device_status_access_denied:
+      "Audio device access is denied. Allow browser permissions and refresh the list.",
     driver_check: "Check driver",
     driver_help_btn: "Instructions",
     os_mac: "macOS",
@@ -296,6 +405,29 @@ const i18n = {
     upload_video_label: "Video file",
     upload_video_btn: "Video (in development)",
     upload_hint: "Video analysis will arrive with multimodal LLM support.",
+    quick_record_title: "Quick fallback capture",
+    quick_record_url_label: "Meeting URL",
+    quick_record_url_placeholder: "https://...",
+    quick_record_duration_label: "Duration (sec)",
+    quick_record_transcribe_label: "Run local transcription",
+    quick_record_upload_label: "Upload recording to agent pipeline",
+    quick_record_start_btn: "Quick start",
+    quick_record_stop_btn: "Quick stop",
+    quick_record_state_idle: "Idle",
+    quick_record_state_running: "Recording",
+    quick_record_state_stopping: "Stopping",
+    quick_record_state_completed: "Completed",
+    quick_record_state_failed: "Failed",
+    quick_record_hint_ready: "Fallback recorder is ready.",
+    quick_record_hint_started: "Fallback recording started.",
+    quick_record_hint_stopped: "Fallback recording stop requested.",
+    quick_record_hint_missing_url: "Provide meeting URL (http/https).",
+    quick_record_hint_missing_duration: "Provide valid duration (>= 5 sec).",
+    quick_record_hint_already_running: "Quick recorder is already running.",
+    quick_record_hint_start_failed: "Failed to start quick recorder.",
+    quick_record_hint_stop_failed: "Failed to stop quick recorder.",
+    quick_record_hint_failed: "Quick recorder failed: {error}",
+    quick_record_hint_completed: "Quick recording completed: {path}",
     help_title: "Audio setup",
     help_item_1: "Install a loopback driver (BlackHole / VB-Cable / PulseAudio).",
     help_item_2: "macOS: BlackHole + Multi‑Output Device (speakers + BlackHole).",
@@ -308,8 +440,14 @@ const i18n = {
       "Browser denied audio access. Allow microphone/screen capture and retry.",
     err_media_not_found: "Audio device not found. Check selected source and driver.",
     err_media_not_readable: "Audio source is busy or unavailable.",
+    warn_system_source_fallback:
+      "Selected source is unavailable. Switched automatically to another audio input.",
+    err_capture_locked_other_tab:
+      "Recording is already running in another tab/window. Stop it there and retry.",
     err_no_device_selected:
       "Audio source is not selected. Choose a device and retry.",
+    err_system_source_not_virtual:
+      "Selected source is not a virtual system input. Choose BlackHole/VB-CABLE/Monitor for meetings.",
     err_screen_audio_missing:
       "In “Screen + audio” mode, enable “Share audio” in browser capture dialog.",
     err_server_start: "Unable to create meeting on local API.",
@@ -330,6 +468,8 @@ const i18n = {
       "Backup audio upload failed. A tail part of recording may be missing in final transcript.",
     err_generic: "Unable to start recording. Check browser permissions and source.",
     hint_recording_ok: "Recording started. Transcript updates in real time.",
+    hint_stt_warmup:
+      "Speech recognition is initializing... first phrases may appear with a 5-20 second delay.",
     hint_no_speech_yet:
       "No recognized speech yet. Verify source routing: in “System audio” route meeting output to BlackHole/VB-CABLE; in “Screen + audio” enable Share audio; for voice capture ensure microphone is added.",
   },
@@ -337,7 +477,12 @@ const i18n = {
 
 const els = {
   apiKey: document.getElementById("apiKey"),
+  llmModelSelect: document.getElementById("llmModelSelect"),
+  scanLlmModels: document.getElementById("scanLlmModels"),
+  applyLlmModel: document.getElementById("applyLlmModel"),
+  llmStatusText: document.getElementById("llmStatusText"),
   deviceSelect: document.getElementById("deviceSelect"),
+  deviceStatusText: document.getElementById("deviceStatusText"),
   refreshDevices: document.getElementById("refreshDevices"),
   checkDriver: document.getElementById("checkDriver"),
   includeMic: document.getElementById("includeMic"),
@@ -371,6 +516,14 @@ const els = {
   uploadAudioBtn: document.getElementById("uploadAudioBtn"),
   uploadVideo: document.getElementById("uploadVideo"),
   uploadVideoBtn: document.getElementById("uploadVideoBtn"),
+  quickRecordUrl: document.getElementById("quickRecordUrl"),
+  quickRecordDuration: document.getElementById("quickRecordDuration"),
+  quickRecordTranscribe: document.getElementById("quickRecordTranscribe"),
+  quickRecordUpload: document.getElementById("quickRecordUpload"),
+  quickRecordStart: document.getElementById("quickRecordStart"),
+  quickRecordStop: document.getElementById("quickRecordStop"),
+  quickRecordState: document.getElementById("quickRecordState"),
+  quickRecordHint: document.getElementById("quickRecordHint"),
   themeLight: document.getElementById("themeLight"),
   themeDark: document.getElementById("themeDark"),
 };
@@ -388,6 +541,8 @@ const updateI18n = () => {
   });
   setDriverStatus(state.driverStatusKey, state.driverStatusStyle);
   setFolderStatus(state.folderStatusKey, state.folderStatusStyle);
+  renderDeviceStatus();
+  renderLlmStatus();
   if (state.statusHintKey) {
     setStatusHint(state.statusHintKey, state.statusHintStyle);
   } else if (state.statusHintText) {
@@ -402,6 +557,15 @@ const updateI18n = () => {
   }
   if (els.themeLight) els.themeLight.textContent = dict.theme_light || "Light";
   if (els.themeDark) els.themeDark.textContent = dict.theme_dark || "Dark";
+  if (els.llmModelSelect && !state.llmModels.length) {
+    setLlmModelOptions([], "");
+  }
+  setQuickStatus(state.quickStatusKey || "quick_record_state_idle", state.quickStatusStyle || "muted");
+  if (state.quickHintKey) {
+    setQuickHint(state.quickHintKey, state.quickHintStyle || "muted", false);
+  } else if (state.quickHintText) {
+    setQuickHint(state.quickHintText, state.quickHintStyle || "muted", true);
+  }
 };
 
 const setStatus = (statusKey, style) => {
@@ -437,6 +601,7 @@ const setStatusHint = (messageKeyOrText = "", style = "muted", isRaw = false) =>
 const setSignal = (statusKey) => {
   const dict = i18n[state.lang];
   els.signalText.textContent = dict[statusKey] || statusKey;
+  state.signalState = statusKey;
 };
 
 const setDriverStatus = (statusKey, style) => {
@@ -453,6 +618,137 @@ const setFolderStatus = (statusKey, style) => {
   els.folderStatus.className = `pill ${style || "muted"}`;
   state.folderStatusKey = statusKey;
   state.folderStatusStyle = style || "muted";
+};
+
+const setQuickStatus = (statusKey, style = "muted") => {
+  if (!els.quickRecordState) return;
+  const dict = i18n[state.lang] || {};
+  els.quickRecordState.textContent = dict[statusKey] || statusKey;
+  els.quickRecordState.className = `pill ${style || "muted"}`;
+  state.quickStatusKey = statusKey;
+  state.quickStatusStyle = style || "muted";
+};
+
+const setQuickHint = (hintKeyOrText = "", style = "muted", isRaw = false, params = {}) => {
+  if (!els.quickRecordHint) return;
+  const dict = i18n[state.lang] || {};
+  let text = "";
+  if (!hintKeyOrText) {
+    text = "";
+    state.quickHintKey = "";
+    state.quickHintText = "";
+    state.quickHintStyle = "muted";
+  } else if (!isRaw && dict[hintKeyOrText]) {
+    text = formatText(dict[hintKeyOrText], params);
+    state.quickHintKey = hintKeyOrText;
+    state.quickHintText = "";
+    state.quickHintStyle = style || "muted";
+  } else {
+    text = String(hintKeyOrText);
+    state.quickHintKey = "";
+    state.quickHintText = text;
+    state.quickHintStyle = style || "muted";
+  }
+  els.quickRecordHint.textContent = text;
+  els.quickRecordHint.className = `hint ${style || "muted"}`;
+};
+
+const formatText = (template, params = {}) => {
+  let text = String(template || "");
+  Object.entries(params).forEach(([key, value]) => {
+    text = text.replaceAll(`{${key}}`, String(value));
+  });
+  return text;
+};
+
+const renderDeviceStatus = () => {
+  if (!els.deviceStatusText) return;
+  const dict = i18n[state.lang] || {};
+  const template = dict[state.deviceStatusKey] || state.deviceStatusKey;
+  const text = formatText(template, { count: state.deviceStatusCount || 0 });
+  els.deviceStatusText.textContent = text;
+  els.deviceStatusText.className = `hint device-status ${state.deviceStatusStyle || "muted"}`;
+};
+
+const setDeviceStatus = (statusKey, style = "muted", count = 0) => {
+  state.deviceStatusKey = statusKey;
+  state.deviceStatusStyle = style;
+  state.deviceStatusCount = Number.isFinite(count) ? Number(count) : 0;
+  renderDeviceStatus();
+};
+
+const renderLlmStatus = () => {
+  if (!els.llmStatusText) return;
+  const dict = i18n[state.lang] || {};
+  let text = state.llmStatusText;
+  if (!text) {
+    const template = dict[state.llmStatusKey] || state.llmStatusKey;
+    text = formatText(template, state.llmStatusParams || {});
+  }
+  els.llmStatusText.textContent = text;
+  els.llmStatusText.className = `hint llm-status ${state.llmStatusStyle || "muted"}`;
+};
+
+const setLlmStatus = (
+  statusKeyOrText = "llm_status_loading",
+  style = "muted",
+  params = {},
+  isRaw = false
+) => {
+  state.llmStatusStyle = style || "muted";
+  state.llmStatusParams = params || {};
+  if (isRaw) {
+    state.llmStatusText = String(statusKeyOrText || "");
+    state.llmStatusKey = "";
+  } else {
+    state.llmStatusKey = String(statusKeyOrText || "");
+    state.llmStatusText = "";
+  }
+  renderLlmStatus();
+};
+
+const setLlmModelOptions = (models = [], preferredModel = "") => {
+  if (!els.llmModelSelect) return;
+  const incoming = Array.isArray(models) ? models : [];
+  const normalized = incoming
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const unique = [];
+  normalized.forEach((model) => {
+    if (seen.has(model)) return;
+    seen.add(model);
+    unique.push(model);
+  });
+
+  const currentValue = String(preferredModel || els.llmModelSelect.value || "").trim();
+  if (currentValue && !seen.has(currentValue)) {
+    unique.push(currentValue);
+  }
+  state.llmModels = unique;
+
+  els.llmModelSelect.innerHTML = "";
+  if (!unique.length) {
+    const emptyOpt = document.createElement("option");
+    emptyOpt.value = "";
+    emptyOpt.textContent = i18n[state.lang].llm_model_placeholder || "Select model";
+    els.llmModelSelect.appendChild(emptyOpt);
+    els.llmModelSelect.value = "";
+    return;
+  }
+
+  unique.forEach((model) => {
+    const opt = document.createElement("option");
+    opt.value = model;
+    opt.textContent = model;
+    els.llmModelSelect.appendChild(opt);
+  });
+
+  if (currentValue && unique.includes(currentValue)) {
+    els.llmModelSelect.value = currentValue;
+  } else {
+    els.llmModelSelect.value = unique[0];
+  }
 };
 
 const applyTheme = (theme) => {
@@ -522,6 +818,84 @@ const buildAuthHeaders = () => {
   return headers;
 };
 
+const nowMs = () => Date.now();
+
+const readCaptureLock = () => {
+  try {
+    const raw = localStorage.getItem(CAPTURE_LOCK_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object") return null;
+    const owner = String(data.owner || "").trim();
+    const ts = Number(data.ts || 0);
+    const meetingId = String(data.meetingId || "").trim();
+    if (!owner || !Number.isFinite(ts) || ts <= 0) return null;
+    return { owner, ts, meetingId };
+  } catch (_err) {
+    return null;
+  }
+};
+
+const writeCaptureLock = (meetingId = "") => {
+  try {
+    localStorage.setItem(
+      CAPTURE_LOCK_KEY,
+      JSON.stringify({
+        owner: state.instanceId,
+        ts: nowMs(),
+        meetingId: String(meetingId || ""),
+      })
+    );
+  } catch (_err) {
+    // ignore storage failures
+  }
+};
+
+const clearCaptureLock = () => {
+  try {
+    const current = readCaptureLock();
+    if (!current) return;
+    if (current.owner !== state.instanceId) return;
+    localStorage.removeItem(CAPTURE_LOCK_KEY);
+  } catch (_err) {
+    // ignore storage failures
+  }
+};
+
+const pruneStaleCaptureLock = () => {
+  try {
+    const lock = readCaptureLock();
+    if (!lock) return;
+    if (nowMs() - lock.ts <= CAPTURE_LOCK_TTL_MS) return;
+    localStorage.removeItem(CAPTURE_LOCK_KEY);
+  } catch (_err) {
+    // ignore storage failures
+  }
+};
+
+const isCaptureLockedByOtherTab = () => {
+  const lock = readCaptureLock();
+  if (!lock) return { locked: false, meetingId: "" };
+  if (lock.owner === state.instanceId) return { locked: false, meetingId: lock.meetingId };
+  if (nowMs() - lock.ts > CAPTURE_LOCK_TTL_MS) return { locked: false, meetingId: lock.meetingId };
+  return { locked: true, meetingId: lock.meetingId };
+};
+
+const startCaptureLockHeartbeat = () => {
+  if (state.captureLockTimer) return;
+  state.captureLockTimer = setInterval(() => {
+    writeCaptureLock(state.meetingId || "");
+  }, CAPTURE_LOCK_HEARTBEAT_MS);
+};
+
+const stopCaptureLockHeartbeat = () => {
+  if (state.captureLockTimer) {
+    clearInterval(state.captureLockTimer);
+  }
+  state.captureLockTimer = null;
+  clearCaptureLock();
+};
+
 const isVirtualAudioDevice = (label = "") => {
   const normalized = String(label || "").toLowerCase();
   if (!normalized) return false;
@@ -551,8 +925,23 @@ const pickMicDeviceId = async (excludeDeviceId = "", selectedMicId = "") => {
   return preferred || "";
 };
 
-const listDevices = async () => {
+const listDevices = async (options = {}) => {
+  const { requestAccess = false } = options;
   try {
+    if (
+      requestAccess &&
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === "function" &&
+      !isRecordingFlowActive()
+    ) {
+      try {
+        const tmpStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tmpStream.getTracks().forEach((track) => track.stop());
+      } catch (err) {
+        console.warn("audio permission for device refresh failed", err);
+      }
+    }
+
     const devices = await navigator.mediaDevices.enumerateDevices();
     const inputs = devices
       .filter((d) => d.kind === "audioinput")
@@ -582,8 +971,10 @@ const listDevices = async () => {
         autoOpt.textContent = i18n[state.lang].mic_input_auto || "Auto (recommended)";
         els.micSelect.appendChild(autoOpt);
       }
+      setDeviceStatus("device_status_empty", "bad", 0);
       return;
     }
+    setDeviceStatus("device_status_count", "muted", inputs.length);
     const hasPrev = inputs.some((d) => d.deviceId === prevValue);
     if (hasPrev) {
       els.deviceSelect.value = prevValue;
@@ -625,6 +1016,108 @@ const listDevices = async () => {
     }
   } catch (err) {
     console.warn("device list failed", err);
+    const denied = err && typeof err === "object" && err.name === "NotAllowedError";
+    if (denied) {
+      setDeviceStatus("device_status_access_denied", "bad", 0);
+    } else {
+      setDeviceStatus("device_status_unknown", "bad", 0);
+    }
+  }
+};
+
+const fetchLlmStatus = async (options = {}) => {
+  const { scanAfter = false } = options;
+  if (!els.llmModelSelect) return;
+  setLlmStatus("llm_status_loading", "muted");
+  try {
+    const res = await fetch("/v1/llm/status", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`llm_status_failed_${res.status}`);
+    }
+    const data = await res.json();
+    const currentModel = String(data.model_id || "").trim();
+    if (currentModel) {
+      setLlmModelOptions([currentModel], currentModel);
+    } else {
+      setLlmModelOptions([], "");
+    }
+    if (!data.llm_enabled) {
+      setLlmStatus("llm_status_disabled", "bad");
+      return;
+    }
+    setLlmStatus("llm_status_ready", "good", { model: currentModel || "—" });
+    if (scanAfter) {
+      await scanLlmModels({ silentErrors: true });
+    }
+  } catch (err) {
+    console.warn("llm status fetch failed", err);
+    setLlmStatus("llm_status_unavailable", "bad");
+  }
+};
+
+const scanLlmModels = async (options = {}) => {
+  const { silentErrors = false } = options;
+  if (!els.llmModelSelect) return;
+  setLlmStatus("llm_status_scanning", "muted");
+  if (els.scanLlmModels) els.scanLlmModels.disabled = true;
+  if (els.applyLlmModel) els.applyLlmModel.disabled = true;
+  try {
+    const res = await fetch("/v1/llm/models", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`llm_models_failed_${res.status}`);
+    }
+    const data = await res.json();
+    const models = Array.isArray(data.models) ? data.models : [];
+    const currentModel = String(
+      data.current_model || els.llmModelSelect.value || ""
+    ).trim();
+    setLlmModelOptions(models, currentModel);
+    const selectedModel = String(els.llmModelSelect.value || currentModel || "—");
+    if (models.length) {
+      setLlmStatus("llm_status_scan_done", "good", {
+        count: models.length,
+        model: selectedModel,
+      });
+    } else {
+      setLlmStatus("llm_status_scan_empty", "bad", { model: selectedModel });
+    }
+  } catch (err) {
+    console.warn("llm model scan failed", err);
+    if (!silentErrors) {
+      setLlmStatus("llm_status_unavailable", "bad");
+    }
+  } finally {
+    if (els.scanLlmModels) els.scanLlmModels.disabled = false;
+    if (els.applyLlmModel) els.applyLlmModel.disabled = false;
+  }
+};
+
+const applyLlmModel = async () => {
+  if (!els.llmModelSelect) return;
+  const modelId = String(els.llmModelSelect.value || "").trim();
+  if (!modelId) {
+    setLlmStatus("llm_model_missing", "bad");
+    return;
+  }
+  if (els.applyLlmModel) els.applyLlmModel.disabled = true;
+  try {
+    const res = await fetch("/v1/llm/model", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({ model_id: modelId }),
+    });
+    if (!res.ok) {
+      throw new Error(`llm_model_update_failed_${res.status}`);
+    }
+    const data = await res.json();
+    const appliedModel = String(data.model_id || modelId).trim();
+    setLlmModelOptions(state.llmModels.length ? state.llmModels : [appliedModel], appliedModel);
+    setLlmStatus("llm_status_applied", "good", { model: appliedModel || "—" });
+  } catch (err) {
+    console.warn("llm model switch failed", err);
+    setLlmStatus("llm_status_apply_failed", "bad");
+  } finally {
+    if (els.applyLlmModel) els.applyLlmModel.disabled = false;
   }
 };
 
@@ -671,6 +1164,32 @@ const ensureAudioContextActive = async (ctx) => {
   }
 };
 
+const sleepMs = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, Number(ms) || 0));
+  });
+
+const isDeviceBusyError = (err) => {
+  const name = err && typeof err === "object" ? String(err.name || "") : "";
+  return name === "NotReadableError" || name === "AbortError";
+};
+
+const withBusyRetry = async (openFn, delays = MEDIA_BUSY_RETRY_DELAYS_MS) => {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      return await openFn();
+    } catch (err) {
+      lastErr = err;
+      if (!isDeviceBusyError(err) || attempt >= delays.length) {
+        throw err;
+      }
+      await sleepMs(delays[attempt]);
+    }
+  }
+  throw lastErr || new Error("media_open_failed");
+};
+
 const buildMixedAudioStream = async (baseStream, includeMic, selectedMicId = "") => {
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return { stream: baseStream, micAdded: false, micError: "" };
@@ -714,9 +1233,11 @@ const buildMixedAudioStream = async (baseStream, includeMic, selectedMicId = "")
       if (!preferredMicId && selectedSystemDeviceId) {
         throw new Error("mic_not_found");
       }
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: preferredMicId ? { deviceId: { exact: preferredMicId } } : true,
-      });
+      micStream = await withBusyRetry(() =>
+        navigator.mediaDevices.getUserMedia({
+          audio: preferredMicId ? { deviceId: { exact: preferredMicId } } : true,
+        })
+      );
       connectStream(micStream, 1);
       micAdded = true;
     } catch (err) {
@@ -772,22 +1293,80 @@ const ensureStream = async (mode, options = {}) => {
 
   let baseStream;
   if (mode === "screen") {
-    baseStream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: true,
-    });
-    state.screenAudioMissing = !baseStream.getAudioTracks().length;
+    try {
+      baseStream = await withBusyRetry(
+        () =>
+          navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: true,
+          }),
+        [220, 520]
+      );
+    } catch (err) {
+      if (!isDeviceBusyError(err)) {
+        throw err;
+      }
+      // Fallback: если системный звук экрана временно недоступен,
+      // продолжаем с видео+микрофоном (без system audio track).
+      baseStream = await withBusyRetry(
+        () =>
+          navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: false,
+          }),
+        [220]
+      );
+      state.screenAudioMissing = true;
+    }
+    state.screenAudioMissing = state.screenAudioMissing || !baseStream.getAudioTracks().length;
     if (state.screenAudioMissing) {
       setSignal("signal_no_audio");
       console.warn("screen capture started without audio track");
     }
   } else {
     const deviceId = els.deviceSelect.value;
-    const constraints = {
-      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+    const openStreamForDevice = async (targetDeviceId) => {
+      const constraints = {
+        audio: targetDeviceId ? { deviceId: { exact: targetDeviceId } } : true,
+      };
+      return withBusyRetry(() => navigator.mediaDevices.getUserMedia(constraints));
     };
-    baseStream = await navigator.mediaDevices.getUserMedia(constraints);
-    state.streamDeviceId = deviceId || "";
+
+    try {
+      baseStream = await openStreamForDevice(deviceId);
+      state.streamDeviceId = deviceId || "";
+    } catch (err) {
+      if (!isDeviceBusyError(err) || !deviceId) {
+        throw err;
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const fallbacks = devices
+        .filter((d) => d.kind === "audioinput" && d.deviceId && d.deviceId !== deviceId)
+        .sort((left, right) => {
+          const lv = isVirtualAudioDevice(left.label) ? 1 : 0;
+          const rv = isVirtualAudioDevice(right.label) ? 1 : 0;
+          return rv - lv;
+        });
+      let fallbackError = err;
+      let opened = false;
+      for (const candidate of fallbacks) {
+        try {
+          baseStream = await openStreamForDevice(candidate.deviceId);
+          state.streamDeviceId = candidate.deviceId;
+          if (els.deviceSelect) {
+            els.deviceSelect.value = candidate.deviceId;
+          }
+          setStatusHint("warn_system_source_fallback", "bad");
+          opened = true;
+          break;
+        } catch (candidateErr) {
+          fallbackError = candidateErr;
+        }
+      }
+      if (!opened) {
+        throw fallbackError;
+      }
+    }
   }
 
   if (includeMic) {
@@ -843,7 +1422,11 @@ const mapStartError = (err, mode) => {
   if (name === "NotAllowedError" || name === "SecurityError") return "err_media_denied";
   if (name === "NotFoundError" || name === "OverconstrainedError") return "err_media_not_found";
   if (name === "NotReadableError" || name === "AbortError") return "err_media_not_readable";
+  if (message.includes("preflight_no_audio_track")) return "err_media_not_readable";
   if (message.includes("no_device_selected")) return "err_no_device_selected";
+  if (message.includes("system_source_not_virtual")) return "err_system_source_not_virtual";
+  if (message.includes("capture_locked_other_tab")) return "err_capture_locked_other_tab";
+  if (message.includes("start_meeting_failed")) return "err_server_start";
   if (message.includes("start meeting failed")) return "err_server_start";
   if (message.includes("ws_open_failed")) return "err_network";
   if (message.includes("stream_missing_after_countdown")) return "err_media_not_readable";
@@ -871,6 +1454,7 @@ const buildAudioMeter = async (mode, options = {}) => {
   source.connect(state.analyser);
   state.meterMode = mode;
   state.signalPeak = 0;
+  state.signalSmooth = 0;
 };
 
 const updateMeter = () => {
@@ -884,14 +1468,33 @@ const updateMeter = () => {
   }
   const rms = Math.sqrt(sum / buffer.length);
   const level = Math.min(1, rms * 2.5);
+  state.signalSmooth =
+    state.signalSmooth <= 0
+      ? level
+      : state.signalSmooth * (1 - SIGNAL_SMOOTHING_ALPHA) + level * SIGNAL_SMOOTHING_ALPHA;
+  const smoothed = state.signalSmooth;
   state.signalPeak = Math.max(state.signalPeak, level);
   els.levelBar.style.transform = `scaleX(${level})`;
-  if (level > 0.08) {
-    setSignal("signal_ok");
-  } else if (level > 0.02) {
-    setSignal("signal_low");
+  let nextSignal = state.signalState || "signal_waiting";
+  if (nextSignal === "signal_ok") {
+    if (smoothed < SIGNAL_OK_EXIT) {
+      nextSignal = smoothed >= SIGNAL_LOW_ENTER ? "signal_low" : "signal_waiting";
+    }
+  } else if (nextSignal === "signal_low") {
+    if (smoothed >= SIGNAL_OK_ENTER) {
+      nextSignal = "signal_ok";
+    } else if (smoothed < SIGNAL_LOW_EXIT) {
+      nextSignal = "signal_waiting";
+    }
+  } else if (smoothed >= SIGNAL_OK_ENTER) {
+    nextSignal = "signal_ok";
+  } else if (smoothed >= SIGNAL_LOW_ENTER) {
+    nextSignal = "signal_low";
   } else {
-    setSignal("signal_waiting");
+    nextSignal = "signal_waiting";
+  }
+  if (nextSignal !== state.signalState) {
+    setSignal(nextSignal);
   }
 };
 
@@ -904,6 +1507,7 @@ const stopMeter = () => {
   if (state.levelTimer) clearInterval(state.levelTimer);
   state.levelTimer = null;
   els.levelBar.style.transform = "scaleX(0)";
+  state.signalSmooth = 0;
 };
 
 const flushPendingChunks = () => {
@@ -931,6 +1535,149 @@ const clearWsReconnectTimer = () => {
     clearTimeout(state.wsReconnectTimer);
   }
   state.wsReconnectTimer = null;
+};
+
+const clearWsHeartbeat = () => {
+  if (state.wsHeartbeatTimer) {
+    clearInterval(state.wsHeartbeatTimer);
+  }
+  state.wsHeartbeatTimer = null;
+  if (state.wsPongTimer) {
+    clearTimeout(state.wsPongTimer);
+  }
+  state.wsPongTimer = null;
+  state.wsAwaitingPong = false;
+};
+
+const markWsServerActivity = () => {
+  state.wsHasServerActivity = true;
+  state.wsLastServerActivityMs = Date.now();
+  if (state.statusHintKey === "err_network") {
+    setStatusHint("hint_recording_ok", "good");
+  }
+};
+
+const markWsNetworkIssue = () => {
+  // Не показываем фатальный network-hint, если очередь пустая:
+  // иногда это краткий ws-reconnect без потери чанков.
+  if (state.pendingChunks.length > 0) {
+    setStatusHint("err_network", "bad");
+  }
+};
+
+const handleWsPong = (payload = {}) => {
+  markWsServerActivity();
+  if (state.wsPongTimer) {
+    clearTimeout(state.wsPongTimer);
+  }
+  state.wsPongTimer = null;
+  state.wsAwaitingPong = false;
+  if (typeof payload.last_acked_seq === "number") {
+    state.lastAckSeq = Math.max(state.lastAckSeq, payload.last_acked_seq);
+  }
+};
+
+const sendWsResume = () => {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  if (!state.meetingId) return;
+  try {
+    state.ws.send(
+      JSON.stringify({
+        event_type: "session.resume",
+        meeting_id: state.meetingId,
+        last_seq: state.lastAckSeq,
+        pending_chunks: state.pendingChunks.length,
+      })
+    );
+  } catch (err) {
+    console.warn("ws resume failed", err);
+  }
+};
+
+const sendWsHeartbeat = () => {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  if (!state.meetingId) return;
+
+  const now = Date.now();
+  const inBootstrapGrace =
+    !state.wsHasServerActivity &&
+    state.wsBootstrapDeadlineMs > 0 &&
+    now < state.wsBootstrapDeadlineMs;
+
+  if (inBootstrapGrace) {
+    try {
+      state.ws.send(
+        JSON.stringify({
+          event_type: "ping",
+          meeting_id: state.meetingId,
+          ts_ms: now,
+          last_seq: state.lastAckSeq,
+          bootstrap: true,
+        })
+      );
+    } catch (err) {
+      console.warn("ws ping failed (bootstrap)", err);
+      scheduleWsReconnect();
+      scheduleHttpDrain();
+    }
+    return;
+  }
+
+  if (state.wsAwaitingPong) {
+    markWsNetworkIssue();
+    try {
+      state.ws.close();
+    } catch (err) {
+      void err;
+    }
+    scheduleWsReconnect();
+    scheduleHttpDrain();
+    return;
+  }
+
+  state.wsAwaitingPong = true;
+  if (state.wsPongTimer) {
+    clearTimeout(state.wsPongTimer);
+  }
+  state.wsPongTimer = setTimeout(() => {
+    state.wsPongTimer = null;
+    state.wsAwaitingPong = false;
+    markWsNetworkIssue();
+    try {
+      if (state.ws) state.ws.close();
+    } catch (err) {
+      void err;
+    }
+    scheduleWsReconnect();
+    scheduleHttpDrain();
+  }, WS_PONG_TIMEOUT_MS);
+
+  try {
+    state.ws.send(
+      JSON.stringify({
+        event_type: "ping",
+        meeting_id: state.meetingId,
+        ts_ms: now,
+        last_seq: state.lastAckSeq,
+      })
+    );
+  } catch (err) {
+    console.warn("ws ping failed", err);
+    if (state.wsPongTimer) {
+      clearTimeout(state.wsPongTimer);
+    }
+    state.wsPongTimer = null;
+    state.wsAwaitingPong = false;
+    scheduleWsReconnect();
+    scheduleHttpDrain();
+  }
+};
+
+const startWsHeartbeat = () => {
+  clearWsHeartbeat();
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  if (!state.meetingId) return;
+  state.wsHeartbeatTimer = setInterval(sendWsHeartbeat, WS_HEARTBEAT_INTERVAL_MS);
 };
 
 const scheduleWsReconnect = () => {
@@ -1022,6 +1769,8 @@ const sendChunk = async (blob, mimeType, sourceTrack = "mixed") => {
     setSignal("signal_no_audio");
     const protectedHints = new Set([
       "warn_mic_not_added",
+      "hint_stt_warmup",
+      "warn_system_source_fallback",
       "warn_screen_audio_mic_only",
       "err_media_denied",
       "err_media_not_found",
@@ -1031,6 +1780,7 @@ const sendChunk = async (blob, mimeType, sourceTrack = "mixed") => {
       "err_network",
       "err_server_start",
       "err_no_device_selected",
+      "err_system_source_not_virtual",
     ]);
     if (!protectedHints.has(state.statusHintKey)) {
       setStatusHint("hint_no_speech_yet", "bad");
@@ -1047,20 +1797,45 @@ const openWebSocket = () => {
     clearWsReconnectTimer();
     clearHttpDrainTimer();
     state.wsReconnectAttempts = 0;
+    handleWsPong();
+    sendWsResume();
     flushPendingChunks();
+    startWsHeartbeat();
   };
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+      if (data && data.event_type === "ws.pong") {
+        handleWsPong(data);
+        return;
+      }
+      if (data && data.event_type === "ws.resumed") {
+        markWsServerActivity();
+        if (typeof data.last_acked_seq === "number") {
+          state.lastAckSeq = Math.max(state.lastAckSeq, data.last_acked_seq);
+        }
+        flushPendingChunks();
+        return;
+      }
+      if (data && data.event_type === "ws.ack") {
+        markWsServerActivity();
+        if (typeof data.last_acked_seq === "number") {
+          state.lastAckSeq = Math.max(state.lastAckSeq, data.last_acked_seq);
+        } else if (typeof data.seq === "number") {
+          state.lastAckSeq = Math.max(state.lastAckSeq, data.seq);
+        }
+        return;
+      }
+      markWsServerActivity();
       handleTranscriptUpdate(data);
     } catch (err) {
       console.warn("ws message parse failed", err);
     }
   };
   ws.onclose = (event) => {
+    clearWsHeartbeat();
     const normalCloseCode = 1000;
     if (state.captureStopper && !state.stopRequested && (!event || event.code !== normalCloseCode)) {
-      setStatusHint("err_network", "bad");
       scheduleWsReconnect();
       scheduleHttpDrain();
     }
@@ -1438,11 +2213,15 @@ const handleTranscriptUpdate = (data) => {
   if (typeof data.seq !== "number") return;
 
   if (typeof data.raw_text === "string") {
-    state.transcript.raw.set(data.seq, data.raw_text);
-    if (data.raw_text.trim()) {
-      state.nonEmptyRawUpdates += 1;
-      setSignal("signal_ok");
-      if (state.statusHintKey === "hint_no_speech_yet" || state.statusHintKey === "signal_check_fail") {
+      state.transcript.raw.set(data.seq, data.raw_text);
+      if (data.raw_text.trim()) {
+        state.nonEmptyRawUpdates += 1;
+        setSignal("signal_ok");
+      if (
+        state.statusHintKey === "hint_no_speech_yet" ||
+        state.statusHintKey === "hint_stt_warmup" ||
+        state.statusHintKey === "signal_check_fail"
+      ) {
         setStatusHint("hint_recording_ok", "good");
       }
     }
@@ -1465,6 +2244,7 @@ const handleTranscriptUpdate = (data) => {
 };
 
 const resetSessionState = () => {
+  clearWsHeartbeat();
   state.backupRecorder = null;
   state.seq = 0;
   state.chunkCount = 0;
@@ -1472,7 +2252,14 @@ const resetSessionState = () => {
   state.httpDrainInProgress = false;
   clearHttpDrainTimer();
   state.signalPeak = 0;
+  state.signalSmooth = 0;
+  state.signalState = "signal_waiting";
+  state.lastAckSeq = -1;
+  state.wsHasServerActivity = false;
+  state.wsBootstrapDeadlineMs = 0;
+  state.wsLastServerActivityMs = 0;
   state.nonEmptyRawUpdates = 0;
+  setSignal("signal_waiting");
   els.chunkCount.textContent = "0";
   state.transcript.raw.clear();
   state.transcript.enhanced.clear();
@@ -1480,6 +2267,51 @@ const resetSessionState = () => {
   state.enhancedTimers.clear();
   if (els.transcriptRaw) els.transcriptRaw.value = "";
   if (els.transcriptClean) els.transcriptClean.value = "";
+};
+
+const getSelectedSystemDeviceLabel = () => {
+  if (!els.deviceSelect || !els.deviceSelect.options.length) return "";
+  const index = Math.max(0, els.deviceSelect.selectedIndex);
+  const option = els.deviceSelect.options[index];
+  return String(option && option.textContent ? option.textContent : "").trim();
+};
+
+const validateSystemSourceSelection = () => {
+  const label = getSelectedSystemDeviceLabel();
+  if (!label) return;
+  if (!isVirtualAudioDevice(label)) {
+    throw new Error("system_source_not_virtual");
+  }
+};
+
+const runCapturePreflight = async (mode) => {
+  if (mode !== "system") return;
+  const deviceId = (els.deviceSelect && els.deviceSelect.value) || "";
+  if (!deviceId) {
+    throw new Error("no_device_selected");
+  }
+  validateSystemSourceSelection();
+
+  let probeStream = null;
+  try {
+    probeStream = await withBusyRetry(() =>
+      navigator.mediaDevices.getUserMedia({
+        audio: { deviceId: { exact: deviceId } },
+      })
+    );
+    const tracks = probeStream.getAudioTracks();
+    if (!tracks.length) {
+      throw new Error("preflight_no_audio_track");
+    }
+  } finally {
+    if (probeStream) {
+      try {
+        probeStream.getTracks().forEach((track) => track.stop());
+      } catch (err) {
+        void err;
+      }
+    }
+  }
 };
 
 const buildCaptureTargets = (captureMode) => {
@@ -1592,7 +2424,16 @@ const startCountdown = (seconds) =>
 
 const startRecording = async () => {
   if (state.isUploading) return;
+  const captureLock = isCaptureLockedByOtherTab();
+  if (captureLock.locked) {
+    setStatus("status_error", "error");
+    setStatusHint("err_capture_locked_other_tab", "bad");
+    setRecordingButtons(false);
+    return;
+  }
   setRecordingButtons(true);
+  writeCaptureLock("");
+  startCaptureLockHeartbeat();
   resetSessionState();
   els.countdownValue.textContent = "9s";
   const captureMode = getCaptureMode();
@@ -1601,6 +2442,7 @@ const startRecording = async () => {
     if (captureMode === "system" && !els.deviceSelect.value) {
       throw new Error("no_device_selected");
     }
+    await runCapturePreflight(captureMode);
     await ensureStream(captureMode, { force: true });
     if (captureMode === "screen" && state.screenAudioMissing && !state.micAdded) {
       throw new Error("screen capture no audio track");
@@ -1611,6 +2453,7 @@ const startRecording = async () => {
     await startCountdown(9);
   } catch (err) {
     releasePreparedCapture();
+    stopCaptureLockHeartbeat();
     setStatus("status_idle", "idle");
     setStatusHint("");
     setRecordingButtons(false);
@@ -1625,6 +2468,9 @@ const startRecording = async () => {
   setStatus("status_recording", "recording");
   setStatusHint("");
   state.stopRequested = false;
+  state.wsHasServerActivity = false;
+  state.wsLastServerActivityMs = 0;
+  state.wsBootstrapDeadlineMs = Date.now() + WS_BOOTSTRAP_GRACE_MS;
 
   try {
     const res = await fetch("/v1/meetings/start", {
@@ -1636,13 +2482,29 @@ const startRecording = async () => {
       }),
     });
     if (!res.ok) {
-      throw new Error(`start meeting failed: ${res.status}`);
+      let errorCode = "";
+      let errorMessage = "";
+      try {
+        const body = await res.json();
+        const detail = body && body.detail ? body.detail : {};
+        if (detail && typeof detail === "object") {
+          errorCode = String(detail.code || "").trim();
+          errorMessage = String(detail.message || "").trim();
+        }
+      } catch (_err) {
+        // ignore parse errors and fallback to status-only error
+      }
+      if (errorCode === "active_recording_exists") {
+        throw new Error(`capture_locked_other_tab:${errorMessage}`);
+      }
+      throw new Error(`start_meeting_failed:${res.status}:${errorCode || "unknown"}`);
     }
     const data = await res.json();
     state.meetingId = data.meeting_id;
+    writeCaptureLock(state.meetingId);
     els.meetingIdText.textContent = state.meetingId;
 
-    await waitForWsOpen();
+    await waitForWsOpen(9000);
     const stream = state.stream;
     if (!stream) {
       throw new Error("stream_missing_after_countdown");
@@ -1664,6 +2526,8 @@ const startRecording = async () => {
         }
       }
     };
+    startWsHeartbeat();
+    sendWsResume();
     startBackupRecorder();
     const hasFallbackPcm = captureEngines.some((item) => item.fallbackToPcm);
     if (hasFallbackPcm) {
@@ -1674,7 +2538,7 @@ const startRecording = async () => {
     } else if (els.includeMic && els.includeMic.checked && !state.micAdded) {
       setStatusHint("warn_mic_not_added", "bad");
     } else {
-      setStatusHint("hint_recording_ok", "good");
+      setStatusHint("hint_stt_warmup", "muted");
     }
   } catch (err) {
     console.error("start recording failed", err);
@@ -1691,6 +2555,7 @@ const stopRecording = async (options = {}) => {
   const wasCountingDown = Boolean(state.isCountingDown);
   const activeMeetingId = state.meetingId;
   state.stopRequested = true;
+  stopCaptureLockHeartbeat();
   if (state.isCountingDown) {
     state.isCountingDown = false;
   }
@@ -1713,6 +2578,7 @@ const stopRecording = async (options = {}) => {
     state.ws.close();
   }
   state.ws = null;
+  clearWsHeartbeat();
   await drainPendingChunksHttp(activeMeetingId, { force: true, reschedule: false });
   if (activeMeetingId && backupBlob) {
     const uploaded = await uploadBackupAudio(activeMeetingId, backupBlob);
@@ -1747,6 +2613,32 @@ const stopRecording = async (options = {}) => {
   els.meetingIdText.textContent = "—";
   setRecordingButtons(false);
   state.stopRequested = false;
+};
+
+const emergencyReleaseOnUnload = () => {
+  try {
+    state.stopRequested = true;
+    stopCaptureLockHeartbeat();
+    clearWsReconnectTimer();
+    clearHttpDrainTimer();
+    clearWsHeartbeat();
+    clearQuickPollTimer();
+    if (state.ws) {
+      try {
+        state.ws.close();
+      } catch (_err) {
+        // ignore close errors
+      }
+      state.ws = null;
+    }
+    if (state.stream) {
+      releasePreparedCapture();
+    } else {
+      closeAudioMeter();
+    }
+  } catch (_err) {
+    // ignore unload cleanup errors
+  }
 };
 
 const checkSignal = async () => {
@@ -1949,6 +2841,166 @@ const uploadAudioFile = async () => {
   setRecordingButtons(false);
 };
 
+const clearQuickPollTimer = () => {
+  if (!state.quickPollTimer) return;
+  clearInterval(state.quickPollTimer);
+  state.quickPollTimer = null;
+};
+
+const setQuickButtonsByStatus = (status) => {
+  const running = status === "queued" || status === "running";
+  const stopping = status === "stopping";
+  if (els.quickRecordStart) {
+    els.quickRecordStart.disabled = running || stopping;
+  }
+  if (els.quickRecordStop) {
+    els.quickRecordStop.disabled = !(running || stopping);
+  }
+};
+
+const applyQuickJobStatus = (job) => {
+  if (!job) {
+    state.quickJobId = null;
+    setQuickStatus("quick_record_state_idle", "muted");
+    setQuickButtonsByStatus("idle");
+    clearQuickPollTimer();
+    return;
+  }
+
+  state.quickJobId = String(job.job_id || "");
+  const status = String(job.status || "").trim().toLowerCase();
+  if (status === "queued" || status === "running") {
+    setQuickStatus("quick_record_state_running", "good");
+    setQuickButtonsByStatus(status);
+    if (!state.quickPollTimer) {
+      state.quickPollTimer = setInterval(() => {
+        void fetchQuickRecordStatus({ silentErrors: true });
+      }, 2500);
+    }
+    return;
+  }
+
+  if (status === "stopping") {
+    setQuickStatus("quick_record_state_stopping", "muted");
+    setQuickButtonsByStatus(status);
+    if (!state.quickPollTimer) {
+      state.quickPollTimer = setInterval(() => {
+        void fetchQuickRecordStatus({ silentErrors: true });
+      }, 1500);
+    }
+    return;
+  }
+
+  clearQuickPollTimer();
+  if (status === "completed") {
+    setQuickStatus("quick_record_state_completed", "good");
+    setQuickButtonsByStatus(status);
+    setQuickHint("quick_record_hint_completed", "good", false, {
+      path: String(job.mp3_path || "—"),
+    });
+    return;
+  }
+
+  if (status === "failed") {
+    setQuickStatus("quick_record_state_failed", "bad");
+    setQuickButtonsByStatus(status);
+    setQuickHint("quick_record_hint_failed", "bad", false, {
+      error: String(job.error || "unknown"),
+    });
+    return;
+  }
+
+  setQuickStatus("quick_record_state_idle", "muted");
+  setQuickButtonsByStatus(status);
+};
+
+const fetchQuickRecordStatus = async (options = {}) => {
+  const { silentErrors = false } = options;
+  try {
+    const res = await fetch("/v1/quick-record/status", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`quick_status_failed_${res.status}`);
+    }
+    const body = await res.json();
+    applyQuickJobStatus(body.job || null);
+  } catch (err) {
+    console.warn("quick record status failed", err);
+    clearQuickPollTimer();
+    if (!silentErrors) {
+      setQuickHint("quick_record_hint_start_failed", "bad");
+    }
+  }
+};
+
+const startQuickRecord = async () => {
+  const meetingUrl = String((els.quickRecordUrl && els.quickRecordUrl.value) || "").trim();
+  if (!meetingUrl || (!meetingUrl.startsWith("http://") && !meetingUrl.startsWith("https://"))) {
+    setQuickHint("quick_record_hint_missing_url", "bad");
+    return;
+  }
+  const duration = Number.parseInt(
+    String((els.quickRecordDuration && els.quickRecordDuration.value) || "0"),
+    10
+  );
+  if (!Number.isFinite(duration) || duration < 5) {
+    setQuickHint("quick_record_hint_missing_duration", "bad");
+    return;
+  }
+
+  if (els.quickRecordStart) {
+    els.quickRecordStart.disabled = true;
+  }
+  try {
+    const res = await fetch("/v1/quick-record/start", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({
+        meeting_url: meetingUrl,
+        duration_sec: duration,
+        transcribe: Boolean(els.quickRecordTranscribe && els.quickRecordTranscribe.checked),
+        upload_to_agent: Boolean(els.quickRecordUpload && els.quickRecordUpload.checked),
+      }),
+    });
+    if (res.status === 409) {
+      setQuickHint("quick_record_hint_already_running", "bad");
+      await fetchQuickRecordStatus({ silentErrors: true });
+      return;
+    }
+    if (!res.ok) {
+      throw new Error(`quick_start_failed_${res.status}`);
+    }
+    const body = await res.json();
+    setQuickHint("quick_record_hint_started", "good");
+    applyQuickJobStatus(body.job || null);
+  } catch (err) {
+    console.warn("quick record start failed", err);
+    setQuickHint("quick_record_hint_start_failed", "bad");
+    await fetchQuickRecordStatus({ silentErrors: true });
+  } finally {
+    if (els.quickRecordStart && (!els.quickRecordStop || els.quickRecordStop.disabled)) {
+      els.quickRecordStart.disabled = false;
+    }
+  }
+};
+
+const stopQuickRecord = async () => {
+  try {
+    const res = await fetch("/v1/quick-record/stop", {
+      method: "POST",
+      headers: buildHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`quick_stop_failed_${res.status}`);
+    }
+    const body = await res.json();
+    setQuickHint("quick_record_hint_stopped", "muted");
+    applyQuickJobStatus(body.job || null);
+  } catch (err) {
+    console.warn("quick record stop failed", err);
+    setQuickHint("quick_record_hint_stop_failed", "bad");
+  }
+};
+
 const updateCaptureUi = () => {
   const mode = getCaptureMode();
   els.deviceSelect.disabled = mode === "screen";
@@ -2117,20 +3169,25 @@ const handleRecordAction = async (event) => {
 
   if (action === "report") {
     const source = button.dataset.source || state.resultsSource;
+    const generated = await fetch(`/v1/meetings/${meetingId}/report`, {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({ source }),
+    });
+    if (!generated.ok) return;
+
     const view = await fetch(
-      `/v1/meetings/${meetingId}/artifact?kind=${source}&fmt=txt`,
+      `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`,
       { headers: buildHeaders() }
     );
     if (view.ok) {
       const text = await view.text();
-      if (source === "raw" && els.transcriptRaw) {
-        els.transcriptRaw.value = text;
-      } else if (source === "clean" && els.transcriptClean) {
+      if (els.transcriptClean) {
         els.transcriptClean.value = text;
       }
     }
-    const url = `/v1/meetings/${meetingId}/artifact?kind=${source}&fmt=txt`;
-    const filename = source === "raw" ? "raw_export.txt" : "clean_export.txt";
+    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
+    const filename = buildFilename({ kind: "report", source, fmt: "txt" });
     await downloadArtifact(url, filename);
     await fetchRecords();
     return;
@@ -2164,12 +3221,40 @@ document.querySelectorAll('input[name="captureMode"]').forEach((el) => {
   el.addEventListener("change", updateCaptureUi);
 });
 
-els.refreshDevices.addEventListener("click", listDevices);
+if (els.scanLlmModels) {
+  els.scanLlmModels.addEventListener("click", () => {
+    void scanLlmModels();
+  });
+}
+if (els.applyLlmModel) {
+  els.applyLlmModel.addEventListener("click", () => {
+    void applyLlmModel();
+  });
+}
+
+els.refreshDevices.addEventListener("click", () => {
+  void listDevices({ requestAccess: true });
+});
 if (els.deviceSelect) {
   els.deviceSelect.addEventListener("change", () => {
     void listDevices();
   });
 }
+if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === "function") {
+  navigator.mediaDevices.addEventListener("devicechange", () => {
+    void listDevices();
+  });
+}
+window.addEventListener("beforeunload", emergencyReleaseOnUnload);
+window.addEventListener("pagehide", emergencyReleaseOnUnload);
+window.addEventListener("storage", (event) => {
+  if (!event || event.key !== CAPTURE_LOCK_KEY) return;
+  const lock = isCaptureLockedByOtherTab();
+  if (!lock.locked) return;
+  if (isRecordingFlowActive()) {
+    setStatusHint("err_capture_locked_other_tab", "bad");
+  }
+});
 els.checkDriver.addEventListener("click", checkDriver);
 if (els.themeLight) {
   els.themeLight.addEventListener("click", () => applyTheme("light"));
@@ -2223,6 +3308,16 @@ els.stopBtn.addEventListener("click", () => {
 });
 els.checkSignal.addEventListener("click", checkSignal);
 els.uploadAudioBtn.addEventListener("click", uploadAudioFile);
+if (els.quickRecordStart) {
+  els.quickRecordStart.addEventListener("click", () => {
+    void startQuickRecord();
+  });
+}
+if (els.quickRecordStop) {
+  els.quickRecordStop.addEventListener("click", () => {
+    void stopQuickRecord();
+  });
+}
 
 const savedTheme = (() => {
   try {
@@ -2233,12 +3328,19 @@ const savedTheme = (() => {
 })();
 applyTheme(savedTheme || "light");
 updateI18n();
+pruneStaleCaptureLock();
+clearCaptureLock();
 listDevices();
+fetchLlmStatus({ scanAfter: true });
 updateCaptureUi();
 fetchRecords();
 setRecordingButtons(false);
 setDriverHelpTab("mac");
 syncResultsState();
+setQuickStatus("quick_record_state_idle", "muted");
+setQuickHint("quick_record_hint_ready", "muted");
+setQuickButtonsByStatus("idle");
+fetchQuickRecordStatus({ silentErrors: true });
 if (!window.showDirectoryPicker) {
   setFolderStatus("folder_not_supported", "bad");
 }

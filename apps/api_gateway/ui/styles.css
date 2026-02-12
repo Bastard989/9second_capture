@@ -290,10 +290,38 @@ textarea {
   gap: 10px;
 }
 
+.llm-row {
+  flex-wrap: wrap;
+}
+
+.llm-status {
+  margin-top: -2px;
+}
+
+.llm-status.bad {
+  color: var(--bad-ink);
+}
+
+.llm-status.good {
+  color: var(--ok-ink);
+}
+
 .hint {
   font-size: 13px;
   color: var(--ink-2);
   line-height: 1.35;
+}
+
+.device-status {
+  margin-top: -4px;
+}
+
+.device-status.bad {
+  color: var(--bad-ink);
+}
+
+.device-status.good {
+  color: var(--ok-ink);
 }
 
 button {

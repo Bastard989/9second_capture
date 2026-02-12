@@ -14,11 +14,13 @@
 
 1) Откройте приложение `9second_capture.app`.
 2) На стартовом экране нажмите `Полная установка (Whisper)` и дождитесь статуса `done`.
-3) Нажмите `Открыть UI`.
-4) В блоке `Подключение` нажмите `Инструкция` и установите аудио‑драйвер под свою ОС.
-5) Нажмите `Проверить драйвер`, затем `Проверить захват`.
-6) Нажмите `Старт`, дождитесь отсчёта 9 секунд, начните встречу.
-7) После `Стоп` откройте `Результаты` и скачайте `raw/clean`, `TXT` или `Таблицу`.
+3) Установите Ollama и скачайте хотя бы одну модель (например `llama3.1:8b`).
+4) Нажмите `Открыть UI`.
+5) В блоке `Подключение` нажмите `Инструкция` и установите аудио‑драйвер под свою ОС.
+6) В блоке `LLM модель` нажмите `Сканировать`, выберите модель и нажмите `Сменить модель`.
+7) Нажмите `Проверить драйвер`, затем `Проверить захват`.
+8) Нажмите `Старт`, дождитесь отсчёта 9 секунд, начните встречу.
+9) После `Стоп` откройте `Результаты` и скачайте `raw/clean`, `TXT` или `Таблицу`.
 
 Если после первого `Открыть UI` страница не открылась сразу:
 - подождите 2–5 секунд и повторите `Открыть UI`;
@@ -49,6 +51,27 @@ open "/Users/kirill/Documents/New project/9second_capture/dist/9second_capture.a
 1) Нажмите `Полная установка (Whisper)` и дождитесь `done`.
 2) Нажмите `Открыть UI`.
 3) Если UI не открылся с первого раза, подождите 2–5 секунд и нажмите `Открыть UI` ещё раз.
+
+### Ollama и модели (macOS, копировать и вставить)
+
+```bash
+brew install --cask ollama
+open -a Ollama
+ollama pull llama3.1:8b
+ollama list
+```
+
+Дополнительные модели (примеры):
+
+```bash
+ollama pull qwen2.5:7b
+ollama pull mistral:7b
+```
+
+В UI:
+1) `LLM модель` -> `Сканировать`
+2) выбрать модель из списка
+3) нажать `Сменить модель`
 
 ### Быстрая проверка перед звонком (2 минуты)
 
@@ -172,15 +195,38 @@ Linux (PulseAudio / PipeWire):
 
 Для локального web-интерфейса со стартом/стопом записи и проверкой сигнала:
 
-- `AUTH_MODE=none STT_PROVIDER=mock LLM_ENABLED=false LLM_LIVE_ENABLED=false python3 scripts/run_local_agent.py`
+- `AUTH_MODE=none STT_PROVIDER=whisper_local LLM_ENABLED=true LLM_LIVE_ENABLED=false OPENAI_API_BASE=http://127.0.0.1:11434/v1 OPENAI_API_KEY=ollama LLM_MODEL_ID=llama3.1:8b python3 scripts/run_local_agent.py`
 - Скрипт сам выберет свободный порт в диапазоне `8010–8099` и запомнит его в `./data/local_agent/state.json`.
 - UI откроется по адресу вида `http://127.0.0.1:<порт>`.
 
 Важно:
 - `run_local_agent.py` по умолчанию включает `QUEUE_MODE=inline` — локальная обработка без Redis/воркеров.
+- Для локального качества/устойчивости по умолчанию используются:
+  `WHISPER_MODEL_SIZE=medium`, `WHISPER_LANGUAGE=ru`, `WHISPER_BEAM_SIZE_LIVE=3`, `WHISPER_BEAM_SIZE_FINAL=6`,
+  `WHISPER_WARMUP_ON_START=true`.
 - Локальная БД — `sqlite` по пути `./data/local_agent/agent.db` (создаётся автоматически).
 - Если нужен полный пайплайн через очереди, задай `QUEUE_MODE=redis` и подними зависимости
   (проще всего `docker compose up -d --build`).
+
+LLM в локальном режиме:
+- Для реального LLM без облака используйте Ollama (OpenAI-compatible API).
+- Минимум: установить Ollama, подтянуть модель (например `ollama pull llama3.1:8b`), запустить сервис.
+- Переменные: `OPENAI_API_BASE=http://127.0.0.1:11434/v1`, `OPENAI_API_KEY=ollama`, `LLM_MODEL_ID=llama3.1:8b`.
+- В UI доступны кнопки `Сканировать` и `Сменить модель` (без перезапуска агента).
+- Если локальный LLM недоступен, агент не падает: отчёт/structured переходят в fallback режим.
+
+### Quick fallback recorder
+
+В UI в блоке `Загрузка конференции` есть fallback-режим `Quick fallback запись`:
+- принимает ссылку встречи и длительность;
+- пишет системный звук сегментами;
+- сохраняет `mp3` в `QUICK_RECORD_OUTPUT_DIR`;
+- опционально делает локальную транскрибацию;
+- опционально отправляет запись в `/v1` pipeline.
+
+CLI-режим:
+- `python3 scripts/quick_record_meeting.py --url "https://..." --duration-sec 900`
+- или `make quick-record URL="https://..."`
 
 Минимальный `.env` для старта:
 - `APP_ENV=dev`

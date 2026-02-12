@@ -28,3 +28,5 @@ pre-commit==4.0.1
 numpy==2.4.1
 av==16.0.1
 faster-whisper==1.2.1
+soundcard
+soundfile

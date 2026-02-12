@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from interview_analytics_agent.common.config import get_settings
@@ -20,6 +21,7 @@ from .pii import mask_pii
 
 FILLER_RE = re.compile(r"\b(ээ+|мм+|ну+|типа|как бы|в общем|короче)\b", re.IGNORECASE)
 MULTISPACE_RE = re.compile(r"\s+")
+log = logging.getLogger(__name__)
 
 
 def enhance_text(raw_text: str) -> tuple[str, dict]:
@@ -43,9 +45,11 @@ def enhance_text(raw_text: str) -> tuple[str, dict]:
             from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
             from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
 
+            has_api_base = bool((settings.openai_api_base or "").strip())
+            has_api_key = bool((settings.openai_api_key or "").strip())
             provider = (
                 OpenAICompatProvider()
-                if (settings.openai_api_key or "")
+                if (has_api_base or has_api_key)
                 else MockLLMProvider()
             )
             orch = LLMOrchestrator(provider)
@@ -90,3 +94,96 @@ def enhance_text(raw_text: str) -> tuple[str, dict]:
             text = masked
 
     return text, meta
+
+
+def _split_text_for_llm(text: str, *, max_chars: int) -> list[str]:
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        return []
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    limit = max(600, int(max_chars or 1800))
+    for line in lines:
+        line_len = len(line) + (1 if current else 0)
+        if current and current_len + line_len > limit:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_len = len(line)
+        else:
+            current.append(line)
+            current_len += line_len
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+def _build_transcript_cleanup_orchestrator():
+    s = get_settings()
+    if not s.llm_enabled or not bool(getattr(s, "llm_transcript_cleanup_enabled", True)):
+        return None
+    has_api_base = bool((s.openai_api_base or "").strip())
+    has_api_key = bool((s.openai_api_key or "").strip())
+    if not has_api_base and not has_api_key:
+        return None
+
+    from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
+    from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
+
+    return LLMOrchestrator(OpenAICompatProvider())
+
+
+def cleanup_transcript_with_llm(transcript: str) -> tuple[str, dict]:
+    """
+    Сглаживает финальный clean-транскрипт целиком:
+    - исправляет очевидные ASR-ошибки
+    - сохраняет speaker-префиксы вида `speaker: text`
+    - не добавляет новые факты
+    """
+    s = get_settings()
+    meta: dict = {"applied": [], "chunks": 0, "errors": 0}
+    text = (transcript or "").strip()
+    if not text:
+        return transcript, meta
+
+    try:
+        orch = _build_transcript_cleanup_orchestrator()
+    except Exception as err:
+        log.warning(
+            "llm_transcript_cleanup_init_failed",
+            extra={"payload": {"err": str(err)[:200]}},
+        )
+        return transcript, meta
+    if orch is None:
+        return transcript, meta
+
+    max_chars = int(getattr(s, "llm_transcript_cleanup_chunk_chars", 1800) or 1800)
+    chunks = _split_text_for_llm(text, max_chars=max_chars)
+    if not chunks:
+        return transcript, meta
+
+    cleaned_chunks: list[str] = []
+    system = (
+        "Исправь транскрипт после ASR. Верни ТОЛЬКО очищенный текст без JSON. "
+        "Сохраняй язык и смысл, не добавляй новых фактов. "
+        "Если в строке есть speaker-префикс вида `name:`, сохрани его."
+    )
+    for chunk in chunks:
+        user = f"Текст:\n{chunk}"
+        try:
+            result = orch.complete_text(system=system, user=user).text.strip()
+            cleaned_chunks.append(result or chunk)
+            meta["chunks"] += 1
+        except Exception as err:
+            meta["errors"] += 1
+            cleaned_chunks.append(chunk)
+            log.warning(
+                "llm_transcript_cleanup_failed_chunk",
+                extra={"payload": {"err": str(err)[:200]}},
+            )
+
+    cleaned = "\n".join([c for c in cleaned_chunks if c]).strip()
+    if cleaned and cleaned != text:
+        meta["applied"].append("llm_transcript_cleanup")
+        return cleaned, meta
+    return transcript, meta

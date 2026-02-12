@@ -23,7 +23,7 @@ from interview_analytics_agent.contracts.http_api import (
     MeetingStartRequest,
     MeetingStartResponse,
 )
-from interview_analytics_agent.domain.enums import MeetingMode
+from interview_analytics_agent.domain.enums import MeetingMode, PipelineStatus
 from interview_analytics_agent.services.meeting_service import create_meeting
 from interview_analytics_agent.services.sberjazz_service import join_sberjazz_meeting
 from interview_analytics_agent.storage.db import db_session
@@ -48,6 +48,25 @@ def _should_auto_join(req: MeetingStartRequest) -> bool:
     return bool(settings.meeting_auto_join_on_start)
 
 
+def _find_active_local_recording(
+    *,
+    repo: MeetingRepository,
+    requested_meeting_id: str | None,
+) -> str | None:
+    for meeting in repo.list_active():
+        if requested_meeting_id and meeting.id == requested_meeting_id:
+            continue
+        if getattr(meeting, "finished_at", None) is not None:
+            continue
+        if meeting.status == PipelineStatus.done:
+            continue
+        context = meeting.context or {}
+        source = str(context.get("source") or "").strip().lower()
+        if source == "local_ui":
+            return meeting.id
+    return None
+
+
 @router.post("/meetings/start", response_model=MeetingStartResponse)
 def start_meeting(
     req: MeetingStartRequest,
@@ -60,6 +79,19 @@ def start_meeting(
 
     with db_session() as s:
         repo = MeetingRepository(s)
+        if req.mode == MeetingMode.realtime:
+            active_meeting_id = _find_active_local_recording(
+                repo=repo,
+                requested_meeting_id=req.meeting_id,
+            )
+            if active_meeting_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "active_recording_exists",
+                        "message": active_meeting_id,
+                    },
+                )
         m = create_meeting(meeting_id=req.meeting_id, context=context, consent=req.consent)
         repo.save(m)
 

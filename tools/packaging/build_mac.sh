@@ -46,5 +46,12 @@ if [ -d "$APP_PATH" ]; then
     dot_clean -m "$APP_PATH" || true
   fi
   xattr -cr "$APP_PATH" || true
-  /usr/bin/codesign --force --deep --sign - "$APP_PATH" || true
+  xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
+  xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true
+  if ! /usr/bin/codesign --force --deep --sign - "$APP_PATH"; then
+    # На некоторых системах FinderInfo может возвращаться после первого pass.
+    xattr -dr com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
+    xattr -dr com.apple.ResourceFork "$APP_PATH" 2>/dev/null || true
+    /usr/bin/codesign --force --deep --sign - "$APP_PATH" || true
+  fi
 fi

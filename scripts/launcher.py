@@ -266,20 +266,27 @@ def _start_app() -> str:
     env["API_PORT"] = str(port)
     env["AUTH_MODE"] = "none"
     env["QUEUE_MODE"] = "inline"
-    env["LLM_ENABLED"] = "false"
-    env["LLM_LIVE_ENABLED"] = "false"
+    # Не затираем пользовательскую конфигурацию LLM:
+    # по умолчанию включаем post-meeting LLM, live-cleanup оставляем выключенным.
+    env.setdefault("LLM_ENABLED", "true")
+    env.setdefault("LLM_LIVE_ENABLED", "false")
+    env.setdefault("OPENAI_API_BASE", "http://127.0.0.1:11434/v1")
+    env.setdefault("OPENAI_API_KEY", "ollama")
+    env.setdefault("LLM_MODEL_ID", "llama3.1:8b")
+    env.setdefault("BACKUP_AUDIO_RECOVERY_ENABLED", "true")
     env["POSTGRES_DSN"] = f"sqlite:///{(root / 'agent.db').as_posix()}"
     env["RECORDS_DIR"] = str(root / "records")
     env["CHUNKS_DIR"] = str(root / "chunks")
     env["LOCAL_AGENT_STATE_DIR"] = str(root / "state")
     env["STT_PROVIDER"] = "whisper_local" if INSTALL_MODE == "full" else "mock"
     if INSTALL_MODE == "full":
-        env["WHISPER_MODEL_SIZE"] = "medium"
-        env["WHISPER_COMPUTE_TYPE"] = "float32"
-        env["WHISPER_LANGUAGE"] = "ru"
-        env["WHISPER_VAD_FILTER"] = "false"
-        env["WHISPER_BEAM_SIZE_LIVE"] = "1"
-        env["WHISPER_BEAM_SIZE_FINAL"] = "4"
+        env.setdefault("WHISPER_MODEL_SIZE", "medium")
+        env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
+        env.setdefault("WHISPER_LANGUAGE", "ru")
+        env.setdefault("WHISPER_VAD_FILTER", "true")
+        env.setdefault("WHISPER_BEAM_SIZE_LIVE", "3")
+        env.setdefault("WHISPER_BEAM_SIZE_FINAL", "6")
+        env.setdefault("WHISPER_WARMUP_ON_START", "true")
     env["LOCAL_AGENT_AUTO_OPEN"] = "false"
     env["PYTHONUNBUFFERED"] = "1"
 

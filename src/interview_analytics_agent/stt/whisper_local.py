@@ -214,7 +214,8 @@ class WhisperLocalProvider(STTProvider):
             compute_type=compute_type,
         )
 
-        self.language = language or s.whisper_language
+        lang_value = (language or s.whisper_language or "").strip().lower()
+        self.language = None if lang_value in {"", "auto"} else lang_value
         self.vad_filter = s.whisper_vad_filter if vad_filter is None else vad_filter
         self.beam_size = beam_size or s.whisper_beam_size
         self.beam_size_live = max(1, int(getattr(s, "whisper_beam_size_live", 1) or 1))

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from starlette.websockets import WebSocketState
@@ -34,6 +35,7 @@ from interview_analytics_agent.common.tracing import start_trace
 from interview_analytics_agent.common.utils import b64_decode, safe_dict
 from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.services.chunk_ingest_service import ingest_audio_chunk_bytes
+from interview_analytics_agent.services.local_pipeline import process_chunk_inline
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import MeetingRepository
 
@@ -54,6 +56,13 @@ async def _ws_send_text_safe(ws: WebSocket, text: str) -> bool:
 
 async def _ws_send_json_safe(ws: WebSocket, payload: dict) -> bool:
     return await _ws_send_text_safe(ws, json.dumps(payload, ensure_ascii=False))
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except Exception:
+        return default
 
 
 def _is_service_ctx(ctx: AuthContext) -> bool:
@@ -158,6 +167,58 @@ async def _forward_pubsub_to_ws(ws: WebSocket, meeting_id: str) -> None:
             pass
 
 
+async def _process_inline_chunk_job(*, job: dict[str, object]) -> list[dict]:
+    meeting_id = str(job.get("meeting_id") or "").strip()
+    seq = _as_int(job.get("seq"), -1)
+    blob_key = str(job.get("blob_key") or "").strip() or None
+    source_track = str(job.get("source_track") or "").strip() or None
+    quality_profile = str(job.get("quality_profile") or "live").strip() or "live"
+    if not meeting_id or seq < 0:
+        return []
+
+    try:
+        return await asyncio.to_thread(
+            process_chunk_inline,
+            meeting_id=meeting_id,
+            chunk_seq=seq,
+            blob_key=blob_key,
+            source_track=source_track,
+            quality_profile=quality_profile,
+        )
+    except Exception as e:
+        log.error(
+            "ws_inline_process_failed",
+            extra={
+                "payload": {
+                    "meeting_id": meeting_id,
+                    "seq": seq,
+                    "err": str(e)[:200],
+                }
+            },
+        )
+        return []
+
+
+async def _drain_inline_updates_queue(
+    *,
+    ws: WebSocket,
+    queue: asyncio.Queue[dict[str, object] | None],
+) -> None:
+    while True:
+        job = await queue.get()
+        if job is None:
+            queue.task_done()
+            break
+        try:
+            updates = await _process_inline_chunk_job(job=job)
+            for payload in updates:
+                sent = await _ws_send_json_safe(ws, payload)
+                if not sent:
+                    return
+        finally:
+            queue.task_done()
+
+
 async def _authorize_ws(ws: WebSocket, *, service_only: bool) -> AuthContext | None:
     try:
         ctx = require_auth(
@@ -235,7 +296,13 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
     meeting_id: str | None = None
     meeting_checked = False
     forward_task: asyncio.Task | None = None
+    inline_queue: asyncio.Queue[dict[str, object] | None] | None = None
+    inline_worker_task: asyncio.Task | None = None
     accepted_chunks = 0
+    last_acked_seq = -1
+    if (get_settings().queue_mode or "").strip().lower() == "inline":
+        inline_queue = asyncio.Queue()
+        inline_worker_task = asyncio.create_task(_drain_inline_updates_queue(ws=ws, queue=inline_queue))
 
     try:
         while True:
@@ -251,6 +318,45 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                 continue
 
             et = event.get("event_type")
+            if et == "ping":
+                hb_meeting_id = event.get("meeting_id") or meeting_id
+                sent = await _ws_send_json_safe(
+                    ws,
+                    {
+                        "event_type": "ws.pong",
+                        "meeting_id": hb_meeting_id,
+                        "ts_ms": int(time.time() * 1000),
+                        "last_acked_seq": last_acked_seq,
+                        "accepted_chunks": accepted_chunks,
+                    },
+                )
+                if not sent:
+                    break
+                continue
+
+            if et == "session.resume":
+                resume_meeting_id = str(event.get("meeting_id") or "").strip() or meeting_id
+                if resume_meeting_id:
+                    meeting_id = resume_meeting_id
+                    if (
+                        forward_task is None
+                        and (get_settings().queue_mode or "").strip().lower() != "inline"
+                    ):
+                        forward_task = asyncio.create_task(_forward_pubsub_to_ws(ws, meeting_id))
+                sent = await _ws_send_json_safe(
+                    ws,
+                    {
+                        "event_type": "ws.resumed",
+                        "meeting_id": meeting_id,
+                        "client_last_seq": _as_int(event.get("last_seq"), -1),
+                        "last_acked_seq": last_acked_seq,
+                        "accepted_chunks": accepted_chunks,
+                    },
+                )
+                if not sent:
+                    break
+                continue
+
             if et != "audio.chunk":
                 sent = await _ws_send_json_safe(
                     ws,
@@ -315,7 +421,19 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
             if forward_task is None and (get_settings().queue_mode or "").strip().lower() != "inline":
                 forward_task = asyncio.create_task(_forward_pubsub_to_ws(ws, meeting_id))
 
-            seq = int(event.get("seq", 0))
+            seq = _as_int(event.get("seq"), -1)
+            if seq < 0:
+                sent = await _ws_send_json_safe(
+                    ws,
+                    {
+                        "event_type": "error",
+                        "code": "bad_seq",
+                        "message": "seq должен быть целым числом >= 0",
+                    },
+                )
+                if not sent:
+                    break
+                continue
             content_b64 = event.get("content_b64", "")
             source_track = event.get("source_track")
             quality_profile = str(event.get("quality_profile") or "live")
@@ -351,6 +469,7 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                         idempotency_key=idem_key,
                         idempotency_scope="audio_chunk_ws",
                         idempotency_prefix="ws",
+                        defer_inline_processing=bool(inline_queue),
                     )
             except Exception as e:
                 log.error(
@@ -370,17 +489,62 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                 continue
 
             if result.is_duplicate:
+                sent = await _ws_send_json_safe(
+                    ws,
+                    {
+                        "event_type": "ws.ack",
+                        "meeting_id": meeting_id,
+                        "seq": seq,
+                        "duplicate": True,
+                        "last_acked_seq": max(last_acked_seq, seq),
+                        "accepted_chunks": accepted_chunks,
+                    },
+                )
+                if not sent:
+                    break
                 continue
             accepted_chunks += 1
+            last_acked_seq = max(last_acked_seq, seq)
+
+            sent = await _ws_send_json_safe(
+                ws,
+                {
+                    "event_type": "ws.ack",
+                    "meeting_id": meeting_id,
+                    "seq": seq,
+                    "duplicate": False,
+                    "last_acked_seq": last_acked_seq,
+                    "accepted_chunks": accepted_chunks,
+                },
+            )
+            if not sent:
+                break
+
+            if inline_queue is not None:
+                try:
+                    inline_queue.put_nowait(
+                        {
+                            "meeting_id": meeting_id,
+                            "seq": seq,
+                            "blob_key": result.blob_key,
+                            "source_track": source_track,
+                            "quality_profile": quality_profile,
+                        }
+                    )
+                except Exception:
+                    log.warning(
+                        "ws_inline_queue_enqueue_failed",
+                        extra={"payload": {"meeting_id": meeting_id, "seq": seq}},
+                    )
 
             if result.inline_updates:
                 for payload in result.inline_updates:
                     try:
                         sent = await _ws_send_json_safe(ws, payload)
                         if not sent:
-                            break
+                            return
                     except Exception:
-                        break
+                        return
 
     except WebSocketDisconnect:
         log.info(
@@ -410,6 +574,13 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
             },
         )
     finally:
+        if inline_queue is not None:
+            try:
+                inline_queue.put_nowait(None)
+            except Exception:
+                pass
+        if inline_worker_task:
+            inline_worker_task.cancel()
         if forward_task:
             forward_task.cancel()
 

@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 from interview_analytics_agent.common.config import get_settings
+
+log = logging.getLogger(__name__)
 
 
 STRUCTURED_COLUMNS = [
@@ -64,6 +69,58 @@ STRUCTURED_COLUMNS = [
 ]
 
 
+_SPEAKER_LINE_RE = re.compile(r"^([^:\n]{1,64}):\s*(.+)$")
+
+
+def _speaker_id_from_name(name: str) -> str:
+    normalized = re.sub(r"[^0-9a-z]+", "_", (name or "").strip().lower())
+    return normalized.strip("_")[:48]
+
+
+def _build_fallback_rows(
+    *,
+    meeting_id: str,
+    source: str,
+    transcript: str,
+    report: dict | None,
+) -> list[dict[str, Any]]:
+    lines = [line.strip() for line in (transcript or "").splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    summary = ""
+    if isinstance(report, dict):
+        summary = str(report.get("summary") or "").strip()
+    topic = summary[:160] if summary else ""
+    ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    rows: list[dict[str, Any]] = []
+    for seq, line in enumerate(lines, start=1):
+        speaker_name = ""
+        text = line
+        match = _SPEAKER_LINE_RE.match(line)
+        if match:
+            speaker_name = match.group(1).strip()
+            text = match.group(2).strip()
+
+        row: dict[str, Any] = {
+            "meeting_id": meeting_id,
+            "source": source,
+            "segment_seq": seq,
+            "speaker_id": _speaker_id_from_name(speaker_name),
+            "speaker_name": speaker_name,
+            "text": text,
+            "clean_text": text,
+            "status": "draft",
+            "confidence": 0.3,
+            "timestamp": ts,
+        }
+        if topic:
+            row["topic"] = topic
+        rows.append(row)
+    return rows
+
+
 def _build_orchestrator():
     s = get_settings()
     if not s.llm_enabled:
@@ -73,7 +130,9 @@ def _build_orchestrator():
     from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
     from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
 
-    if not (s.openai_api_key or ""):
+    has_api_base = bool((s.openai_api_base or "").strip())
+    has_api_key = bool((s.openai_api_key or "").strip())
+    if not has_api_base and not has_api_key:
         return LLMOrchestrator(MockLLMProvider())
     return LLMOrchestrator(OpenAICompatProvider())
 
@@ -86,13 +145,26 @@ def build_structured_rows(
     report: dict | None,
 ) -> dict[str, Any]:
     s = get_settings()
+    fallback_rows = _build_fallback_rows(
+        meeting_id=meeting_id,
+        source=source,
+        transcript=transcript,
+        report=report,
+    )
 
     if not s.llm_enabled:
-        return {"schema_version": "v1", "columns": STRUCTURED_COLUMNS, "rows": []}
+        return {"schema_version": "v1", "columns": STRUCTURED_COLUMNS, "rows": fallback_rows}
 
-    orch = _build_orchestrator()
+    try:
+        orch = _build_orchestrator()
+    except Exception as err:
+        log.warning(
+            "structured_llm_init_failed",
+            extra={"payload": {"meeting_id": meeting_id, "source": source, "err": str(err)[:200]}},
+        )
+        return {"schema_version": "v1", "columns": STRUCTURED_COLUMNS, "rows": fallback_rows}
     if orch is None:
-        return {"schema_version": "v1", "columns": STRUCTURED_COLUMNS, "rows": []}
+        return {"schema_version": "v1", "columns": STRUCTURED_COLUMNS, "rows": fallback_rows}
 
     system = (
         "Ты аналитик встреч. Верни ТОЛЬКО валидный JSON с ключами "
@@ -114,8 +186,24 @@ def build_structured_rows(
         f"{transcript}\n"
     )
 
-    data = orch.complete_json(system=system, user=user)
-    rows = data.get("rows", []) or []
+    try:
+        data = orch.complete_json(system=system, user=user)
+    except Exception as err:
+        log.warning(
+            "structured_llm_failed",
+            extra={"payload": {"meeting_id": meeting_id, "source": source, "err": str(err)[:200]}},
+        )
+        return {
+            "schema_version": "v1",
+            "columns": STRUCTURED_COLUMNS,
+            "rows": fallback_rows,
+        }
+
+    rows = data.get("rows", []) if isinstance(data, dict) else []
+    if not isinstance(rows, list):
+        rows = []
+    if not rows and fallback_rows:
+        rows = fallback_rows
     return {
         "schema_version": "v1",
         "columns": STRUCTURED_COLUMNS,

@@ -25,7 +25,9 @@ from fastapi.staticfiles import StaticFiles
 
 from apps.api_gateway.routers.admin import router as admin_router
 from apps.api_gateway.routers.artifacts import router as artifacts_router
+from apps.api_gateway.routers.llm import router as llm_router
 from apps.api_gateway.routers.meetings import router as meetings_router
+from apps.api_gateway.routers.quick_record import router as quick_record_router
 from apps.api_gateway.routers.realtime import router as realtime_router
 from apps.api_gateway.ws import ws_router
 from interview_analytics_agent.common.config import get_settings
@@ -34,6 +36,7 @@ from interview_analytics_agent.common.metrics import setup_metrics_endpoint
 from interview_analytics_agent.common.observability import setup_observability
 from interview_analytics_agent.common.otel import maybe_setup_otel
 from interview_analytics_agent.common.tracing import current_trace_id, start_trace
+from interview_analytics_agent.services.local_pipeline import warmup_stt_provider_async
 from interview_analytics_agent.services.readiness_service import enforce_startup_readiness
 
 log = get_project_logger()
@@ -67,6 +70,7 @@ def _cors_params() -> tuple[list[str], bool]:
 def _create_app() -> FastAPI:
     app = FastAPI(title="Interview Analytics Agent", version="0.1.0")
     allow_origins, allow_credentials = _cors_params()
+    settings = get_settings()
 
     # CORS (настраивается через ENV; в prod wildcard запрещён)
     app.add_middleware(
@@ -97,6 +101,17 @@ def _create_app() -> FastAPI:
     def health() -> dict[str, Any]:
         return {"ok": True}
 
+    @app.on_event("startup")
+    async def startup_warmup() -> None:
+        queue_mode = (settings.queue_mode or "").strip().lower()
+        if queue_mode != "inline":
+            return
+        if (settings.stt_provider or "").strip().lower() != "whisper_local":
+            return
+        if not bool(getattr(settings, "whisper_warmup_on_start", True)):
+            return
+        warmup_stt_provider_async()
+
     ui_dir = Path(__file__).parent / "ui"
     if ui_dir.exists():
         app.mount("/ui", StaticFiles(directory=ui_dir), name="ui")
@@ -107,6 +122,8 @@ def _create_app() -> FastAPI:
 
     app.include_router(meetings_router, prefix="/v1")
     app.include_router(artifacts_router, prefix="/v1")
+    app.include_router(llm_router, prefix="/v1")
+    app.include_router(quick_record_router, prefix="/v1")
     app.include_router(realtime_router, prefix="/v1")
     app.include_router(admin_router, prefix="/v1")
     app.include_router(ws_router, prefix="/v1")

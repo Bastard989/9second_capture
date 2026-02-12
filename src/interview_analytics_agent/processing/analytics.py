@@ -28,8 +28,12 @@ def _build_orchestrator():
     from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
     from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
 
-    # если ключа нет — используем mock
-    if not (s.openai_api_key or ""):
+    has_api_base = bool((s.openai_api_base or "").strip())
+    has_api_key = bool((s.openai_api_key or "").strip())
+
+    # Если endpoint не задан — работаем на mock.
+    # Для Ollama endpoint обычно локальный и может работать с фиктивным ключом.
+    if not has_api_base and not has_api_key:
         return LLMOrchestrator(MockLLMProvider())
 
     return LLMOrchestrator(OpenAICompatProvider())
@@ -60,7 +64,15 @@ def build_report(*, enhanced_transcript: str, meeting_context: dict) -> dict[str
             "recommendation": "",
         }
 
-    orch = _build_orchestrator()
+    try:
+        orch = _build_orchestrator()
+    except Exception:
+        return {
+            "summary": "LLM unavailable; basic report",
+            "bullets": ["Pipeline OK", "LLM unavailable"],
+            "risk_flags": [],
+            "recommendation": "",
+        }
     if orch is None:
         # на всякий случай: чтобы не падать даже при странной конфигурации
         return {
@@ -76,7 +88,15 @@ def build_report(*, enhanced_transcript: str, meeting_context: dict) -> dict[str
     )
     user = "Контекст встречи:\n" f"{meeting_context}\n\n" "Транскрипт:\n" f"{enhanced_transcript}\n"
 
-    data = orch.complete_json(system=system, user=user)
+    try:
+        data = orch.complete_json(system=system, user=user)
+    except Exception:
+        return {
+            "summary": "LLM unavailable; basic report",
+            "bullets": ["Pipeline OK", "LLM unavailable"],
+            "risk_flags": [],
+            "recommendation": "",
+        }
 
     return {
         "summary": data.get("summary", ""),

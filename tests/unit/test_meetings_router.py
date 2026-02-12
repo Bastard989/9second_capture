@@ -45,6 +45,9 @@ def _client(monkeypatch) -> TestClient:
         def __init__(self, _session):
             pass
 
+        def list_active(self):
+            return []
+
         def save(self, _m):
             return None
 
@@ -156,3 +159,108 @@ def test_start_meeting_auto_join_error_returns_503(monkeypatch, auth_settings) -
     assert resp.status_code == 503
     detail = resp.json()["detail"]
     assert detail["code"] == ErrCode.CONNECTOR_PROVIDER_ERROR
+
+
+def test_start_meeting_conflict_when_active_local_recording_exists(monkeypatch, auth_settings) -> None:
+    @contextmanager
+    def _fake_db_session():
+        yield object()
+
+    class _FakeMeetingRepo:
+        def __init__(self, _session):
+            pass
+
+        def list_active(self):
+            return [
+                SimpleNamespace(
+                    id="m-active-1",
+                    status="processing",
+                    context={"source": "local_ui"},
+                    finished_at=None,
+                )
+            ]
+
+        def save(self, _m):
+            return None
+
+    monkeypatch.setattr("apps.api_gateway.routers.meetings.db_session", _fake_db_session)
+    monkeypatch.setattr("apps.api_gateway.routers.meetings.MeetingRepository", _FakeMeetingRepo)
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.meetings.create_meeting",
+        lambda meeting_id, context, consent: SimpleNamespace(
+            id=meeting_id or "m-auto",
+            status="queued",
+            context=context,
+            consent=consent,
+        ),
+    )
+
+    app = FastAPI()
+    app.include_router(meetings_router, prefix="/v1")
+    client = TestClient(app)
+
+    resp = client.post(
+        "/v1/meetings/start",
+        headers={"X-API-Key": "user-1"},
+        json={
+            "meeting_id": "m-new-1",
+            "mode": "realtime",
+            "consent": "unknown",
+            "context": {"source": "local_ui"},
+        },
+    )
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "active_recording_exists"
+    assert detail["message"] == "m-active-1"
+
+
+def test_start_meeting_ignores_finished_local_recording(monkeypatch, auth_settings) -> None:
+    @contextmanager
+    def _fake_db_session():
+        yield object()
+
+    class _FakeMeetingRepo:
+        def __init__(self, _session):
+            pass
+
+        def list_active(self):
+            return [
+                SimpleNamespace(
+                    id="m-finished-1",
+                    status="processing",
+                    context={"source": "local_ui"},
+                    finished_at="2026-02-11 13:00:00",
+                )
+            ]
+
+        def save(self, _m):
+            return None
+
+    monkeypatch.setattr("apps.api_gateway.routers.meetings.db_session", _fake_db_session)
+    monkeypatch.setattr("apps.api_gateway.routers.meetings.MeetingRepository", _FakeMeetingRepo)
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.meetings.create_meeting",
+        lambda meeting_id, context, consent: SimpleNamespace(
+            id=meeting_id or "m-auto",
+            status="queued",
+            context=context,
+            consent=consent,
+        ),
+    )
+
+    app = FastAPI()
+    app.include_router(meetings_router, prefix="/v1")
+    client = TestClient(app)
+
+    resp = client.post(
+        "/v1/meetings/start",
+        headers={"X-API-Key": "user-1"},
+        json={
+            "meeting_id": "m-new-2",
+            "mode": "realtime",
+            "consent": "unknown",
+            "context": {"source": "local_ui"},
+        },
+    )
+    assert resp.status_code == 200

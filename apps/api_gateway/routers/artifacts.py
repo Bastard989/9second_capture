@@ -15,6 +15,7 @@ from interview_analytics_agent.processing.aggregation import (
     build_raw_transcript,
 )
 from interview_analytics_agent.processing.analytics import build_report, report_to_text
+from interview_analytics_agent.processing.enhancer import cleanup_transcript_with_llm
 from interview_analytics_agent.processing.structured import build_structured_rows, structured_to_csv
 from interview_analytics_agent.services.local_pipeline import (
     recover_transcript_from_backup_audio,
@@ -56,16 +57,80 @@ def _ensure_transcripts(meeting_id: str) -> tuple[str, str]:
 
     with db_session() as session:
         mrepo = MeetingRepository(session)
-        if not mrepo.get(meeting_id):
+        meeting = mrepo.get(meeting_id)
+        if not meeting:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
         srepo = TranscriptSegmentRepository(session)
         segs = srepo.list_by_meeting(meeting_id)
         raw = build_raw_transcript(segs)
         clean = build_enhanced_transcript(segs)
+        clean = _maybe_cleanup_clean_transcript_with_cache(
+            meeting_id=meeting_id,
+            clean_text=clean,
+            segs=segs,
+        )
+        meeting.raw_transcript = raw
+        meeting.enhanced_transcript = clean
+        if meeting.finished_at and meeting.status != PipelineStatus.done:
+            meeting.status = PipelineStatus.done
+        mrepo.save(meeting)
 
     records.write_text(meeting_id, "raw.txt", raw)
     records.write_text(meeting_id, "clean.txt", clean)
     return raw, clean
+
+
+def _segment_signature(segs: list) -> dict[str, int]:
+    return {
+        "count": len(segs),
+        "max_seq": max((int(getattr(seg, "seq", -1)) for seg in segs), default=-1),
+        "raw_chars": sum(len((getattr(seg, "raw_text", "") or "").strip()) for seg in segs),
+    }
+
+
+def _maybe_cleanup_clean_transcript_with_cache(*, meeting_id: str, clean_text: str, segs: list) -> str:
+    clean = (clean_text or "").strip()
+    if not clean:
+        return clean_text
+    s = get_settings()
+    if not s.llm_enabled or not bool(getattr(s, "llm_transcript_cleanup_enabled", True)):
+        return clean_text
+
+    signature = _segment_signature(segs)
+    cache_meta_name = "clean_llm.meta.json"
+    cache_text_name = "clean_llm.txt"
+
+    try:
+        if records.exists(meeting_id, cache_meta_name) and records.exists(meeting_id, cache_text_name):
+            meta = records.read_json(meeting_id, cache_meta_name)
+            cached_sig = meta.get("segment_signature") if isinstance(meta, dict) else None
+            if cached_sig == signature:
+                cached_clean = records.read_text(meeting_id, cache_text_name)
+                if cached_clean.strip():
+                    return cached_clean
+    except Exception:
+        # cache miss/parse issues -> continue with fresh cleanup
+        pass
+
+    cleaned, meta = cleanup_transcript_with_llm(clean)
+    cleaned = (cleaned or "").strip()
+    if not cleaned:
+        return clean_text
+
+    try:
+        records.write_text(meeting_id, cache_text_name, cleaned)
+        records.write_json(
+            meeting_id,
+            cache_meta_name,
+            {
+                "segment_signature": signature,
+                "meta": meta,
+            },
+        )
+    except Exception:
+        # best-effort cache
+        pass
+    return cleaned
 
 
 @router.get("/meetings", response_model=MeetingListResponse)

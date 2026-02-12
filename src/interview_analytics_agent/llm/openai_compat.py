@@ -26,13 +26,17 @@ class OpenAICompatProvider:
 
     def __init__(self) -> None:
         s = get_settings()
-        api_base = getattr(s, "openai_api_base", "") or ""
-        api_key = getattr(s, "openai_api_key", "") or ""
+        api_base = (getattr(s, "openai_api_base", "") or "").strip()
+        api_key = (getattr(s, "openai_api_key", "") or "").strip()
         model = getattr(s, "llm_model_id", "gpt-4o-mini") or "gpt-4o-mini"
         timeout_s = int(getattr(s, "llm_request_timeout_sec", 60) or 60)
 
         if not api_base:
             raise ProviderError(ErrCode.LLM_PROVIDER_ERROR, "OPENAI_API_BASE не задан")
+        if not api_key and ("127.0.0.1" in api_base or "localhost" in api_base):
+            # Для локальных OpenAI-compatible провайдеров (например, Ollama)
+            # часто достаточно фиктивного bearer token.
+            api_key = "ollama"
         if not api_key:
             raise ProviderError(ErrCode.LLM_PROVIDER_ERROR, "OPENAI_API_KEY не задан")
 
@@ -51,10 +55,9 @@ class OpenAICompatProvider:
         }
 
         url = self.cfg.api_base.rstrip("/") + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.cfg.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if self.cfg.api_key:
+            headers["Authorization"] = f"Bearer {self.cfg.api_key}"
 
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=self.cfg.timeout_s)

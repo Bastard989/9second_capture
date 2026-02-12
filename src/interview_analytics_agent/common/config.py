@@ -88,6 +88,30 @@ class Settings(BaseSettings):
 
     chunks_dir: str = Field(default="./data/chunks", alias="CHUNKS_DIR")
     records_dir: str = Field(default="./data/records", alias="RECORDS_DIR")
+    quick_record_enabled: bool = Field(default=True, alias="QUICK_RECORD_ENABLED")
+    quick_record_output_dir: str = Field(
+        default="./data/records/quick", alias="QUICK_RECORD_OUTPUT_DIR"
+    )
+    quick_record_default_duration_sec: int = Field(
+        default=1800, alias="QUICK_RECORD_DEFAULT_DURATION_SEC"
+    )
+    quick_record_segment_length_sec: int = Field(
+        default=120, alias="QUICK_RECORD_SEGMENT_LENGTH_SEC"
+    )
+    quick_record_overlap_sec: int = Field(default=30, alias="QUICK_RECORD_OVERLAP_SEC")
+    quick_record_sample_rate: int = Field(default=44100, alias="QUICK_RECORD_SAMPLE_RATE")
+    quick_record_block_size: int = Field(default=1024, alias="QUICK_RECORD_BLOCK_SIZE")
+    quick_record_auto_open_url: bool = Field(default=False, alias="QUICK_RECORD_AUTO_OPEN_URL")
+    quick_record_agent_base_url: str = Field(
+        default="http://127.0.0.1:8010", alias="QUICK_RECORD_AGENT_BASE_URL"
+    )
+    quick_record_agent_api_key: str | None = Field(
+        default=None, alias="QUICK_RECORD_AGENT_API_KEY"
+    )
+    quick_record_wait_report_sec: int = Field(default=180, alias="QUICK_RECORD_WAIT_REPORT_SEC")
+    quick_record_poll_interval_sec: float = Field(
+        default=3.0, alias="QUICK_RECORD_POLL_INTERVAL_SEC"
+    )
     storage_mode: str = Field(default="local_fs", alias="STORAGE_MODE")  # local_fs|shared_fs
     storage_shared_fs_dir: str | None = Field(default=None, alias="STORAGE_SHARED_FS_DIR")
     storage_require_shared_in_prod: bool = Field(
@@ -120,8 +144,9 @@ class Settings(BaseSettings):
         default=True, alias="WHISPER_VAD_FILTER"
     )  # VAD для улучшения качества сегментов
     whisper_beam_size: int = Field(default=3, alias="WHISPER_BEAM_SIZE")
-    whisper_beam_size_live: int = Field(default=1, alias="WHISPER_BEAM_SIZE_LIVE")
-    whisper_beam_size_final: int = Field(default=4, alias="WHISPER_BEAM_SIZE_FINAL")
+    whisper_beam_size_live: int = Field(default=3, alias="WHISPER_BEAM_SIZE_LIVE")
+    whisper_beam_size_final: int = Field(default=6, alias="WHISPER_BEAM_SIZE_FINAL")
+    whisper_warmup_on_start: bool = Field(default=True, alias="WHISPER_WARMUP_ON_START")
     whisper_audio_hpf_enabled: bool = Field(default=True, alias="WHISPER_AUDIO_HPF_ENABLED")
     whisper_audio_hpf_cutoff_hz: int = Field(default=80, alias="WHISPER_AUDIO_HPF_CUTOFF_HZ")
     whisper_audio_noise_suppress_enabled: bool = Field(
@@ -215,6 +240,12 @@ class Settings(BaseSettings):
     llm_request_timeout_sec: int = Field(default=30, alias="LLM_REQUEST_TIMEOUT_SEC")
     llm_retries: int = Field(default=2, alias="LLM_RETRIES")
     llm_retry_backoff_ms: int = Field(default=250, alias="LLM_RETRY_BACKOFF_MS")
+    llm_transcript_cleanup_enabled: bool = Field(
+        default=True, alias="LLM_TRANSCRIPT_CLEANUP_ENABLED"
+    )
+    llm_transcript_cleanup_chunk_chars: int = Field(
+        default=1800, alias="LLM_TRANSCRIPT_CLEANUP_CHUNK_CHARS"
+    )
 
     # -------------------------------------------------------------------------
     # Speaker inference

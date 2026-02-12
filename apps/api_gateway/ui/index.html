@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <title>9second_capture — Local Agent</title>
-    <link rel="stylesheet" href="/ui/styles.css?v=20260211d" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260211g" />
   </head>
   <body>
     <div class="bg-layer"></div>
@@ -54,6 +54,21 @@
           />
         </div>
         <div class="field">
+          <label for="llmModelSelect" data-i18n="llm_model_label">LLM модель</label>
+          <div class="row llm-row">
+            <select id="llmModelSelect"></select>
+            <button id="scanLlmModels" class="ghost" data-i18n="llm_scan_btn">
+              Сканировать
+            </button>
+            <button id="applyLlmModel" class="ghost" data-i18n="llm_apply_btn">
+              Сменить модель
+            </button>
+          </div>
+          <div id="llmStatusText" class="hint llm-status" data-i18n="llm_status_loading">
+            Загружаем настройки LLM...
+          </div>
+        </div>
+        <div class="field">
           <label for="deviceSelect" data-i18n="device_label">Источник аудио</label>
           <div class="row">
             <select id="deviceSelect"></select>
@@ -64,6 +79,9 @@
         </div>
         <div class="hint" data-i18n="device_hint">
           Выберите виртуальный драйвер захвата системного звука.
+        </div>
+        <div id="deviceStatusText" class="hint device-status" data-i18n="device_status_unknown">
+          Устройства не проверены.
         </div>
         <div class="row">
           <button id="checkDriver" class="ghost" data-i18n="driver_check">
@@ -239,6 +257,51 @@
         <div class="hint" data-i18n="upload_hint">
           Видео‑анализ появится после интеграции мультимодальной LLM.
         </div>
+        <div class="hint" data-i18n="quick_record_title">Quick fallback запись</div>
+        <div class="field">
+          <label for="quickRecordUrl" data-i18n="quick_record_url_label">Ссылка встречи</label>
+          <input
+            id="quickRecordUrl"
+            type="url"
+            placeholder="https://..."
+            data-i18n-placeholder="quick_record_url_placeholder"
+          />
+        </div>
+        <div class="field">
+          <label for="quickRecordDuration" data-i18n="quick_record_duration_label"
+            >Длительность (сек)</label
+          >
+          <input id="quickRecordDuration" type="number" min="5" step="5" value="900" />
+        </div>
+        <div class="row">
+          <label class="checkbox">
+            <input id="quickRecordTranscribe" type="checkbox" />
+            <span data-i18n="quick_record_transcribe_label">Сделать локальную транскрибацию</span>
+          </label>
+          <label class="checkbox">
+            <input id="quickRecordUpload" type="checkbox" />
+            <span data-i18n="quick_record_upload_label">Отправить запись в пайплайн агента</span>
+          </label>
+        </div>
+        <div class="row">
+          <button id="quickRecordStart" class="ghost" data-i18n="quick_record_start_btn">
+            Quick старт
+          </button>
+          <button
+            id="quickRecordStop"
+            class="ghost"
+            data-i18n="quick_record_stop_btn"
+            disabled
+          >
+            Quick стоп
+          </button>
+          <span id="quickRecordState" class="pill muted" data-i18n="quick_record_state_idle"
+            >Не запущено</span
+          >
+        </div>
+        <div id="quickRecordHint" class="hint" data-i18n="quick_record_hint_ready">
+          Fallback запись готова к запуску.
+        </div>
       </section>
 
       <section class="card card-transcript">
@@ -342,6 +405,6 @@
       </span>
     </footer>
 
-    <script src="/ui/app.js?v=20260211d"></script>
+    <script src="/ui/app.js?v=20260211g"></script>
   </body>
 </html>

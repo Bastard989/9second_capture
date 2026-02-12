@@ -17,7 +17,16 @@ from .versions import WS_SCHEMA_VERSION
 # =============================================================================
 # ТИПЫ СОБЫТИЙ
 # =============================================================================
-WSEventType = Literal["audio.chunk", "transcript.update", "error"]
+WSEventType = Literal[
+    "audio.chunk",
+    "transcript.update",
+    "error",
+    "ping",
+    "ws.pong",
+    "ws.ack",
+    "session.resume",
+    "ws.resumed",
+]
 
 
 # =============================================================================

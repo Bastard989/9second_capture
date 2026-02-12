@@ -41,6 +41,7 @@ def ingest_audio_chunk_bytes(
     idempotency_key: str | None = None,
     idempotency_scope: str = "audio_chunk_http",
     idempotency_prefix: str = "http-chunk",
+    defer_inline_processing: bool = False,
 ) -> ChunkIngestResult:
     idem_key = idempotency_key or new_idempotency_key(idempotency_prefix)
     blob_key = f"meetings/{meeting_id}/chunks/{seq}.bin"
@@ -59,14 +60,15 @@ def ingest_audio_chunk_bytes(
     inline_updates: list[dict] | None = None
     settings = get_settings()
     if (settings.queue_mode or "").strip().lower() == "inline":
-        inline_updates = process_chunk_inline(
-            meeting_id=meeting_id,
-            chunk_seq=seq,
-            audio_bytes=audio_bytes,
-            blob_key=blob_key,
-            quality_profile=quality_profile,
-            source_track=source_track,
-        )
+        if not defer_inline_processing:
+            inline_updates = process_chunk_inline(
+                meeting_id=meeting_id,
+                chunk_seq=seq,
+                audio_bytes=audio_bytes,
+                blob_key=blob_key,
+                quality_profile=quality_profile,
+                source_track=source_track,
+            )
     else:
         enqueue_stt(
             meeting_id=meeting_id,

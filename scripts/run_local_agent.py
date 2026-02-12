@@ -29,6 +29,34 @@ def _state_file() -> Path:
     return _state_dir() / "state.json"
 
 
+def _runtime_overrides_file() -> Path:
+    return _state_dir() / "runtime_overrides.json"
+
+
+def _apply_runtime_overrides() -> None:
+    path = _runtime_overrides_file()
+    if not path.exists():
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(raw, dict):
+        return
+    allowed_keys = {
+        "LLM_MODEL_ID",
+        "LLM_ENABLED",
+        "LLM_LIVE_ENABLED",
+        "OPENAI_API_BASE",
+        "OPENAI_API_KEY",
+    }
+    for key in allowed_keys:
+        value = raw.get(key)
+        if value is None:
+            continue
+        os.environ[key] = str(value)
+
+
 def _load_last_port() -> int | None:
     try:
         data = json.loads(_state_file().read_text(encoding="utf-8"))
@@ -90,14 +118,16 @@ def main() -> None:
     os.environ.setdefault("AUTH_MODE", "none")
     os.environ.setdefault("QUEUE_MODE", "inline")
     os.environ.setdefault("POSTGRES_DSN", "sqlite:///./data/local_agent/agent.db")
-    # Для realtime-чанков ~1с VAD часто вырезает фразы целиком.
-    # В локальном агенте по умолчанию отключаем, чтобы transcript шел стабильно.
+    # Рекомендованный профиль для русской речи: баланс качества/скорости.
     os.environ.setdefault("WHISPER_MODEL_SIZE", "medium")
-    os.environ.setdefault("WHISPER_COMPUTE_TYPE", "float32")
-    os.environ.setdefault("WHISPER_BEAM_SIZE_LIVE", "1")
-    os.environ.setdefault("WHISPER_BEAM_SIZE_FINAL", "4")
-    os.environ.setdefault("WHISPER_VAD_FILTER", "false")
+    os.environ.setdefault("WHISPER_COMPUTE_TYPE", "int8")
+    os.environ.setdefault("WHISPER_LANGUAGE", "ru")
+    os.environ.setdefault("WHISPER_BEAM_SIZE_LIVE", "3")
+    os.environ.setdefault("WHISPER_BEAM_SIZE_FINAL", "6")
+    os.environ.setdefault("WHISPER_VAD_FILTER", "true")
+    os.environ.setdefault("WHISPER_WARMUP_ON_START", "true")
     _state_dir().mkdir(parents=True, exist_ok=True)
+    _apply_runtime_overrides()
 
     url = f"http://127.0.0.1:{port}"
     print(f"[local-agent] UI: {url}")
