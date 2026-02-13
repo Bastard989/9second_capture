@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <title>9second_capture — Local Agent</title>
-    <link rel="stylesheet" href="/ui/styles.css?v=20260211g" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260213a" />
   </head>
   <body>
     <div class="bg-layer"></div>
@@ -52,6 +52,49 @@
             placeholder="X-API-Key"
             data-i18n-placeholder="api_key_placeholder"
           />
+        </div>
+        <div class="field interview-meta">
+          <label data-i18n="interview_meta_title">Контекст интервью (обязательно)</label>
+          <div class="meta-grid">
+            <input
+              id="metaCandidateName"
+              type="text"
+              autocomplete="off"
+              placeholder="Имя кандидата"
+              data-i18n-placeholder="meta_candidate_name"
+            />
+            <input
+              id="metaCandidateId"
+              type="text"
+              autocomplete="off"
+              placeholder="Candidate ID"
+              data-i18n-placeholder="meta_candidate_id"
+            />
+            <input
+              id="metaVacancy"
+              type="text"
+              autocomplete="off"
+              placeholder="Вакансия"
+              data-i18n-placeholder="meta_vacancy"
+            />
+            <input
+              id="metaLevel"
+              type="text"
+              autocomplete="off"
+              placeholder="Уровень (Junior/Middle/Senior)"
+              data-i18n-placeholder="meta_level"
+            />
+            <input
+              id="metaInterviewer"
+              type="text"
+              autocomplete="off"
+              placeholder="Интервьюер"
+              data-i18n-placeholder="meta_interviewer"
+            />
+          </div>
+          <div class="hint" data-i18n="interview_meta_hint">
+            Эти поля обязательны для объективного сравнения кандидатов между интервью.
+          </div>
         </div>
         <div class="field">
           <label for="llmModelSelect" data-i18n="llm_model_label">LLM модель</label>
@@ -195,6 +238,70 @@
               <option value="" data-i18n="mic_input_auto">Авто (рекомендуется)</option>
             </select>
           </div>
+          <div class="field language-profile-picker">
+            <label for="languageProfileSelect" data-i18n="language_profile_label">Язык интервью</label>
+            <select id="languageProfileSelect">
+              <option value="mixed" data-i18n="language_profile_mixed">Mixed (RU + EN)</option>
+              <option value="ru" data-i18n="language_profile_ru">Русский</option>
+              <option value="en" data-i18n="language_profile_en">English</option>
+            </select>
+            <div class="hint" data-i18n="language_profile_hint">
+              Влияет на языковую подсказку STT и точность распознавания терминов.
+            </div>
+          </div>
+          <div class="field quality-picker">
+            <label data-i18n="quality_profile_label">Профиль качества</label>
+            <div class="segmented">
+              <button id="qualityFast" class="ghost" data-quality="fast" data-i18n="quality_fast">
+                Fast
+              </button>
+              <button
+                id="qualityBalanced"
+                class="ghost active"
+                data-quality="balanced"
+                data-i18n="quality_balanced"
+              >
+                Balanced
+              </button>
+              <button
+                id="qualityAccurate"
+                class="ghost"
+                data-quality="accurate"
+                data-i18n="quality_accurate"
+              >
+                Accurate
+              </button>
+            </div>
+            <div id="qualityHint" class="hint" data-i18n="quality_balanced_desc">
+              Баланс точности и задержки.
+            </div>
+          </div>
+          <div class="diag-block">
+            <div class="row diag-header">
+              <strong data-i18n="diag_title">Проверка перед стартом</strong>
+              <button id="runDiagnostics" class="ghost" data-i18n="diag_run_btn">Проверить</button>
+            </div>
+            <div id="diagHint" class="hint" data-i18n="diag_hint_idle">
+              Запустите диагностику перед записью.
+            </div>
+            <div class="diag-grid">
+              <div id="diagAudio" class="diag-item muted" data-i18n="diag_audio_access">
+                Доступ к аудио
+              </div>
+              <div id="diagSystem" class="diag-item muted" data-i18n="diag_system_level">
+                Уровень system
+              </div>
+              <div id="diagMic" class="diag-item muted" data-i18n="diag_mic_level">
+                Уровень mic
+              </div>
+              <div id="diagStt" class="diag-item muted" data-i18n="diag_stt_ready">
+                STT готов
+              </div>
+              <div id="diagLlm" class="diag-item muted" data-i18n="diag_llm_ready">
+                LLM доступен
+              </div>
+            </div>
+          </div>
         </div>
         <div class="status">
           <span data-i18n="status_label">Статус:</span>
@@ -203,6 +310,9 @@
           >
         </div>
         <div id="statusHint" class="status-hint"></div>
+        <div id="recognitionDiagnosis" class="status-hint muted" data-i18n="diag_reason_none">
+          Диагноз: пока данных недостаточно.
+        </div>
         <div class="countdown">
           <span data-i18n="countdown_label">Отсчёт:</span>
           <span id="countdownValue">—</span>
@@ -215,6 +325,16 @@
         </div>
         <div class="meter">
           <div class="meter-bar" id="levelBar"></div>
+        </div>
+        <div class="meter-detail">
+          <div class="meter-row">
+            <span id="systemLevelText" data-i18n="meter_system_label">System: —</span>
+            <div class="meter meter-mini"><div class="meter-bar" id="systemLevelBar"></div></div>
+          </div>
+          <div class="meter-row">
+            <span id="micLevelText" data-i18n="meter_mic_label">Mic: —</span>
+            <div class="meter meter-mini"><div class="meter-bar" id="micLevelBar"></div></div>
+          </div>
         </div>
         <div class="signal-row">
           <span id="signalText" data-i18n="signal_waiting">Сигнал: ожидание</span>
@@ -304,38 +424,6 @@
         </div>
       </section>
 
-      <section class="card card-transcript">
-        <h2 data-i18n="transcript_title">Транскрипт</h2>
-        <div class="transcript-grid">
-          <div class="transcript-box">
-            <div class="transcript-header">
-              <span data-i18n="raw_label">Raw</span>
-              <span class="delay-note" data-i18n="raw_live">Live</span>
-            </div>
-            <textarea
-              id="transcriptRaw"
-              class="transcript-area"
-              readonly
-              placeholder="..."
-              data-i18n-placeholder="transcript_placeholder_raw"
-            ></textarea>
-          </div>
-          <div class="transcript-box">
-            <div class="transcript-header">
-              <span data-i18n="clean_label">Clean</span>
-              <span class="delay-note" data-i18n="clean_delay">~3–4 сек</span>
-            </div>
-            <textarea
-              id="transcriptClean"
-              class="transcript-area"
-              readonly
-              placeholder="..."
-              data-i18n-placeholder="transcript_placeholder_clean"
-            ></textarea>
-          </div>
-        </div>
-      </section>
-
       <section class="card card-results">
         <h2 data-i18n="records_title">Результаты</h2>
         <div class="row">
@@ -393,6 +481,72 @@
             >
               Таблица
             </button>
+          </div>
+        </div>
+        <div class="compare-block">
+          <div class="row compare-header">
+            <strong data-i18n="compare_title">Сравнение интервью</strong>
+            <button id="refreshCompare" class="ghost" data-i18n="compare_refresh">
+              Обновить
+            </button>
+          </div>
+          <div id="compareHint" class="hint" data-i18n="compare_hint_idle">
+            Сводка покажет сравнение кандидатов после генерации отчётов.
+          </div>
+          <div class="row compare-actions">
+            <button id="downloadCompareCsv" class="ghost" data-i18n="compare_export_csv">
+              Экспорт CSV
+            </button>
+            <button id="downloadCompareJson" class="ghost" data-i18n="compare_export_json">
+              Экспорт JSON
+            </button>
+          </div>
+          <div class="compare-table-wrap">
+            <table id="compareTable" class="compare-table">
+              <thead>
+                <tr>
+                  <th data-i18n="compare_col_candidate">Кандидат</th>
+                  <th data-i18n="compare_col_vacancy">Вакансия</th>
+                  <th data-i18n="compare_col_level">Уровень</th>
+                  <th data-i18n="compare_col_score">Score</th>
+                  <th data-i18n="compare_col_decision">Решение</th>
+                  <th data-i18n="compare_col_quality">Качество</th>
+                </tr>
+              </thead>
+              <tbody id="compareTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="card card-transcript">
+        <h2 data-i18n="transcript_title">Транскрипт</h2>
+        <div class="transcript-grid">
+          <div class="transcript-box">
+            <div class="transcript-header">
+              <span data-i18n="raw_label">Raw</span>
+              <span class="delay-note" data-i18n="raw_live">Live</span>
+            </div>
+            <textarea
+              id="transcriptRaw"
+              class="transcript-area"
+              readonly
+              placeholder="..."
+              data-i18n-placeholder="transcript_placeholder_raw"
+            ></textarea>
+          </div>
+          <div class="transcript-box">
+            <div class="transcript-header">
+              <span data-i18n="clean_label">Clean</span>
+              <span class="delay-note" data-i18n="clean_delay">~3–4 сек</span>
+            </div>
+            <textarea
+              id="transcriptClean"
+              class="transcript-area"
+              readonly
+              placeholder="..."
+              data-i18n-placeholder="transcript_placeholder_clean"
+            ></textarea>
           </div>
         </div>
       </section>

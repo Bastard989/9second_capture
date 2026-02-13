@@ -1,0 +1,50 @@
+name: Desktop Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "scripts/launcher.py"
+      - "apps/**"
+      - "requirements.app.txt"
+      - "requirements.whisper.txt"
+      - "tools/packaging/build_windows.ps1"
+      - ".github/workflows/desktop-windows-build.yml"
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-launcher:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Build launcher (.exe)
+        shell: pwsh
+        run: tools/packaging/build_windows.ps1
+
+      - name: Pack artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/9second_capture")) {
+            Write-Error "dist/9second_capture not found"
+            exit 1
+          }
+          Compress-Archive -Path "dist/9second_capture/*" -DestinationPath "dist/9second_capture_windows.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 9second_capture-windows
+          path: dist/9second_capture_windows.zip
+          if-no-files-found: error

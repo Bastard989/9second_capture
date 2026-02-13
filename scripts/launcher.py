@@ -15,7 +15,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 STATE_LOCK = threading.Lock()
@@ -26,6 +26,8 @@ INSTALL_ERROR: str | None = None
 APP_PROCESS: subprocess.Popen | None = None
 APP_URL: str | None = None
 LOG_FILE: Path | None = None
+
+OLLAMA_DEFAULT_MODEL = "llama3.1:8b"
 
 
 def _bundle_root() -> Path:
@@ -42,6 +44,10 @@ def _user_root() -> Path:
 
 def _mode_file() -> Path:
     return _user_root() / "install_mode.json"
+
+
+def _runtime_overrides_path() -> Path:
+    return _user_root() / "state" / "runtime_overrides.json"
 
 
 def _log(line: str) -> None:
@@ -67,6 +73,17 @@ def _write_url_file(url: str) -> None:
         (root / "launcher.url").write_text(url + "\n", encoding="utf-8")
     except Exception:
         pass
+
+
+def _launcher_ui_index() -> Path:
+    bundle_root = _bundle_root()
+    candidate = bundle_root / "launcher_ui" / "index.html"
+    if candidate.exists():
+        return candidate
+    fallback = bundle_root / "apps" / "launcher" / "ui" / "index.html"
+    if fallback.exists():
+        return fallback
+    return candidate
 
 
 def _set_state(state: str, error: str | None = None) -> None:
@@ -170,6 +187,173 @@ def _venv_has_whisper(python_bin: Path) -> bool:
         return False
 
 
+def _ollama_bin() -> str | None:
+    return shutil.which("ollama")
+
+
+def _ollama_running(timeout_sec: float = 1.2) -> bool:
+    req = Request("http://127.0.0.1:11434/api/tags", method="GET")
+    try:
+        with urlopen(req, timeout=timeout_sec) as resp:
+            return 200 <= int(resp.status) < 300
+    except Exception:
+        return False
+
+
+def _ollama_models(timeout_sec: float = 2.4) -> list[str]:
+    bin_path = _ollama_bin()
+    if not bin_path:
+        return []
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    try:
+        proc = subprocess.run(
+            [bin_path, "list"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            timeout=timeout_sec,
+        )
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    rows = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+    if not rows:
+        return []
+    models: list[str] = []
+    for line in rows[1:]:
+        parts = line.split()
+        if parts:
+            models.append(parts[0].strip())
+    dedup: list[str] = []
+    seen: set[str] = set()
+    for model in models:
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        dedup.append(model)
+    return dedup
+
+
+def _split_model_id(model_id: str) -> tuple[str, str]:
+    value = str(model_id or "").strip().lower()
+    if not value:
+        return "", ""
+    if ":" not in value:
+        return value, "latest"
+    name, tag = value.split(":", 1)
+    return name.strip(), tag.strip()
+
+
+def _is_compatible_model(target_model: str, candidate_model: str) -> bool:
+    target_name, target_tag = _split_model_id(target_model)
+    candidate_name, candidate_tag = _split_model_id(candidate_model)
+    if not target_name or not candidate_name:
+        return False
+    if target_tag != candidate_tag:
+        return False
+    if target_name == candidate_name:
+        return True
+    aliases = {
+        "llama3.1": {"llama3"},
+        "llama3": {"llama3.1"},
+    }
+    return candidate_name in aliases.get(target_name, set())
+
+
+def _resolve_model_match(target_model: str, installed_models: list[str]) -> tuple[bool, bool, str]:
+    target = str(target_model or "").strip()
+    if not target:
+        return False, False, ""
+    clean_models = [str(model).strip() for model in installed_models if str(model).strip()]
+    exact_lookup = {model.lower(): model for model in clean_models}
+    exact = exact_lookup.get(target.lower())
+    if exact:
+        return True, True, exact
+    for model in clean_models:
+        if _is_compatible_model(target, model):
+            return True, False, model
+    return False, False, ""
+
+
+def _load_runtime_overrides() -> dict[str, str]:
+    path = _runtime_overrides_path()
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return {str(k): str(v) for k, v in raw.items() if str(k).strip()}
+    except Exception:
+        return {}
+    return {}
+
+
+def _open_ollama_app() -> bool:
+    if sys.platform != "darwin":
+        return False
+    try:
+        subprocess.run(["open", "-a", "Ollama"], check=False)
+        return True
+    except Exception:
+        return False
+
+
+def _wait_ollama_ready(timeout_sec: float = 24.0) -> bool:
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if _ollama_running(timeout_sec=1.2):
+            return True
+        time.sleep(0.6)
+    return False
+
+
+def _pull_ollama_model(model_id: str) -> bool:
+    model = str(model_id or "").strip()
+    if not model:
+        model = OLLAMA_DEFAULT_MODEL
+    bin_path = _ollama_bin()
+    if not bin_path:
+        _log("[llm] ollama binary not found")
+        return False
+    _log(f"[llm] pulling model: {model}")
+    try:
+        _run_and_log([bin_path, "pull", model], env=os.environ.copy())
+        return True
+    except Exception as e:
+        _log(f"[llm] model pull failed: {e}")
+        return False
+
+
+def _preflight_snapshot() -> dict:
+    root = _user_root()
+    _venv_dir, python_bin = _venv_paths(root)
+    venv_ready = python_bin.exists()
+    whisper_ready = bool(venv_ready and _venv_has_whisper(python_bin))
+    install_mode_saved = _load_install_mode()
+    runtime = _load_runtime_overrides()
+    target_model = str(runtime.get("LLM_MODEL_ID") or "").strip() or OLLAMA_DEFAULT_MODEL
+    ollama_cli = _ollama_bin() is not None
+    ollama_ready = _ollama_running(timeout_sec=1.4) if ollama_cli else False
+    models = _ollama_models(timeout_sec=2.5) if ollama_cli else []
+    model_present, model_exact, model_matched = _resolve_model_match(target_model, models)
+    return {
+        "venv_ready": venv_ready,
+        "whisper_ready": whisper_ready,
+        "install_mode_saved": install_mode_saved,
+        "ollama_cli_found": ollama_cli,
+        "ollama_running": ollama_ready,
+        "ollama_model_default": target_model,
+        "ollama_model_present": model_present,
+        "ollama_model_exact": model_exact,
+        "ollama_model_matched": model_matched,
+        "ollama_models": models,
+    }
+
+
 def _effective_install_mode(python_bin: Path) -> str:
     mode = _load_install_mode()
     if mode == "full":
@@ -201,6 +385,81 @@ def _install(mode: str) -> None:
 
         INSTALL_MODE = mode
         _save_install_mode(mode)
+        _set_state("done")
+    except Exception as e:
+        _log(traceback.format_exc())
+        _set_state("error", str(e))
+
+
+def _fix_all(model_id: str | None = None) -> None:
+    target_model = str(model_id or "").strip() or OLLAMA_DEFAULT_MODEL
+    try:
+        _set_state("running")
+        _log("[wizard] fix-all started")
+        _install("full")
+        with STATE_LOCK:
+            if INSTALL_STATE == "error":
+                return
+
+        snap = _preflight_snapshot()
+        if not snap.get("ollama_cli_found"):
+            raise RuntimeError("Ollama CLI не найден. Установите Ollama и повторите.")
+
+        if not snap.get("ollama_running"):
+            _log("[wizard] starting Ollama app...")
+            _open_ollama_app()
+            if not _wait_ollama_ready(timeout_sec=35.0):
+                raise RuntimeError("Ollama не запустился на порту 11434")
+
+        snap = _preflight_snapshot()
+        models = [str(model) for model in (snap.get("ollama_models") or [])]
+        model_present, _model_exact, model_matched = _resolve_model_match(target_model, models)
+        active_model = target_model
+        if model_present:
+            if model_matched and model_matched.lower() != target_model.lower():
+                _log(f"[wizard] compatible model found: {model_matched} (requested {target_model})")
+                active_model = model_matched
+        else:
+            if not _pull_ollama_model(target_model):
+                raise RuntimeError(f"Не удалось скачать модель {target_model}")
+            active_model = target_model
+
+        _save_runtime_override("LLM_MODEL_ID", active_model)
+        _save_runtime_override("OPENAI_API_BASE", "http://127.0.0.1:11434/v1")
+        _save_runtime_override("OPENAI_API_KEY", "ollama")
+        _save_runtime_override("LLM_ENABLED", "true")
+        _save_runtime_override("LLM_LIVE_ENABLED", "false")
+        _set_state("done")
+        _log("[wizard] fix-all completed")
+    except Exception as e:
+        _log(traceback.format_exc())
+        _set_state("error", str(e))
+
+
+def _save_runtime_override(key: str, value: str) -> None:
+    try:
+        root = _user_root()
+        root.mkdir(parents=True, exist_ok=True)
+        path = _runtime_overrides_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, str] = {}
+        if path.exists():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                payload = {str(k): str(v) for k, v in raw.items() if str(k).strip()}
+        payload[str(key)] = str(value)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _pull_model_task(model_id: str) -> None:
+    model = str(model_id or "").strip() or OLLAMA_DEFAULT_MODEL
+    try:
+        _set_state("running")
+        if not _pull_ollama_model(model):
+            raise RuntimeError(f"Не удалось скачать модель {model}")
+        _save_runtime_override("LLM_MODEL_ID", model)
         _set_state("done")
     except Exception as e:
         _log(traceback.format_exc())
@@ -364,6 +623,22 @@ def _stop_app() -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _read_json(self) -> dict:
+        try:
+            raw_len = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            raw_len = 0
+        if raw_len <= 0:
+            return {}
+        try:
+            body = self.rfile.read(raw_len)
+            payload = json.loads(body.decode("utf-8"))
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            return {}
+        return {}
+
     def _send_json(self, data: dict, status: int = 200) -> None:
         payload = json.dumps(data).encode("utf-8")
         self.send_response(status)
@@ -383,8 +658,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/":
-            ui_path = _bundle_root() / "launcher_ui" / "index.html"
+            ui_path = _launcher_ui_index()
             self._send_text(ui_path.read_text(encoding="utf-8"))
+            return
+        if parsed.path == "/api/preflight":
+            self._send_json({"ok": True, "checks": _preflight_snapshot()})
             return
         if parsed.path == "/api/status":
             with STATE_LOCK:
@@ -412,6 +690,44 @@ class Handler(BaseHTTPRequestHandler):
             t = threading.Thread(target=_install, args=(mode,), daemon=True)
             t.start()
             self._send_json({"ok": True})
+            return
+        if parsed.path == "/api/fix-all":
+            payload = self._read_json()
+            model_id = str(payload.get("model_id") or "").strip() or OLLAMA_DEFAULT_MODEL
+            with STATE_LOCK:
+                if INSTALL_STATE == "running":
+                    self._send_json({"ok": False, "error": "install_running"}, status=409)
+                    return
+            t = threading.Thread(target=_fix_all, args=(model_id,), daemon=True)
+            t.start()
+            self._send_json({"ok": True, "model_id": model_id})
+            return
+        if parsed.path == "/api/action":
+            payload = self._read_json()
+            action = str(payload.get("action") or "").strip().lower()
+            if action == "open_ollama":
+                opened = _open_ollama_app()
+                self._send_json({"ok": opened})
+                return
+            if action == "pull_model":
+                model_id = str(payload.get("model_id") or "").strip() or OLLAMA_DEFAULT_MODEL
+                with STATE_LOCK:
+                    if INSTALL_STATE == "running":
+                        self._send_json({"ok": False, "error": "install_running"}, status=409)
+                        return
+                t = threading.Thread(target=_pull_model_task, args=(model_id,), daemon=True)
+                t.start()
+                self._send_json({"ok": True, "model_id": model_id})
+                return
+            if action == "set_model":
+                model_id = str(payload.get("model_id") or "").strip()
+                if not model_id:
+                    self._send_json({"ok": False, "error": "model_required"}, status=400)
+                    return
+                _save_runtime_override("LLM_MODEL_ID", model_id)
+                self._send_json({"ok": True, "model_id": model_id})
+                return
+            self._send_json({"ok": False, "error": "unknown_action"}, status=400)
             return
         if parsed.path == "/api/start":
             try:

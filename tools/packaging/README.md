@@ -14,6 +14,9 @@ tools/packaging/build_mac.sh
 tools/packaging/build_windows.ps1
 ```
 
+Важно: корректная сборка Windows launcher делается на Windows runner/машине.
+На macOS/Linux не рассчитывайте на полноценный рабочий `.exe`.
+
 ### Linux
 ```bash
 tools/packaging/build_linux.sh
@@ -34,3 +37,7 @@ tools/packaging/build_linux.sh
 - порт выбирается автоматически и открывается локальный UI на `127.0.0.1`
 
 Сборка использует `--onedir` (для `.app/.exe` и Linux-бандла).
+
+Для CI-сборки Windows добавлен workflow:
+- `.github/workflows/desktop-windows-build.yml`
+- артефакт: `9second_capture-windows` (`dist/9second_capture_windows.zip`).

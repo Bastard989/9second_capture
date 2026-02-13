@@ -18,13 +18,27 @@
 4) Нажмите `Открыть UI`.
 5) В блоке `Подключение` нажмите `Инструкция` и установите аудио‑драйвер под свою ОС.
 6) В блоке `LLM модель` нажмите `Сканировать`, выберите модель и нажмите `Сменить модель`.
-7) Нажмите `Проверить драйвер`, затем `Проверить захват`.
-8) Нажмите `Старт`, дождитесь отсчёта 9 секунд, начните встречу.
-9) После `Стоп` откройте `Результаты` и скачайте `raw/clean`, `TXT` или `Таблицу`.
+7) В блоке `Запись` выберите профиль качества (`Fast`/`Balanced`/`Accurate`) и нажмите `Проверить` в секции диагностики.
+8) Нажмите `Проверить драйвер`, затем `Проверить захват`.
+9) Нажмите `Старт`, дождитесь отсчёта 9 секунд, начните встречу.
+10) После `Стоп` откройте `Результаты` и скачайте `raw/clean`, `TXT` или `Таблицу`.
+
+В новом мастере установки доступна кнопка `Исправить в 1 клик`:
+- ставит full STT-зависимости в `~/.9second_capture/venv`,
+- проверяет запуск Ollama на `127.0.0.1:11434`,
+- скачивает выбранную LLM-модель (по умолчанию `llama3.1:8b`),
+- сохраняет runtime override модели для локального агента.
+
+Во время установки/запуска кнопки мастера блокируются (становятся серыми), чтобы не запускать конфликтующие операции параллельно.
 
 Если после первого `Открыть UI` страница не открылась сразу:
 - подождите 2–5 секунд и повторите `Открыть UI`;
 - если не помогло, перезапустите приложение один раз.
+
+Если в консоли сборки видите предупреждение `codesign ... resource fork/Finder information`:
+- это ограничение ad-hoc подписи на некоторых macOS-профилях;
+- после сборки скрипт автоматически делает post-build ad-hoc подпись;
+- если нужно пропустить post-build подпись, используйте `MANUAL_CODESIGN=0 bash tools/packaging/build_mac.sh`.
 
 ### Установка через терминал (macOS, копировать и вставить)
 
@@ -34,7 +48,7 @@
 cd "/Users/kirill/Documents/New project/9second_capture"
 git pull
 bash tools/packaging/build_mac.sh
-open "/Users/kirill/Documents/New project/9second_capture/dist/9second_capture.app"
+open -n "/Users/kirill/Documents/New project/9second_capture/dist/9second_capture.app"
 ```
 
 Если ставите с нуля:
@@ -44,13 +58,30 @@ cd "/Users/kirill/Documents/New project"
 git clone https://github.com/Bastard989/9second_capture.git
 cd "/Users/kirill/Documents/New project/9second_capture"
 bash tools/packaging/build_mac.sh
-open "/Users/kirill/Documents/New project/9second_capture/dist/9second_capture.app"
+open -n "/Users/kirill/Documents/New project/9second_capture/dist/9second_capture.app"
 ```
 
 После открытия приложения:
 1) Нажмите `Полная установка (Whisper)` и дождитесь `done`.
 2) Нажмите `Открыть UI`.
 3) Если UI не открылся с первого раза, подождите 2–5 секунд и нажмите `Открыть UI` ещё раз.
+
+### Сборка Windows launcher (для тестов коллегам)
+
+Локально на macOS нельзя надёжно собрать рабочий `.exe` PyInstaller-ом. Для Windows используйте:
+
+1) Windows-машину:
+
+```powershell
+cd "C:\\path\\to\\9second_capture"
+git pull
+powershell -ExecutionPolicy Bypass -File tools/packaging/build_windows.ps1
+start .\\dist\\9second_capture\\9second_capture.exe
+```
+
+2) или GitHub Actions workflow `Desktop Windows Build`:
+- запускается вручную (`Run workflow`) или после push в `main` по релевантным файлам;
+- артефакт: `9second_capture-windows` (zip с launcher `.exe`).
 
 ### Ollama и модели (macOS, копировать и вставить)
 
@@ -60,6 +91,9 @@ open -a Ollama
 ollama pull llama3.1:8b
 ollama list
 ```
+
+Примечание по совместимости:
+- если у вас уже есть `llama3:8b`, мастер установки считает её совместимой с `llama3.1:8b` и не требует повторной загрузки.
 
 Дополнительные модели (примеры):
 
@@ -79,10 +113,14 @@ ollama pull mistral:7b
 - `Системный звук` — для виртуального драйвера (BlackHole/VB-CABLE).
 - `Экран + звук` — обязательно включите `Share audio` в окне выбора экрана.
 2) В поле `Микрофон` оставьте `Авто (рекомендуется)` и не выбирайте виртуальный драйвер как микрофон.
+2.1) В поле `Язык интервью` выберите профиль `Mixed`, `Русский` или `English` (влияет на STT language hint).
 3) Для `Экран + звук` оставьте чекбокс `Добавлять микрофон в запись` включенным.
 4) Нажмите `Проверить захват` и убедитесь, что статус сигнала не `нет аудио`.
-5) Нажмите `Старт`, скажите 1–2 фразы, нажмите `Стоп`.
-6) В блоке `Результаты` выберите запись и нажмите `Скачать` (raw/clean) — в файле должен быть текст.
+5) Нажмите `Проверить` в секции диагностики:
+- `Доступ к аудио` и `STT` должны быть зелёными или `STT: прогрев модели...`.
+- `System/Mic` могут быть низкими до начала разговора; это не блокирует старт.
+6) Нажмите `Старт`, скажите 1–2 фразы, нажмите `Стоп`.
+7) В блоке `Результаты` выберите запись и нажмите `Скачать` (raw/clean) — в файле должен быть текст.
 
 Если текст пустой:
 - проверьте, что выбран правильный источник звука;
@@ -92,6 +130,7 @@ ollama pull mistral:7b
 - если `чанки` растут, а текста нет — в поток идёт тишина (не тот источник/нет loopback);
 - нажмите `Проверить захват`: при рабочем потоке сигнал должен быть не `нет аудио`;
 - для быстрого обходного теста переключитесь на `Экран + звук` и снова включите `Share audio`.
+- ориентируйтесь на строку `Диагноз` под статусом записи: UI теперь явно показывает причину слабого распознавания (нет system track, mic-only, low SNR, STT warmup, busy device).
 
 ## Как это работает
 
@@ -105,6 +144,16 @@ ollama pull mistral:7b
 8) По кнопке LLM формирует структурированные табличные данные (CSV/JSON) отдельно для raw/clean.
 9) Все результаты доступны для просмотра и скачивания по кнопке (без авто‑скачивания).
 10) Дополнительно: можно загрузить конференцию как файл (аудио/видео) и прогнать через тот же пайплайн.
+
+### Формат отчёта для сеньоров (сравнимый)
+
+Отчёт по интервью теперь включает единый каркас для async-review:
+- `overall_score` (1..5),
+- `decision.status` (`strong_yes/yes/lean_yes/lean_no/no/insufficient_data`) и `confidence`,
+- `scorecard` по 4 измерениям (`technical_depth`, `problem_solving`, `communication`, `ownership`),
+- `data_quality` (качество и полнота транскрипта, можно ли сравнивать интервью между собой).
+
+Это снижает субъективность при сравнении кандидатов, особенно когда часть интервьюеров не присутствовала на встрече.
 
 ## Что сохраняется локально
 
@@ -202,7 +251,7 @@ Linux (PulseAudio / PipeWire):
 Важно:
 - `run_local_agent.py` по умолчанию включает `QUEUE_MODE=inline` — локальная обработка без Redis/воркеров.
 - Для локального качества/устойчивости по умолчанию используются:
-  `WHISPER_MODEL_SIZE=medium`, `WHISPER_LANGUAGE=ru`, `WHISPER_BEAM_SIZE_LIVE=3`, `WHISPER_BEAM_SIZE_FINAL=6`,
+  `WHISPER_MODEL_SIZE=medium`, `WHISPER_LANGUAGE=auto`, `WHISPER_BEAM_SIZE_LIVE=4`, `WHISPER_BEAM_SIZE_FINAL=7`,
   `WHISPER_WARMUP_ON_START=true`.
 - Локальная БД — `sqlite` по пути `./data/local_agent/agent.db` (создаётся автоматически).
 - Если нужен полный пайплайн через очереди, задай `QUEUE_MODE=redis` и подними зависимости
@@ -227,6 +276,44 @@ LLM в локальном режиме:
 CLI-режим:
 - `python3 scripts/quick_record_meeting.py --url "https://..." --duration-sec 900`
 - или `make quick-record URL="https://..."`
+
+### STT WER Guardrail
+
+Для контроля регрессий распознавания на эталонных аудио:
+- `python3 tools/stt_wer_guardrail.py --report-json reports/stt_wer_guardrail.json`
+- или `make stt-wer-guardrail`
+
+Манифест кейсов:
+- шаблон: `tests/fixtures/stt_audio_wer_manifest.sample.json`
+- рабочий файл: `tests/fixtures/stt_audio_wer_manifest.json`
+- аудио-фикстуры: `tests/fixtures/audio/*.wav`
+- guardrail проверяет общий `avg_wer` и профильные пороги (`fast`, `balanced`, `accurate/final`).
+
+### Browser Capture e2e (Playwright)
+
+Для e2e сценариев браузерного захвата:
+- `python3 tools/e2e_browser_capture_playwright.py --base-url http://127.0.0.1:8010 --user-key dev-user-key`
+- или `make e2e-browser-capture`
+
+Скрипт проверяет:
+- `system` capture,
+- `screen + audio` capture,
+- reconnect после разрыва WS,
+- сценарий busy-device (NotReadableError).
+
+### Карта скриптов
+
+`scripts/run_local_agent.py` запускает локальный FastAPI‑агент, подбирает свободный порт, включает inline‑режим и дефолтные параметры локального STT/LLM.
+
+`scripts/launcher.py` это entrypoint desktop‑приложения (`.app`), который управляет установкой окружения в `~/.9second_capture`, запуском агента и открытием UI.
+
+`scripts/quick_record_meeting.py` quick fallback для записи встречи по URL с последующей локальной транскрибацией и опциональной отправкой в основной pipeline.
+
+`scripts/dev_ws_audio_client.py` и `scripts/dev_http_smoke.sh` нужны для ручной разработческой проверки realtime/HTTP ingest.
+
+`scripts/export_openapi.py` и `scripts/check_openapi.py` отвечают за контракт API (генерация и проверка OpenAPI).
+
+`scripts/check_release.py` и `scripts/check_alert_rules.py` являются release/ops‑проверками для CI.
 
 Минимальный `.env` для старта:
 - `APP_ENV=dev`

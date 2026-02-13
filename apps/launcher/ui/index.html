@@ -3,181 +3,483 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>9second_capture — Установка</title>
+    <title>9second_capture — Мастер установки</title>
     <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0d1016;
+        --panel: #171c25;
+        --panel-2: #131822;
+        --border: #2a3342;
+        --text: #e7edf8;
+        --muted: #98a6be;
+        --ok: #1f9d63;
+        --bad: #b1444d;
+        --run: #d0a64a;
+        --accent: #2f74ff;
+      }
+      * { box-sizing: border-box; }
       body {
         margin: 0;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #0f0f0f;
-        color: #e8e8e8;
+        background: radial-gradient(circle at top right, #1b2435, var(--bg) 35%);
+        color: var(--text);
+        font-family: "SF Pro Display", "Avenir Next", "Segoe UI", sans-serif;
       }
       .wrap {
-        max-width: 900px;
-        margin: 40px auto;
-        padding: 24px;
+        max-width: 1080px;
+        margin: 30px auto;
+        padding: 20px;
       }
       .card {
-        background: #161616;
-        border: 1px solid #2a2a2a;
+        background: linear-gradient(180deg, var(--panel), var(--panel-2));
+        border: 1px solid var(--border);
         border-radius: 16px;
-        padding: 24px;
-        margin-bottom: 20px;
+        padding: 20px;
+        margin-bottom: 16px;
       }
-      h1 {
-        font-size: 28px;
-        margin: 0 0 8px 0;
+      h1 { margin: 0 0 8px 0; font-size: 30px; }
+      p { margin: 0; color: var(--muted); }
+      .toolbar {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 14px;
       }
-      p {
-        margin: 6px 0 14px 0;
-        color: #bdbdbd;
-      }
-      button {
-        background: #1e5bff;
-        color: white;
-        border: none;
+      button, input {
         border-radius: 10px;
-        padding: 10px 16px;
+        border: 1px solid var(--border);
+        color: var(--text);
+        background: #202938;
+        padding: 10px 14px;
         font-size: 14px;
-        cursor: pointer;
-        margin-right: 8px;
       }
-      button.secondary {
-        background: #2d2d2d;
+      button { cursor: pointer; font-weight: 600; }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
       }
-      button:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
+      button:disabled { opacity: 0.65; cursor: not-allowed; }
+      input { width: 280px; }
+      .status-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        margin-top: 10px;
+        background: #23304a;
       }
-      .log {
-        background: #0b0b0b;
-        border: 1px solid #232323;
+      .status-chip.ok { background: rgba(31, 157, 99, 0.2); color: #8ef0bf; }
+      .status-chip.bad { background: rgba(177, 68, 77, 0.2); color: #ffb2b7; }
+      .status-chip.running { background: rgba(208, 166, 74, 0.2); color: #ffd995; }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 12px;
+      }
+      .check {
+        border: 1px solid var(--border);
         border-radius: 12px;
         padding: 12px;
+      }
+      .check .label { font-weight: 700; margin-bottom: 4px; }
+      .check .value { color: var(--muted); font-size: 13px; }
+      .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 8px;
+        background: #7a8599;
+      }
+      .dot.ok { background: var(--ok); }
+      .dot.bad { background: var(--bad); }
+      .dot.running { background: var(--run); }
+
+      .log {
+        background: #0a0f17;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px;
+        min-height: 240px;
+        max-height: 340px;
+        overflow: auto;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 12px;
         white-space: pre-wrap;
-        max-height: 280px;
-        overflow: auto;
       }
-      .status {
-        display: inline-block;
-        padding: 4px 8px;
-        border-radius: 999px;
-        font-size: 12px;
-        background: #2a2a2a;
-      }
-      .ok {
-        background: #0f5132;
-      }
-      .err {
-        background: #842029;
+      .hint { margin-top: 8px; color: var(--muted); font-size: 13px; }
+      a { color: #8ab4ff; }
+      @media (max-width: 720px) {
+        input { width: 100%; }
       }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="card">
-        <h1>9second_capture — Установка</h1>
-        <p>Сначала установим зависимости, затем запустим локальный агент.</p>
-        <div>
-          <button id="installBase">Быстрая установка (без STT)</button>
-          <button id="installFull">Полная установка (Whisper)</button>
-        </div>
+        <h1>9second_capture — Мастер установки</h1>
+        <p>
+          Мастер проверяет окружение, локальный STT/LLM и помогает исправить типовые проблемы до
+          первого запуска записи.
+        </p>
+        <div id="installState" class="status-chip">Статус: idle</div>
+        <div id="installError" class="hint" style="color: #ffb2b7"></div>
       </div>
 
       <div class="card">
-        <div>Статус: <span id="status" class="status">idle</span></div>
-        <div id="error" style="color:#ff7b7b; margin-top:8px;"></div>
-        <div id="appUrl" style="margin-top:8px; color:#bdbdbd;"></div>
-        <div style="margin-top:12px;">
-          <button id="openBtn" class="secondary">Открыть веб‑интерфейс</button>
+        <div class="grid" id="checksGrid"></div>
+        <div class="toolbar" style="margin-top: 14px">
+          <input id="modelInput" value="llama3.1:8b" placeholder="LLM модель (например llama3.1:8b)" />
+          <button id="fixAll" class="primary">Исправить в 1 клик</button>
+          <button id="installFull">Полная установка STT</button>
+          <button id="openOllama">Запустить Ollama</button>
+          <button id="pullModel">Скачать модель</button>
         </div>
+        <div class="toolbar">
+          <button id="checkBrowser">Проверить доступ к микрофону/устройствам</button>
+          <button id="checkScreen">Проверить доступ к экрану</button>
+          <button id="openUi">Открыть UI агента</button>
+        </div>
+        <div id="uiLink" class="hint">UI: —</div>
       </div>
 
       <div class="card">
-        <div class="log" id="log">—</div>
+        <div class="log" id="logView">—</div>
       </div>
     </div>
 
     <script>
-      const statusEl = document.getElementById("status");
-      const errorEl = document.getElementById("error");
-      const appUrlEl = document.getElementById("appUrl");
-      const logEl = document.getElementById("log");
-      const openBtn = document.getElementById("openBtn");
+      const checksGrid = document.getElementById("checksGrid");
+      const installState = document.getElementById("installState");
+      const installError = document.getElementById("installError");
+      const logView = document.getElementById("logView");
+      const uiLink = document.getElementById("uiLink");
+      const modelInput = document.getElementById("modelInput");
+      const actionButtons = [
+        "fixAll",
+        "installFull",
+        "openOllama",
+        "pullModel",
+        "checkBrowser",
+        "checkScreen",
+        "openUi",
+      ]
+        .map((id) => document.getElementById(id))
+        .filter(Boolean);
+      const controls = [...actionButtons, modelInput].filter(Boolean);
+      let uiBusy = false;
+      let uiBusyError = "";
 
-      const setStatus = (state, err) => {
-        statusEl.textContent = state;
-        statusEl.className = "status";
-        if (state === "done") statusEl.classList.add("ok");
-        if (state === "error") statusEl.classList.add("err");
-        errorEl.textContent = err || "";
+      let browserChecks = {
+        micPermission: "unknown",
+        screenPermission: "unknown",
+        virtualDeviceFound: "unknown",
+        audioInputs: 0,
       };
 
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const dot = (state) => {
+        const s = state === "ok" ? "ok" : state === "bad" ? "bad" : state === "running" ? "running" : "";
+        return `<span class="dot ${s}"></span>`;
+      };
 
-      const waitAppReady = async (baseUrl, timeoutMs = 12000) => {
-        const startAt = Date.now();
-        const normalized = String(baseUrl || "").replace(/\/+$/, "");
-        const healthUrl = `${normalized}/health`;
-        const rootUrl = `${normalized}/`;
+      const normalizeState = (ok, pending = false) => {
+        if (pending) return "running";
+        return ok ? "ok" : "bad";
+      };
 
-        while (Date.now() - startAt < timeoutMs) {
-          try {
-            const [health, root] = await Promise.all([
-              fetch(healthUrl, { cache: "no-store" }),
-              fetch(rootUrl, { cache: "no-store" }),
-            ]);
-            if (health.ok && root.ok) return true;
-          } catch (err) {
-            // wait and retry
+      const setControlsBusy = (busy) => {
+        uiBusy = Boolean(busy);
+        controls.forEach((node) => {
+          node.disabled = uiBusy;
+        });
+      };
+
+      const waitUntilInstallIdle = async (timeoutMs = 240000) => {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < timeoutMs) {
+          const res = await fetch("/api/status", { cache: "no-store" });
+          const status = await res.json();
+          if (String(status.state || "idle") !== "running") {
+            return status;
           }
-          await sleep(300);
+          await new Promise((resolve) => setTimeout(resolve, 1100));
         }
-        return false;
+        throw new Error("timeout_waiting_install");
       };
 
-      const refresh = async () => {
-        const res = await fetch("/api/status");
-        const data = await res.json();
-        setStatus(data.state, data.error);
-        logEl.textContent = data.log || "—";
-        if (data.app_url) {
-          appUrlEl.innerHTML = `UI: <a href="${data.app_url}" target="_blank" rel="noopener noreferrer">${data.app_url}</a>`;
-        } else {
-          appUrlEl.textContent = "UI: —";
-        }
-        openBtn.disabled = false;
-      };
-
-      document.getElementById("installBase").onclick = async () => {
-        await fetch("/api/install?mode=base", { method: "POST" });
-      };
-      document.getElementById("installFull").onclick = async () => {
-        await fetch("/api/install?mode=full", { method: "POST" });
-      };
-      openBtn.onclick = async () => {
+      const runBusyAction = async (title, action, options = {}) => {
+        if (uiBusy) return;
+        const waitForIdle = Boolean(options.waitForIdle);
+        uiBusyError = "";
+        setControlsBusy(true);
+        setInstallState("running", title);
         try {
-          const startRes = await fetch("/api/open", { method: "POST" });
-          const startData = await startRes.json();
-          if (!startData.ok || !startData.url) {
-            setStatus("error", startData.error || "start_failed");
-            return;
+          await action();
+          if (waitForIdle) {
+            await waitUntilInstallIdle();
           }
-          setStatus("running", "");
-          const ready = await waitAppReady(startData.url);
-          if (!ready) {
-            setStatus("error", "Агент не ответил вовремя. Нажмите «Открыть веб‑интерфейс» ещё раз.");
-            return;
-          }
-          window.location.href = startData.url;
         } catch (err) {
-          setStatus("error", String(err));
+          uiBusyError = String((err && err.message) || err || "request_failed");
+          setInstallState("error", uiBusyError);
+        } finally {
+          setControlsBusy(false);
+          await refreshStatus().catch(() => {});
         }
       };
 
-      refresh();
-      setInterval(refresh, 1500);
+      const renderChecks = (checks) => {
+        const rows = [
+          {
+            title: "Python venv",
+            state: normalizeState(Boolean(checks.venv_ready)),
+            value: checks.venv_ready ? "Готово" : "Не создано",
+          },
+          {
+            title: "STT зависимости",
+            state: normalizeState(Boolean(checks.whisper_ready)),
+            value: checks.whisper_ready ? "Whisper доступен" : "Whisper не установлен",
+          },
+          {
+            title: "Ollama CLI",
+            state: normalizeState(Boolean(checks.ollama_cli_found)),
+            value: checks.ollama_cli_found ? "Найден" : "Не найден",
+          },
+          {
+            title: "Ollama сервис",
+            state: normalizeState(Boolean(checks.ollama_running)),
+            value: checks.ollama_running ? "Слушает 127.0.0.1:11434" : "Не отвечает",
+          },
+          {
+            title: `Модель ${checks.ollama_model_default || "llama3.1:8b"}`,
+            state: normalizeState(Boolean(checks.ollama_model_present)),
+            value: checks.ollama_model_present
+              ? checks.ollama_model_exact
+                ? "Установлена"
+                : checks.ollama_model_matched
+                  ? `Найдена совместимая: ${checks.ollama_model_matched}`
+                  : "Установлена"
+              : "Не найдена",
+          },
+          {
+            title: "Микрофон/аудио доступ (браузер)",
+            state:
+              browserChecks.micPermission === "unknown"
+                ? "running"
+                : normalizeState(browserChecks.micPermission === "ok"),
+            value:
+              browserChecks.micPermission === "unknown"
+                ? "Нажмите «Проверить доступ к микрофону/устройствам»"
+                : browserChecks.micPermission === "ok"
+                  ? `OK, audioinput: ${browserChecks.audioInputs}`
+                  : "Доступ запрещён или устройство занято",
+          },
+          {
+            title: "Virtual loopback device",
+            state:
+              browserChecks.virtualDeviceFound === "unknown"
+                ? "running"
+                : normalizeState(browserChecks.virtualDeviceFound === "ok"),
+            value:
+              browserChecks.virtualDeviceFound === "unknown"
+                ? "Проверка после запроса доступа к микрофону"
+                : browserChecks.virtualDeviceFound === "ok"
+                  ? "Найден (BlackHole/VB-CABLE/Monitor)"
+                  : "Не найден",
+          },
+          {
+            title: "Доступ к экрану (браузер)",
+            state:
+              browserChecks.screenPermission === "unknown"
+                ? "running"
+                : normalizeState(browserChecks.screenPermission === "ok"),
+            value:
+              browserChecks.screenPermission === "unknown"
+                ? "Нажмите «Проверить доступ к экрану»"
+                : browserChecks.screenPermission === "ok"
+                  ? "OK"
+                  : "Не выдано разрешение или отменено",
+          },
+        ];
+
+        checksGrid.innerHTML = rows
+          .map(
+            (row) => `
+              <div class="check">
+                <div class="label">${dot(row.state)}${row.title}</div>
+                <div class="value">${row.value}</div>
+              </div>
+            `
+          )
+          .join("");
+      };
+
+      const setInstallState = (state, err = "") => {
+        installState.textContent = `Статус: ${state}`;
+        installState.className = "status-chip";
+        if (state === "done") installState.classList.add("ok");
+        if (state === "error") installState.classList.add("bad");
+        if (state === "running") installState.classList.add("running");
+        installError.textContent = err || "";
+      };
+
+      const refreshStatus = async () => {
+        const [statusRes, preflightRes] = await Promise.all([
+          fetch("/api/status", { cache: "no-store" }),
+          fetch("/api/preflight", { cache: "no-store" }),
+        ]);
+        const status = await statusRes.json();
+        const preflight = await preflightRes.json();
+
+        const statusState = String(status.state || "idle");
+        const statusError = uiBusyError || status.error || "";
+        setInstallState(statusState, statusError);
+        if (!uiBusy && uiBusyError && statusState !== "error") {
+          uiBusyError = "";
+        }
+        logView.textContent = status.log || "—";
+        if (!uiBusy) {
+          const backendBusy = statusState === "running";
+          controls.forEach((node) => {
+            node.disabled = backendBusy;
+          });
+        }
+
+        if (status.app_url) {
+          uiLink.innerHTML = `UI: <a href="${status.app_url}" target="_blank" rel="noopener noreferrer">${status.app_url}</a>`;
+        } else {
+          uiLink.textContent = "UI: —";
+        }
+
+        renderChecks((preflight && preflight.checks) || {});
+      };
+
+      const postJson = async (url, payload = {}) => {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (err) {
+          data = {};
+        }
+        if (!res.ok || data.ok === false) {
+          throw new Error(data.error || `request_failed_${res.status}`);
+        }
+        return data;
+      };
+
+      const checkBrowserAudio = async () => {
+        browserChecks.micPermission = "unknown";
+        browserChecks.virtualDeviceFound = "unknown";
+        renderChecks({});
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach((t) => t.stop());
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const audioInputs = devices.filter((d) => d.kind === "audioinput");
+          const hasVirtual = audioInputs.some((d) => {
+            const label = String(d.label || "").toLowerCase();
+            return (
+              label.includes("blackhole") ||
+              label.includes("vb-cable") ||
+              label.includes("cable") ||
+              label.includes("monitor")
+            );
+          });
+          browserChecks.micPermission = "ok";
+          browserChecks.virtualDeviceFound = hasVirtual ? "ok" : "bad";
+          browserChecks.audioInputs = audioInputs.length;
+        } catch (err) {
+          browserChecks.micPermission = "bad";
+          browserChecks.virtualDeviceFound = "bad";
+          browserChecks.audioInputs = 0;
+        }
+      };
+
+      const checkBrowserScreen = async () => {
+        browserChecks.screenPermission = "unknown";
+        renderChecks({});
+        try {
+          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+          stream.getTracks().forEach((t) => t.stop());
+          browserChecks.screenPermission = "ok";
+        } catch (err) {
+          browserChecks.screenPermission = "bad";
+        }
+      };
+
+      document.getElementById("installFull").onclick = async () => {
+        await runBusyAction(
+          "Установка зависимостей...",
+          async () => {
+            await fetch("/api/install?mode=full", { method: "POST" });
+          },
+          { waitForIdle: true }
+        );
+      };
+
+      document.getElementById("fixAll").onclick = async () => {
+        await runBusyAction(
+          "Исправление окружения...",
+          async () => {
+            const model = String(modelInput.value || "").trim() || "llama3.1:8b";
+            await postJson("/api/fix-all", { model_id: model });
+          },
+          { waitForIdle: true }
+        );
+      };
+
+      document.getElementById("openOllama").onclick = async () => {
+        await runBusyAction("Запуск Ollama...", async () => {
+          await postJson("/api/action", { action: "open_ollama" });
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+        });
+      };
+
+      document.getElementById("pullModel").onclick = async () => {
+        await runBusyAction(
+          "Скачивание модели...",
+          async () => {
+            const model = String(modelInput.value || "").trim() || "llama3.1:8b";
+            await postJson("/api/action", { action: "pull_model", model_id: model });
+            await postJson("/api/action", { action: "set_model", model_id: model });
+          },
+          { waitForIdle: true }
+        );
+      };
+
+      document.getElementById("checkBrowser").onclick = async () => {
+        await runBusyAction("Проверяем доступ к микрофону...", async () => {
+          await checkBrowserAudio();
+        });
+      };
+
+      document.getElementById("checkScreen").onclick = async () => {
+        await runBusyAction("Проверяем доступ к экрану...", async () => {
+          await checkBrowserScreen();
+        });
+      };
+
+      document.getElementById("openUi").onclick = async () => {
+        await runBusyAction("Запуск UI агента...", async () => {
+          const startData = await postJson("/api/open");
+          if (startData && startData.url) {
+            window.location.href = startData.url;
+          }
+        });
+      };
+
+      refreshStatus();
+      setInterval(() => {
+        refreshStatus().catch(() => {});
+      }, 1800);
     </script>
   </body>
 </html>
