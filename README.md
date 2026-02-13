@@ -9,6 +9,54 @@
 
 В интерфейсе записи автоматически получают имена `Запись 1`, `Запись 2`, `Запись 3...`, их можно переименовать через меню `...`, а после завершения записи пользователь сразу получает предложение сохранить MP3 в удобное место.
 
+## Установка с нуля (пошагово)
+Если вы обычный пользователь, агент лучше брать как готовый бинарник из релизов репозитория:
+- [GitHub Releases](https://github.com/Bastard989/9second_capture/releases)
+- для Windows также доступен CI-артефакт workflow `Desktop Windows Build` (`9second_capture-windows`).
+
+Если вы устанавливаете агент с нуля из исходников, используйте один из сценариев ниже.
+
+### 1) Скачать проект (через Git)
+```bash
+git clone git@github.com:Bastard989/9second_capture.git
+cd 9second_capture
+git pull
+```
+
+Альтернатива без SSH:
+```bash
+git clone https://github.com/Bastard989/9second_capture.git
+cd 9second_capture
+git pull
+```
+
+### 2) Запустить агент (команды для копипаста)
+macOS:
+```bash
+bash tools/packaging/build_mac.sh
+open -n dist/9second_capture.app
+```
+
+Windows (PowerShell):
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/packaging/build_windows.ps1
+.\dist\9second_capture\9second_capture.exe
+```
+
+Linux:
+```bash
+bash tools/packaging/build_linux.sh
+./dist/9second_capture/9second_capture
+```
+
+### 3) Первый рабочий запуск
+После старта launcher:
+1. Нажмите `Исправить в 1 клик`.
+2. Нажмите `Открыть UI агента`.
+3. Выберите источник аудио и запустите проверку перед записью.
+4. Нажмите `Старт` для интервью и `Стоп` в конце.
+5. Подтвердите сохранение итогового MP3.
+
 ## Что подходит для прод-использования командой
 `9second_capture` уже ориентирован не только на локальный тест одного пользователя:
 
