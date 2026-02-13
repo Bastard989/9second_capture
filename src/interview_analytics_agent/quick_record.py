@@ -328,6 +328,15 @@ def upload_recording_to_agent(*, recording_path: Path, cfg: QuickRecordConfig) -
     )
     chunk_resp.raise_for_status()
 
+    with recording_path.open("rb") as fp:
+        backup_resp = requests.post(
+            f"{base_url}/v1/meetings/{meeting_id}/backup-audio",
+            files={"file": (recording_path.name, fp, "audio/mpeg")},
+            headers={"X-API-Key": cfg.agent_api_key},
+            timeout=90,
+        )
+    backup_resp.raise_for_status()
+
     deadline = time.monotonic() + max(1, int(cfg.wait_report_sec))
     last_status = "in_progress"
     last_report: dict[str, Any] | None = None

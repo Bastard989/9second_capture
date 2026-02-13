@@ -26,6 +26,7 @@ from interview_analytics_agent.contracts.http_api import (
 from interview_analytics_agent.domain.enums import MeetingMode, PipelineStatus
 from interview_analytics_agent.services.meeting_service import create_meeting
 from interview_analytics_agent.services.sberjazz_service import join_sberjazz_meeting
+from interview_analytics_agent.storage import records
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import MeetingRepository
 
@@ -111,6 +112,7 @@ def start_meeting(
                 ) from e
 
         log.info("meeting_created", extra={"meeting_id": m.id})
+        records.ensure_meeting_metadata(m.id)
         return MeetingStartResponse(
             meeting_id=m.id,
             status=str(m.status),

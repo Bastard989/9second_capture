@@ -725,8 +725,42 @@ button:disabled {
 
 .file-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+}
+
+.record-menu-wrap {
+  position: relative;
+}
+
+.menu-trigger {
+  min-width: 52px;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+}
+
+.record-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 8;
+  min-width: 220px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 92%, var(--card-soft) 8%);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.record-menu.hidden {
+  display: none;
+}
+
+.record-menu .ghost {
+  text-align: left;
 }
 
 .compare-block {

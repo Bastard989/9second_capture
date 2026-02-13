@@ -439,6 +439,19 @@
           <button id="refreshRecords" class="ghost" data-i18n="records_refresh">
             Обновить
           </button>
+          <div class="record-menu-wrap">
+            <button id="recordMenuBtn" class="ghost menu-trigger" data-i18n="records_menu_btn">
+              ...
+            </button>
+            <div id="recordMenu" class="record-menu hidden">
+              <button id="renameRecordBtn" class="ghost" data-i18n="record_menu_rename">
+                Переименовать запись
+              </button>
+              <button id="saveRecordMp3Btn" class="ghost" data-i18n="record_menu_save_mp3">
+                Сохранить MP3
+              </button>
+            </div>
+          </div>
         </div>
         <div class="results-source">
           <span class="label" data-i18n="results_source_label">Источник</span>
@@ -480,6 +493,14 @@
               data-i18n="file_action_table"
             >
               Таблица
+            </button>
+            <button
+              id="audioArtifactBtn"
+              class="ghost"
+              data-action="audio"
+              data-i18n="file_action_mp3"
+            >
+              MP3
             </button>
           </div>
         </div>
@@ -559,6 +580,6 @@
       </span>
     </footer>
 
-    <script src="/ui/app.js?v=20260211g"></script>
+    <script src="/ui/app.js?v=20260213b"></script>
   </body>
 </html>

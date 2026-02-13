@@ -23,6 +23,7 @@ from interview_analytics_agent.services.chunk_ingest_service import (
     ingest_audio_chunk_b64,
     ingest_audio_chunk_bytes,
 )
+from interview_analytics_agent.services.audio_artifact_service import materialize_meeting_audio_mp3
 from interview_analytics_agent.storage import records
 from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import MeetingRepository
@@ -130,6 +131,14 @@ async def upload_audio(
 ) -> ChunkIngestResponse:
     _ensure_meeting_access(ctx, meeting_id)
     payload = await file.read()
+    ext = "bin"
+    if file.filename and "." in file.filename:
+        value = file.filename.rsplit(".", 1)[-1].strip().lower()
+        if value and value.isalnum():
+            ext = value
+    source_name = f"source_upload.{ext}"
+    records.write_bytes(meeting_id, source_name, payload)
+    materialize_meeting_audio_mp3(meeting_id=meeting_id, preferred_filename=source_name)
     result = ingest_audio_chunk_bytes(
         meeting_id=meeting_id,
         seq=0,
@@ -162,6 +171,7 @@ async def upload_backup_audio(
         if ext and ext.isalnum():
             filename = f"backup_audio.{ext}"
     records.write_bytes(meeting_id, filename, payload)
+    materialize_meeting_audio_mp3(meeting_id=meeting_id, preferred_filename=filename)
     return BackupAudioUploadResponse(
         ok=True,
         meeting_id=meeting_id,

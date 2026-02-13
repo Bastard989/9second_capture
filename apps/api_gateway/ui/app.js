@@ -12,6 +12,14 @@ const state = {
   inputStreams: [],
   audioContext: null,
   analyser: null,
+  analyserSystem: null,
+  analyserMic: null,
+  meterNodes: [],
+  meterLevels: {
+    mixed: 0,
+    system: 0,
+    mic: 0,
+  },
   meterMode: "",
   signalSmooth: 0,
   signalState: "signal_waiting",
@@ -73,6 +81,11 @@ const state = {
   quickHintText: "",
   quickHintStyle: "muted",
   quickPollTimer: null,
+  compareItems: [],
+  recordsMeta: new Map(),
+  captureQuality: "balanced",
+  languageProfile: "mixed",
+  diagnosticsLast: null,
   instanceId: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
   captureLockTimer: null,
 };
@@ -83,7 +96,8 @@ const HTTP_DRAIN_INTERVAL_MS = 1400;
 const WS_HEARTBEAT_INTERVAL_MS = 12000;
 const WS_PONG_TIMEOUT_MS = 25000;
 const WS_BOOTSTRAP_GRACE_MS = 90000;
-const MEDIA_BUSY_RETRY_DELAYS_MS = [180, 420, 900];
+const MEDIA_BUSY_RETRY_DELAYS_MS = [220, 480, 900, 1600];
+const DIAG_AUDIO_RETRY_DELAYS_MS = [220, 520, 1100];
 const SIGNAL_SMOOTHING_ALPHA = 0.24;
 const SIGNAL_OK_ENTER = 0.08;
 const SIGNAL_OK_EXIT = 0.06;
@@ -92,6 +106,26 @@ const SIGNAL_LOW_EXIT = 0.015;
 const CAPTURE_LOCK_KEY = "9second_capture_active_lock";
 const CAPTURE_LOCK_TTL_MS = 20000;
 const CAPTURE_LOCK_HEARTBEAT_MS = 4000;
+const QUALITY_PROFILES = {
+  fast: {
+    id: "fast",
+    wsQualityProfile: "live_fast",
+    timesliceMs: 3200,
+    hintKey: "quality_fast_desc",
+  },
+  balanced: {
+    id: "balanced",
+    wsQualityProfile: "live_balanced",
+    timesliceMs: 3800,
+    hintKey: "quality_balanced_desc",
+  },
+  accurate: {
+    id: "accurate",
+    wsQualityProfile: "live_accurate",
+    timesliceMs: 4600,
+    hintKey: "quality_accurate_desc",
+  },
+};
 const VIRTUAL_DEVICE_PATTERNS = [
   "blackhole",
   "vb-cable",
@@ -111,6 +145,14 @@ const i18n = {
     connection_title: "Подключение",
     api_key_label: "API ключ (опционально)",
     api_key_placeholder: "X-API-Key",
+    interview_meta_title: "Контекст интервью (обязательно)",
+    meta_candidate_name: "Имя кандидата",
+    meta_candidate_id: "Candidate ID",
+    meta_vacancy: "Вакансия",
+    meta_level: "Уровень (Junior/Middle/Senior)",
+    meta_interviewer: "Интервьюер",
+    interview_meta_hint:
+      "Эти поля обязательны для сравнимой аналитики между интервью.",
     llm_model_label: "LLM модель",
     llm_scan_btn: "Сканировать",
     llm_apply_btn: "Сменить модель",
@@ -167,6 +209,37 @@ const i18n = {
     include_mic_label: "Добавлять микрофон в запись",
     mic_input_label: "Микрофон",
     mic_input_auto: "Авто (рекомендуется)",
+    language_profile_label: "Язык интервью",
+    language_profile_mixed: "Mixed (RU + EN)",
+    language_profile_ru: "Русский",
+    language_profile_en: "English",
+    language_profile_hint:
+      "Подсказка для STT: выберите язык интервью для лучшей точности терминов.",
+    quality_profile_label: "Профиль качества",
+    quality_fast: "Fast",
+    quality_balanced: "Balanced",
+    quality_accurate: "Accurate",
+    quality_fast_desc: "Минимальная задержка, ниже точность, меньше нагрузка на CPU.",
+    quality_balanced_desc: "Баланс точности и задержки. Рекомендуется по умолчанию.",
+    quality_accurate_desc: "Максимальная точность, выше задержка и нагрузка на CPU.",
+    diag_title: "Проверка перед стартом",
+    diag_run_btn: "Проверить",
+    diag_hint_idle: "Запустите диагностику перед записью.",
+    diag_hint_running: "Диагностика выполняется...",
+    diag_hint_ok: "Диагностика пройдена. Можно запускать запись.",
+    diag_hint_fail: "Диагностика не пройдена. Исправьте пункты со статусом ошибки.",
+    diag_audio_access: "Доступ к аудио",
+    diag_system_level: "Уровень system",
+    diag_mic_level: "Уровень mic",
+    diag_stt_ready: "STT готов",
+    diag_llm_ready: "LLM доступен",
+    diag_skip_not_required: "не обязательно",
+    diag_stt_warming: "прогрев модели...",
+    diag_hint_levels_low:
+      "Доступ есть, но уровни сейчас низкие. Можно запускать запись и проверить сигнал во время разговора.",
+    meter_system_label: "System: {level}",
+    meter_mic_label: "Mic: {level}",
+    structured_insufficient_data: "Недостаточно данных для структурирования.",
     countdown_label: "Отсчёт:",
     signal_waiting: "Сигнал: ожидание",
     signal_ok: "Сигнал: есть",
@@ -192,6 +265,24 @@ const i18n = {
     transcript_placeholder_clean: "Чистый текст появится с небольшой задержкой...",
     records_title: "Результаты",
     records_refresh: "Обновить",
+    records_menu_btn: "...",
+    record_menu_rename: "Переименовать запись",
+    record_menu_save_mp3: "Сохранить MP3",
+    compare_title: "Сравнение интервью",
+    compare_refresh: "Обновить",
+    compare_hint_idle: "Сводка покажет сравнение кандидатов после генерации отчётов.",
+    compare_hint_loading: "Обновляем сравнительную сводку...",
+    compare_hint_empty: "Нет данных для сравнения. Проведите интервью и сгенерируйте отчёты.",
+    compare_hint_failed: "Не удалось загрузить сравнение интервью.",
+    compare_export_csv: "Экспорт CSV",
+    compare_export_json: "Экспорт JSON",
+    compare_col_candidate: "Кандидат",
+    compare_col_vacancy: "Вакансия",
+    compare_col_level: "Уровень",
+    compare_col_score: "Score",
+    compare_col_decision: "Решение",
+    compare_col_quality: "Качество",
+    compare_row_candidate_fallback: "Кандидат не указан",
     choose_folder: "Выбрать папку",
     folder_not_selected: "Папка не выбрана",
     folder_selected: "Папка выбрана",
@@ -201,6 +292,12 @@ const i18n = {
     file_action_download: "Скачать",
     file_action_report: "Экспорт TXT",
     file_action_table: "Таблица",
+    file_action_mp3: "MP3",
+    prompt_rename_record: "Введите новое название записи:",
+    prompt_save_mp3_after_stop: "Запись завершена. Сохранить MP3 сейчас?",
+    hint_record_renamed: "Название записи обновлено.",
+    hint_mp3_saved: "MP3 сохранен.",
+    hint_mp3_not_found: "MP3 пока недоступен для этой записи.",
     download_raw: "Скачать raw",
     download_clean: "Скачать clean",
     gen_report_raw: "Отчёт raw",
@@ -263,6 +360,8 @@ const i18n = {
       "Запись уже запущена в другом окне/вкладке. Остановите её там и повторите.",
     err_no_device_selected:
       "Не выбран источник аудио. Выберите устройство и повторите.",
+    err_interview_meta_missing:
+      "Заполните обязательные поля интервью: кандидат, vacancy, level и interviewer.",
     err_system_source_not_virtual:
       "Выбран не виртуальный системный источник. Для встреч выберите BlackHole/VB-CABLE/Monitor.",
     err_screen_audio_missing:
@@ -271,6 +370,8 @@ const i18n = {
     err_network: "Сбой сети/локального API. Попробуйте ещё раз.",
     err_recorder_init:
       "MediaRecorder не поддерживается для текущего источника. Попробуйте другой режим.",
+    err_diagnostics_failed:
+      "Диагностика не пройдена. Исправьте ошибки источника/микрофона/STT и повторите.",
     err_mic_same_as_system:
       "Микрофон совпадает с системным источником. Выберите другой микрофон или режим «Авто».",
     warn_mic_not_added:
@@ -289,6 +390,16 @@ const i18n = {
       "Инициализация распознавания... первые фразы могут появиться с задержкой 5-20 секунд.",
     hint_no_speech_yet:
       "Пока нет распознанной речи. Проверьте источник: в «Системном звуке» звук встречи должен идти в BlackHole/VB-CABLE; в «Экран + звук» включите Share audio; для голоса убедитесь, что микрофон добавлен.",
+    diag_reason_none: "Диагноз: пока данных недостаточно.",
+    diag_reason_system_track_missing:
+      "Диагноз: не виден системный аудио-трек. Включите loopback/виртуальный драйвер или Share audio.",
+    diag_reason_mic_only:
+      "Диагноз: идёт только микрофон (mic-only). Для интервью включите системный трек.",
+    diag_reason_low_snr:
+      "Диагноз: низкий SNR (тихо/шумно). Поднимите уровень источника и снизьте фон.",
+    diag_reason_stt_warmup: "Диагноз: STT ещё прогревается, первые фразы могут запаздывать.",
+    diag_reason_audio_busy:
+      "Диагноз: устройство занято другим приложением. Освободите источник и запустите снова.",
   },
   en: {
     subtitle: "Local meeting capture agent",
@@ -298,6 +409,14 @@ const i18n = {
     connection_title: "Connection",
     api_key_label: "API key (optional)",
     api_key_placeholder: "X-API-Key",
+    interview_meta_title: "Interview context (required)",
+    meta_candidate_name: "Candidate name",
+    meta_candidate_id: "Candidate ID",
+    meta_vacancy: "Vacancy",
+    meta_level: "Level (Junior/Middle/Senior)",
+    meta_interviewer: "Interviewer",
+    interview_meta_hint:
+      "These fields are required for comparable analytics across interviews.",
     llm_model_label: "LLM model",
     llm_scan_btn: "Scan",
     llm_apply_btn: "Switch model",
@@ -354,6 +473,36 @@ const i18n = {
     include_mic_label: "Include microphone in recording",
     mic_input_label: "Microphone",
     mic_input_auto: "Auto (recommended)",
+    language_profile_label: "Interview language",
+    language_profile_mixed: "Mixed (RU + EN)",
+    language_profile_ru: "Russian",
+    language_profile_en: "English",
+    language_profile_hint: "STT hint: choose interview language for better term accuracy.",
+    quality_profile_label: "Quality profile",
+    quality_fast: "Fast",
+    quality_balanced: "Balanced",
+    quality_accurate: "Accurate",
+    quality_fast_desc: "Lowest latency, lower accuracy, minimal CPU usage.",
+    quality_balanced_desc: "Balanced accuracy and latency (recommended).",
+    quality_accurate_desc: "Highest accuracy with higher latency and CPU load.",
+    diag_title: "Preflight diagnostics",
+    diag_run_btn: "Run checks",
+    diag_hint_idle: "Run diagnostics before recording.",
+    diag_hint_running: "Running diagnostics...",
+    diag_hint_ok: "Diagnostics passed. Recording can be started.",
+    diag_hint_fail: "Diagnostics failed. Fix failed checks before recording.",
+    diag_audio_access: "Audio access",
+    diag_system_level: "System level",
+    diag_mic_level: "Mic level",
+    diag_stt_ready: "STT ready",
+    diag_llm_ready: "LLM ready",
+    diag_skip_not_required: "not required",
+    diag_stt_warming: "model warmup...",
+    diag_hint_levels_low:
+      "Access is fine, but levels are currently low. You can still start and verify levels while speaking.",
+    meter_system_label: "System: {level}",
+    meter_mic_label: "Mic: {level}",
+    structured_insufficient_data: "Insufficient data for structured export.",
     countdown_label: "Countdown:",
     signal_waiting: "Signal: waiting",
     signal_ok: "Signal: ok",
@@ -379,6 +528,24 @@ const i18n = {
     transcript_placeholder_clean: "Clean text appears with a small delay...",
     records_title: "Results",
     records_refresh: "Refresh",
+    records_menu_btn: "...",
+    record_menu_rename: "Rename recording",
+    record_menu_save_mp3: "Save MP3",
+    compare_title: "Interview comparison",
+    compare_refresh: "Refresh",
+    compare_hint_idle: "Comparison appears after interview reports are generated.",
+    compare_hint_loading: "Loading comparison summary...",
+    compare_hint_empty: "No comparable data yet. Run interviews and generate reports.",
+    compare_hint_failed: "Failed to load interview comparison.",
+    compare_export_csv: "Export CSV",
+    compare_export_json: "Export JSON",
+    compare_col_candidate: "Candidate",
+    compare_col_vacancy: "Vacancy",
+    compare_col_level: "Level",
+    compare_col_score: "Score",
+    compare_col_decision: "Decision",
+    compare_col_quality: "Quality",
+    compare_row_candidate_fallback: "Candidate not set",
     choose_folder: "Choose folder",
     folder_not_selected: "Folder not selected",
     folder_selected: "Folder selected",
@@ -388,6 +555,12 @@ const i18n = {
     file_action_download: "Download",
     file_action_report: "Export TXT",
     file_action_table: "Table",
+    file_action_mp3: "MP3",
+    prompt_rename_record: "Enter new recording name:",
+    prompt_save_mp3_after_stop: "Recording is finished. Save MP3 now?",
+    hint_record_renamed: "Recording name updated.",
+    hint_mp3_saved: "MP3 saved.",
+    hint_mp3_not_found: "MP3 is not available for this recording yet.",
     download_raw: "Download raw",
     download_clean: "Download clean",
     gen_report_raw: "Report raw",
@@ -446,6 +619,8 @@ const i18n = {
       "Recording is already running in another tab/window. Stop it there and retry.",
     err_no_device_selected:
       "Audio source is not selected. Choose a device and retry.",
+    err_interview_meta_missing:
+      "Fill required interview fields: candidate, vacancy, level, interviewer.",
     err_system_source_not_virtual:
       "Selected source is not a virtual system input. Choose BlackHole/VB-CABLE/Monitor for meetings.",
     err_screen_audio_missing:
@@ -454,6 +629,8 @@ const i18n = {
     err_network: "Network/local API error. Please retry.",
     err_recorder_init:
       "MediaRecorder is not supported for this source. Try another mode.",
+    err_diagnostics_failed:
+      "Diagnostics failed. Fix source/microphone/STT issues and retry.",
     err_mic_same_as_system:
       "Microphone matches system source. Choose another microphone or keep Auto mode.",
     warn_mic_not_added:
@@ -472,11 +649,26 @@ const i18n = {
       "Speech recognition is initializing... first phrases may appear with a 5-20 second delay.",
     hint_no_speech_yet:
       "No recognized speech yet. Verify source routing: in “System audio” route meeting output to BlackHole/VB-CABLE; in “Screen + audio” enable Share audio; for voice capture ensure microphone is added.",
+    diag_reason_none: "Diagnosis: not enough data yet.",
+    diag_reason_system_track_missing:
+      "Diagnosis: system audio track is missing. Enable loopback/virtual driver or Share audio.",
+    diag_reason_mic_only:
+      "Diagnosis: mic-only capture detected. Enable system track for interview recording.",
+    diag_reason_low_snr:
+      "Diagnosis: low SNR (quiet/noisy source). Increase source level and reduce background noise.",
+    diag_reason_stt_warmup: "Diagnosis: STT warmup is still in progress, first phrases may be delayed.",
+    diag_reason_audio_busy:
+      "Diagnosis: audio device is busy in another app. Release the source and retry.",
   },
 };
 
 const els = {
   apiKey: document.getElementById("apiKey"),
+  metaCandidateName: document.getElementById("metaCandidateName"),
+  metaCandidateId: document.getElementById("metaCandidateId"),
+  metaVacancy: document.getElementById("metaVacancy"),
+  metaLevel: document.getElementById("metaLevel"),
+  metaInterviewer: document.getElementById("metaInterviewer"),
   llmModelSelect: document.getElementById("llmModelSelect"),
   scanLlmModels: document.getElementById("scanLlmModels"),
   applyLlmModel: document.getElementById("applyLlmModel"),
@@ -487,6 +679,18 @@ const els = {
   checkDriver: document.getElementById("checkDriver"),
   includeMic: document.getElementById("includeMic"),
   micSelect: document.getElementById("micSelect"),
+  languageProfileSelect: document.getElementById("languageProfileSelect"),
+  qualityFast: document.getElementById("qualityFast"),
+  qualityBalanced: document.getElementById("qualityBalanced"),
+  qualityAccurate: document.getElementById("qualityAccurate"),
+  qualityHint: document.getElementById("qualityHint"),
+  runDiagnostics: document.getElementById("runDiagnostics"),
+  diagHint: document.getElementById("diagHint"),
+  diagAudio: document.getElementById("diagAudio"),
+  diagSystem: document.getElementById("diagSystem"),
+  diagMic: document.getElementById("diagMic"),
+  diagStt: document.getElementById("diagStt"),
+  diagLlm: document.getElementById("diagLlm"),
   driverHelpBtn: document.getElementById("driverHelpBtn"),
   driverHelp: document.getElementById("driverHelp"),
   driverStatus: document.getElementById("driverStatus"),
@@ -494,8 +698,13 @@ const els = {
   stopBtn: document.getElementById("stopBtn"),
   statusText: document.getElementById("statusText"),
   statusHint: document.getElementById("statusHint"),
+  recognitionDiagnosis: document.getElementById("recognitionDiagnosis"),
   countdownValue: document.getElementById("countdownValue"),
   levelBar: document.getElementById("levelBar"),
+  systemLevelBar: document.getElementById("systemLevelBar"),
+  micLevelBar: document.getElementById("micLevelBar"),
+  systemLevelText: document.getElementById("systemLevelText"),
+  micLevelText: document.getElementById("micLevelText"),
   signalText: document.getElementById("signalText"),
   checkSignal: document.getElementById("checkSignal"),
   meetingIdText: document.getElementById("meetingIdText"),
@@ -504,12 +713,22 @@ const els = {
   transcriptClean: document.getElementById("transcriptClean"),
   recordsSelect: document.getElementById("recordsSelect"),
   refreshRecords: document.getElementById("refreshRecords"),
+  recordMenuBtn: document.getElementById("recordMenuBtn"),
+  recordMenu: document.getElementById("recordMenu"),
+  renameRecordBtn: document.getElementById("renameRecordBtn"),
+  saveRecordMp3Btn: document.getElementById("saveRecordMp3Btn"),
   resultsRaw: document.getElementById("resultsRaw"),
   resultsClean: document.getElementById("resultsClean"),
   resultFileName: document.getElementById("resultFileName"),
   downloadArtifactBtn: document.getElementById("downloadArtifactBtn"),
   reportArtifactBtn: document.getElementById("reportArtifactBtn"),
   structuredArtifactBtn: document.getElementById("structuredArtifactBtn"),
+  audioArtifactBtn: document.getElementById("audioArtifactBtn"),
+  refreshCompare: document.getElementById("refreshCompare"),
+  compareHint: document.getElementById("compareHint"),
+  compareTableBody: document.getElementById("compareTableBody"),
+  downloadCompareCsv: document.getElementById("downloadCompareCsv"),
+  downloadCompareJson: document.getElementById("downloadCompareJson"),
   chooseFolder: document.getElementById("chooseFolder"),
   folderStatus: document.getElementById("folderStatus"),
   uploadAudio: document.getElementById("uploadAudio"),
@@ -527,6 +746,128 @@ const els = {
   themeLight: document.getElementById("themeLight"),
   themeDark: document.getElementById("themeDark"),
 };
+
+function getQualityConfig() {
+  return QUALITY_PROFILES[state.captureQuality] || QUALITY_PROFILES.balanced;
+}
+
+function getCaptureTimesliceMs() {
+  return Math.max(1200, Number(getQualityConfig().timesliceMs || CHUNK_TIMESLICE_MS));
+}
+
+function renderQualityProfile() {
+  const cfg = getQualityConfig();
+  if (els.qualityFast) {
+    els.qualityFast.classList.toggle("active", cfg.id === "fast");
+  }
+  if (els.qualityBalanced) {
+    els.qualityBalanced.classList.toggle("active", cfg.id === "balanced");
+  }
+  if (els.qualityAccurate) {
+    els.qualityAccurate.classList.toggle("active", cfg.id === "accurate");
+  }
+  if (els.qualityHint) {
+    const dict = i18n[state.lang] || {};
+    els.qualityHint.textContent = dict[cfg.hintKey] || cfg.hintKey;
+  }
+}
+
+function setCaptureQuality(nextQuality) {
+  const next = String(nextQuality || "").trim().toLowerCase();
+  if (!QUALITY_PROFILES[next]) {
+    state.captureQuality = "balanced";
+  } else {
+    state.captureQuality = next;
+  }
+  renderQualityProfile();
+}
+
+function getLanguageProfile() {
+  const raw = String(
+    (els.languageProfileSelect && els.languageProfileSelect.value) || state.languageProfile || "mixed"
+  )
+    .trim()
+    .toLowerCase();
+  if (raw === "ru" || raw === "en" || raw === "mixed") return raw;
+  return "mixed";
+}
+
+function syncLanguageProfileSelect() {
+  if (!els.languageProfileSelect) return;
+  const next = getLanguageProfile();
+  state.languageProfile = next;
+  els.languageProfileSelect.value = next;
+}
+
+function _diagItemLabel(el) {
+  if (!el) return "";
+  const dict = i18n[state.lang] || {};
+  const key = String(el.getAttribute("data-i18n") || "").trim();
+  return (key && dict[key]) || key || "";
+}
+
+function _renderDiagItem(el) {
+  if (!el) return;
+  const base = _diagItemLabel(el);
+  const note = String(el.dataset.note || "").trim();
+  const suffix = note ? `: ${note}` : "";
+  el.textContent = `${base}${suffix}`;
+}
+
+function setDiagItemStatus(el, status = "muted", note = "") {
+  if (!el) return;
+  el.classList.remove("muted", "good", "bad", "running");
+  el.classList.add(status || "muted");
+  if (note) {
+    el.dataset.note = String(note);
+  } else {
+    delete el.dataset.note;
+  }
+  _renderDiagItem(el);
+}
+
+function setDiagHint(messageKeyOrText = "", style = "muted", isRaw = false) {
+  if (!els.diagHint) return;
+  const dict = i18n[state.lang] || {};
+  if (!messageKeyOrText) {
+    els.diagHint.textContent = "";
+    els.diagHint.className = "hint";
+    return;
+  }
+  if (!isRaw && dict[messageKeyOrText]) {
+    els.diagHint.textContent = dict[messageKeyOrText];
+  } else {
+    els.diagHint.textContent = String(messageKeyOrText || "");
+  }
+  els.diagHint.className = `hint ${style || "muted"}`;
+}
+
+function renderMeterDetailLabels() {
+  const dict = i18n[state.lang] || {};
+  const systemLevel = Math.max(0, Number(state.meterLevels.system || 0));
+  const micLevel = Math.max(0, Number(state.meterLevels.mic || 0));
+  const systemLabel = systemLevel > 0.001 ? `${Math.round(systemLevel * 100)}%` : "—";
+  const micLabel = micLevel > 0.001 ? `${Math.round(micLevel * 100)}%` : "—";
+  if (els.systemLevelText) {
+    els.systemLevelText.textContent = formatText(
+      dict.meter_system_label || "System: {level}",
+      { level: systemLabel }
+    );
+  }
+  if (els.micLevelText) {
+    els.micLevelText.textContent = formatText(dict.meter_mic_label || "Mic: {level}", {
+      level: micLabel,
+    });
+  }
+}
+
+function renderDiagnosticsLabels() {
+  _renderDiagItem(els.diagAudio);
+  _renderDiagItem(els.diagSystem);
+  _renderDiagItem(els.diagMic);
+  _renderDiagItem(els.diagStt);
+  _renderDiagItem(els.diagLlm);
+}
 
 const updateI18n = () => {
   const dict = i18n[state.lang];
@@ -557,6 +898,10 @@ const updateI18n = () => {
   }
   if (els.themeLight) els.themeLight.textContent = dict.theme_light || "Light";
   if (els.themeDark) els.themeDark.textContent = dict.theme_dark || "Dark";
+  renderQualityProfile();
+  syncLanguageProfileSelect();
+  renderMeterDetailLabels();
+  renderDiagnosticsLabels();
   if (els.llmModelSelect && !state.llmModels.length) {
     setLlmModelOptions([], "");
   }
@@ -566,6 +911,13 @@ const updateI18n = () => {
   } else if (state.quickHintText) {
     setQuickHint(state.quickHintText, state.quickHintStyle || "muted", true);
   }
+  renderComparisonTable();
+  if (Array.isArray(state.compareItems) && state.compareItems.length) {
+    setCompareHint("compare_hint_idle", "good");
+  } else {
+    setCompareHint("compare_hint_empty", "muted");
+  }
+  refreshRecognitionDiagnosis();
 };
 
 const setStatus = (statusKey, style) => {
@@ -596,12 +948,73 @@ const setStatusHint = (messageKeyOrText = "", style = "muted", isRaw = false) =>
   }
   state.statusHintStyle = style;
   els.statusHint.className = `status-hint ${style}`;
+  refreshRecognitionDiagnosis();
+};
+
+const setRecognitionDiagnosis = (messageKeyOrText = "", style = "muted", isRaw = false) => {
+  if (!els.recognitionDiagnosis) return;
+  const dict = i18n[state.lang] || {};
+  let text = "";
+  if (!messageKeyOrText) {
+    text = dict.diag_reason_none || "";
+  } else if (!isRaw && dict[messageKeyOrText]) {
+    text = dict[messageKeyOrText];
+  } else {
+    text = String(messageKeyOrText || "");
+  }
+  els.recognitionDiagnosis.textContent = text;
+  els.recognitionDiagnosis.className = `status-hint ${style || "muted"}`;
+};
+
+const deriveRecognitionDiagnosis = () => {
+  const hint = String(state.statusHintKey || "").trim();
+  if (
+    hint === "err_media_not_readable" ||
+    hint === "err_no_device_selected" ||
+    hint === "err_media_not_found"
+  ) {
+    return { key: "diag_reason_audio_busy", style: "bad" };
+  }
+  if (hint === "hint_stt_warmup") {
+    return { key: "diag_reason_stt_warmup", style: "muted" };
+  }
+
+  const diag = state.diagnosticsLast || {};
+  const systemOk = Boolean(diag.systemOk);
+  const micOk = Boolean(diag.micOk);
+  const micSkipped = Boolean(diag.micSkipped);
+  const sttWarmupInProgress = Boolean(diag.sttWarmupInProgress);
+
+  if (sttWarmupInProgress) {
+    return { key: "diag_reason_stt_warmup", style: "muted" };
+  }
+
+  const systemLevel = Number(state.meterLevels.system || 0);
+  const micLevel = Number(state.meterLevels.mic || 0);
+  const peak = Math.max(systemLevel, micLevel, Number(state.signalPeak || 0));
+
+  if ((!systemOk && micOk) || (systemLevel < 0.012 && micLevel >= 0.03)) {
+    return { key: "diag_reason_mic_only", style: "bad" };
+  }
+  if ((!systemOk && micSkipped) || state.signalState === "signal_no_audio") {
+    return { key: "diag_reason_system_track_missing", style: "bad" };
+  }
+  if (state.signalState === "signal_low" || (peak > 0.002 && peak < 0.03)) {
+    return { key: "diag_reason_low_snr", style: "muted" };
+  }
+  return { key: "diag_reason_none", style: "muted" };
+};
+
+const refreshRecognitionDiagnosis = () => {
+  const diagnosis = deriveRecognitionDiagnosis();
+  setRecognitionDiagnosis(diagnosis.key, diagnosis.style);
 };
 
 const setSignal = (statusKey) => {
   const dict = i18n[state.lang];
   els.signalText.textContent = dict[statusKey] || statusKey;
   state.signalState = statusKey;
+  refreshRecognitionDiagnosis();
 };
 
 const setDriverStatus = (statusKey, style) => {
@@ -651,6 +1064,119 @@ const setQuickHint = (hintKeyOrText = "", style = "muted", isRaw = false, params
   }
   els.quickRecordHint.textContent = text;
   els.quickRecordHint.className = `hint ${style || "muted"}`;
+};
+
+const setCompareHint = (hintKeyOrText = "", style = "muted", isRaw = false) => {
+  if (!els.compareHint) return;
+  const dict = i18n[state.lang] || {};
+  let text = "";
+  if (!hintKeyOrText) {
+    text = "";
+  } else if (!isRaw && dict[hintKeyOrText]) {
+    text = dict[hintKeyOrText];
+  } else {
+    text = String(hintKeyOrText || "");
+  }
+  els.compareHint.textContent = text;
+  els.compareHint.className = `hint ${style || "muted"}`;
+};
+
+const _metaText = (value) => String(value || "").trim();
+
+const getInterviewMetadata = () => {
+  const candidateName = _metaText(els.metaCandidateName && els.metaCandidateName.value);
+  const candidateId = _metaText(els.metaCandidateId && els.metaCandidateId.value);
+  const vacancy = _metaText(els.metaVacancy && els.metaVacancy.value);
+  const level = _metaText(els.metaLevel && els.metaLevel.value);
+  const interviewer = _metaText(els.metaInterviewer && els.metaInterviewer.value);
+  return {
+    candidate_name: candidateName,
+    candidate_id: candidateId,
+    vacancy,
+    level,
+    interviewer,
+  };
+};
+
+const validateInterviewMetadata = () => {
+  const meta = getInterviewMetadata();
+  if (!meta.candidate_name || !meta.vacancy || !meta.level || !meta.interviewer) {
+    throw new Error("interview_meta_missing");
+  }
+  return meta;
+};
+
+const renderComparisonTable = () => {
+  if (!els.compareTableBody) return;
+  els.compareTableBody.innerHTML = "";
+  const dict = i18n[state.lang] || {};
+  const rows = Array.isArray(state.compareItems) ? state.compareItems : [];
+  rows.forEach((item) => {
+    const tr = document.createElement("tr");
+    const candidate = _metaText(item.candidate_name) || dict.compare_row_candidate_fallback || "Candidate";
+    const vacancy = _metaText(item.vacancy) || "—";
+    const level = _metaText(item.level) || "—";
+    const score = Number.isFinite(Number(item.overall_score))
+      ? `${Number(item.overall_score).toFixed(2)}`
+      : "—";
+    const decision = _metaText(item.decision_status) || "insufficient_data";
+    const quality = _metaText(item.transcript_quality) || "low";
+    [candidate, vacancy, level, score, decision, quality].forEach((value, idx) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (idx === 4 && (decision === "no" || decision === "lean_no" || decision === "insufficient_data")) {
+        td.classList.add("bad");
+      }
+      if (idx === 4 && (decision === "yes" || decision === "strong_yes" || decision === "lean_yes")) {
+        td.classList.add("good");
+      }
+      if (idx === 5 && (quality === "low" || quality === "unknown")) {
+        td.classList.add("bad");
+      }
+      if (idx === 5 && (quality === "high" || quality === "medium")) {
+        td.classList.add("good");
+      }
+      tr.appendChild(td);
+    });
+    els.compareTableBody.appendChild(tr);
+  });
+};
+
+const fetchComparison = async () => {
+  if (els.refreshCompare) els.refreshCompare.disabled = true;
+  setCompareHint("compare_hint_loading", "muted");
+  try {
+    const source = state.resultsSource === "raw" ? "raw" : "clean";
+    const res = await fetch(`/v1/meetings/compare?source=${source}&limit=50`, {
+      headers: buildHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`compare_failed_${res.status}`);
+    }
+    const body = await res.json();
+    const items = Array.isArray(body.items) ? body.items : [];
+    state.compareItems = items;
+    renderComparisonTable();
+    if (!items.length) {
+      setCompareHint("compare_hint_empty", "muted");
+    } else {
+      setCompareHint("compare_hint_idle", "good");
+    }
+  } catch (err) {
+    console.warn("compare fetch failed", err);
+    state.compareItems = [];
+    renderComparisonTable();
+    setCompareHint("compare_hint_failed", "bad");
+  } finally {
+    if (els.refreshCompare) els.refreshCompare.disabled = false;
+  }
+};
+
+const downloadComparison = async (fmt) => {
+  const source = state.resultsSource === "raw" ? "raw" : "clean";
+  const url = `/v1/meetings/compare/export?source=${source}&limit=50&fmt=${fmt}`;
+  const filename = `compare_${source}.${fmt}`;
+  await downloadArtifact(url, filename);
 };
 
 const formatText = (template, params = {}) => {
@@ -1290,6 +1816,8 @@ const ensureStream = async (mode, options = {}) => {
   state.micAdded = false;
   closeMixGraph();
   stopInputStreams();
+  // Короткая пауза снижает шанс NotReadable/AbortError при быстром reopen того же устройства.
+  await sleepMs(120);
 
   let baseStream;
   if (mode === "screen") {
@@ -1390,12 +1918,28 @@ const ensureStream = async (mode, options = {}) => {
 
 const closeAudioMeter = () => {
   stopMeter();
+  if (state.meterNodes && state.meterNodes.length) {
+    state.meterNodes.forEach((node) => {
+      try {
+        if (node && typeof node.disconnect === "function") {
+          node.disconnect();
+        }
+      } catch (err) {
+        void err;
+      }
+    });
+  }
+  state.meterNodes = [];
   if (state.audioContext) {
     state.audioContext.close().catch(() => {});
   }
   state.audioContext = null;
   state.analyser = null;
+  state.analyserSystem = null;
+  state.analyserMic = null;
+  state.meterLevels = { mixed: 0, system: 0, mic: 0 };
   state.meterMode = "";
+  renderMeterDetailLabels();
 };
 
 const releasePreparedCapture = () => {
@@ -1424,6 +1968,7 @@ const mapStartError = (err, mode) => {
   if (name === "NotReadableError" || name === "AbortError") return "err_media_not_readable";
   if (message.includes("preflight_no_audio_track")) return "err_media_not_readable";
   if (message.includes("no_device_selected")) return "err_no_device_selected";
+  if (message.includes("interview_meta_missing")) return "err_interview_meta_missing";
   if (message.includes("system_source_not_virtual")) return "err_system_source_not_virtual";
   if (message.includes("capture_locked_other_tab")) return "err_capture_locked_other_tab";
   if (message.includes("start_meeting_failed")) return "err_server_start";
@@ -1432,6 +1977,7 @@ const mapStartError = (err, mode) => {
   if (message.includes("stream_missing_after_countdown")) return "err_media_not_readable";
   if (message.includes("Failed to fetch") || message.includes("NetworkError")) return "err_network";
   if (message.includes("pcm_capture_unsupported")) return "err_recorder_init";
+  if (message.includes("diagnostics_failed")) return "err_diagnostics_failed";
   if (message.includes("mic_same_as_system")) return "err_mic_same_as_system";
   if (name === "NotSupportedError" || name === "TypeError") return "err_recorder_init";
   if (message.includes("MediaRecorder")) return "err_recorder_init";
@@ -1448,26 +1994,63 @@ const buildAudioMeter = async (mode, options = {}) => {
   if (!Ctx) return;
   state.audioContext = new Ctx();
   await ensureAudioContextActive(state.audioContext);
-  const source = state.audioContext.createMediaStreamSource(stream);
-  state.analyser = state.audioContext.createAnalyser();
-  state.analyser.fftSize = 1024;
-  source.connect(state.analyser);
+  state.meterNodes = [];
+  const attachAnalyser = (targetStream) => {
+    if (!targetStream || !targetStream.getAudioTracks().length) return null;
+    const source = state.audioContext.createMediaStreamSource(targetStream);
+    const analyser = state.audioContext.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    state.meterNodes.push(source, analyser);
+    return analyser;
+  };
+  state.analyser = attachAnalyser(stream);
+  const systemStream = state.inputStreams.length ? state.inputStreams[0] : null;
+  const micStream =
+    state.inputStreams.length > 1 ? state.inputStreams[state.inputStreams.length - 1] : null;
+  state.analyserSystem = attachAnalyser(systemStream);
+  state.analyserMic = attachAnalyser(micStream);
   state.meterMode = mode;
   state.signalPeak = 0;
   state.signalSmooth = 0;
+  state.meterLevels = { mixed: 0, system: 0, mic: 0 };
+  renderMeterDetailLabels();
 };
 
 const updateMeter = () => {
-  if (!state.analyser) return;
-  const buffer = new Uint8Array(state.analyser.fftSize);
-  state.analyser.getByteTimeDomainData(buffer);
-  let sum = 0;
-  for (let i = 0; i < buffer.length; i += 1) {
-    const v = (buffer[i] - 128) / 128;
-    sum += v * v;
+  const calcLevel = (analyser) => {
+    if (!analyser) return 0;
+    const buffer = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(buffer);
+    let sum = 0;
+    for (let i = 0; i < buffer.length; i += 1) {
+      const v = (buffer[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / buffer.length);
+    return Math.min(1, rms * 2.5);
+  };
+
+  const mixedLevel = calcLevel(state.analyser);
+  if (mixedLevel <= 0 && !state.analyserSystem && !state.analyserMic) {
+    return;
   }
-  const rms = Math.sqrt(sum / buffer.length);
-  const level = Math.min(1, rms * 2.5);
+  const systemLevel = calcLevel(state.analyserSystem);
+  const micLevel = calcLevel(state.analyserMic);
+  state.meterLevels = {
+    mixed: mixedLevel,
+    system: systemLevel,
+    mic: micLevel,
+  };
+  renderMeterDetailLabels();
+  if (els.systemLevelBar) {
+    els.systemLevelBar.style.transform = `scaleX(${systemLevel})`;
+  }
+  if (els.micLevelBar) {
+    els.micLevelBar.style.transform = `scaleX(${micLevel})`;
+  }
+
+  const level = mixedLevel;
   state.signalSmooth =
     state.signalSmooth <= 0
       ? level
@@ -1507,6 +2090,10 @@ const stopMeter = () => {
   if (state.levelTimer) clearInterval(state.levelTimer);
   state.levelTimer = null;
   els.levelBar.style.transform = "scaleX(0)";
+  if (els.systemLevelBar) els.systemLevelBar.style.transform = "scaleX(0)";
+  if (els.micLevelBar) els.micLevelBar.style.transform = "scaleX(0)";
+  state.meterLevels = { mixed: 0, system: 0, mic: 0 };
+  renderMeterDetailLabels();
   state.signalSmooth = 0;
 };
 
@@ -1757,7 +2344,7 @@ const sendChunk = async (blob, mimeType, sourceTrack = "mixed") => {
     sample_rate: state.audioContext ? state.audioContext.sampleRate : 48000,
     channels: 1,
     source_track: track,
-    quality_profile: "live",
+    quality_profile: String(getQualityConfig().wsQualityProfile || "live_balanced"),
     idempotency_key: `${state.meetingId}:${state.seq}:${Date.now()}`,
     content_b64,
   };
@@ -2003,7 +2590,7 @@ const createPcmCapture = (stream, sourceTrack = "mixed") => {
 
   const timer = setInterval(() => {
     void flush();
-  }, CHUNK_TIMESLICE_MS);
+  }, getCaptureTimesliceMs());
 
   return {
     engine: "pcm",
@@ -2056,7 +2643,7 @@ const createMediaRecorderCapture = (stream, sourceTrack = "mixed") => {
       await sendChunk(e.data, mimeType || e.data.type, sourceTrack);
     }
   };
-  recorder.start(CHUNK_TIMESLICE_MS);
+  recorder.start(getCaptureTimesliceMs());
   return {
     engine: "media",
     stop: async () => {
@@ -2267,6 +2854,8 @@ const resetSessionState = () => {
   state.enhancedTimers.clear();
   if (els.transcriptRaw) els.transcriptRaw.value = "";
   if (els.transcriptClean) els.transcriptClean.value = "";
+  state.diagnosticsLast = null;
+  refreshRecognitionDiagnosis();
 };
 
 const getSelectedSystemDeviceLabel = () => {
@@ -2311,6 +2900,8 @@ const runCapturePreflight = async (mode) => {
         void err;
       }
     }
+    // Safari/Chrome иногда освобождают аудио-девайс не мгновенно после stop().
+    await sleepMs(140);
   }
 };
 
@@ -2371,7 +2962,7 @@ const drainPendingChunksHttp = async (meetingId, options = {}) => {
           sample_rate: payload.sample_rate,
           channels: payload.channels,
           source_track: payload.source_track || "mixed",
-          quality_profile: "live",
+          quality_profile: payload.quality_profile || String(getQualityConfig().wsQualityProfile || "live_balanced"),
           idempotency_key: payload.idempotency_key,
         }),
       });
@@ -2437,11 +3028,14 @@ const startRecording = async () => {
   resetSessionState();
   els.countdownValue.textContent = "9s";
   const captureMode = getCaptureMode();
+  let interviewMeta = null;
 
   try {
+    interviewMeta = validateInterviewMetadata();
     if (captureMode === "system" && !els.deviceSelect.value) {
       throw new Error("no_device_selected");
     }
+    await runDiagnostics({ forStart: true });
     await runCapturePreflight(captureMode);
     await ensureStream(captureMode, { force: true });
     if (captureMode === "screen" && state.screenAudioMissing && !state.micAdded) {
@@ -2478,7 +3072,17 @@ const startRecording = async () => {
       headers: buildHeaders(),
       body: JSON.stringify({
         mode: "realtime",
-        context: { source: "local_ui", locale: state.lang, capture_mode: captureMode },
+        context: {
+          source: "local_ui",
+          locale: state.lang,
+          language_profile: getLanguageProfile(),
+          capture_mode: captureMode,
+          ...(interviewMeta || {}),
+          source_track_roles: {
+            system: "candidate",
+            mic: "interviewer",
+          },
+        },
       }),
     });
     if (!res.ok) {
@@ -2554,6 +3158,8 @@ const stopRecording = async (options = {}) => {
   const wasRecording = Boolean(state.captureStopper);
   const wasCountingDown = Boolean(state.isCountingDown);
   const activeMeetingId = state.meetingId;
+  const shouldOfferMp3 = Boolean(activeMeetingId && wasRecording && !forceFinish);
+  let finishedOk = false;
   state.stopRequested = true;
   stopCaptureLockHeartbeat();
   if (state.isCountingDown) {
@@ -2593,9 +3199,13 @@ const stopRecording = async (options = {}) => {
         headers: buildHeaders(),
       });
       await fetchRecords();
+      finishedOk = true;
     } catch (err) {
       // ignore and keep local UI responsive
     }
+  }
+  if (shouldOfferMp3 && finishedOk) {
+    await saveMeetingMp3(activeMeetingId, { askUser: true });
   }
   if (state.stream) {
     releasePreparedCapture();
@@ -2785,10 +3395,201 @@ const checkDriver = async () => {
   }
 };
 
+const _diagMarkAllMuted = () => {
+  setDiagItemStatus(els.diagAudio, "muted");
+  setDiagItemStatus(els.diagSystem, "muted");
+  setDiagItemStatus(els.diagMic, "muted");
+  setDiagItemStatus(els.diagStt, "muted");
+  setDiagItemStatus(els.diagLlm, "muted");
+};
+
+const fetchDiagnosticsPreflight = async () => {
+  const res = await fetch("/v1/diagnostics/preflight", { headers: buildHeaders() });
+  if (!res.ok) {
+    throw new Error(`diagnostics_failed_${res.status}`);
+  }
+  return res.json();
+};
+
+const waitForSttWarmupReady = async (timeoutMs = 12000) => {
+  const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || 12000);
+  let snapshot = await fetchDiagnosticsPreflight();
+  while (Date.now() < deadline) {
+    const stt = snapshot && snapshot.stt ? snapshot.stt : {};
+    const sttWarmupError = String(stt.warmup_error || "").trim();
+    const sttWarmupInProgress = Boolean(
+      stt.warmup_started && !stt.warmup_ready && !stt.provider_initialized && !sttWarmupError
+    );
+    if (!sttWarmupInProgress) {
+      break;
+    }
+    await sleepMs(700);
+    snapshot = await fetchDiagnosticsPreflight();
+  }
+  return snapshot;
+};
+
+const runDiagnostics = async (options = {}) => {
+  const { forStart = false } = options;
+  if (els.runDiagnostics) {
+    els.runDiagnostics.disabled = true;
+  }
+  _diagMarkAllMuted();
+  setDiagItemStatus(els.diagAudio, "running");
+  setDiagItemStatus(els.diagSystem, "running");
+  setDiagItemStatus(els.diagMic, "running");
+  setDiagItemStatus(els.diagStt, "running");
+  setDiagItemStatus(els.diagLlm, "running");
+  setDiagHint("diag_hint_running", "muted");
+
+  let audioOk = false;
+  let systemOk = false;
+  let micOk = false;
+  let micSkipped = false;
+  let sttOk = false;
+  let sttWarmupInProgress = false;
+  let llmOk = false;
+  let llmRequired = false;
+  const notRequiredText =
+    (i18n[state.lang] && i18n[state.lang].diag_skip_not_required) || "not required";
+
+  const mode = getCaptureMode();
+  const includeMic =
+    mode === "system" ? true : Boolean(els.includeMic ? els.includeMic.checked : true);
+
+  try {
+    const testAccess = await withBusyRetry(
+      () => navigator.mediaDevices.getUserMedia({ audio: true }),
+      DIAG_AUDIO_RETRY_DELAYS_MS
+    );
+    testAccess.getTracks().forEach((track) => track.stop());
+    audioOk = true;
+    setDiagItemStatus(els.diagAudio, "good");
+  } catch (err) {
+    setDiagItemStatus(els.diagAudio, "bad");
+  }
+
+  if (audioOk) {
+    try {
+      await buildAudioMeter(mode, { force: true });
+      startMeter();
+      await sleepMs(1400);
+      const systemLevel = Number(state.meterLevels.system || state.meterLevels.mixed || 0);
+      const micLevel = Number(state.meterLevels.mic || 0);
+
+      systemOk = systemLevel >= 0.01;
+      setDiagItemStatus(els.diagSystem, systemOk ? "good" : "bad");
+
+      if (!includeMic) {
+        micSkipped = true;
+        setDiagItemStatus(els.diagMic, "muted", notRequiredText);
+      } else {
+        micOk = micLevel >= 0.008;
+        setDiagItemStatus(els.diagMic, micOk ? "good" : "bad");
+      }
+    } catch (err) {
+      setDiagItemStatus(els.diagSystem, "bad");
+      if (includeMic) {
+        setDiagItemStatus(els.diagMic, "bad");
+      } else {
+        micSkipped = true;
+        setDiagItemStatus(els.diagMic, "muted", notRequiredText);
+      }
+    } finally {
+      releasePreparedCapture();
+    }
+  } else {
+    setDiagItemStatus(els.diagSystem, "bad");
+    if (includeMic) {
+      setDiagItemStatus(els.diagMic, "bad");
+    } else {
+      micSkipped = true;
+      setDiagItemStatus(els.diagMic, "muted", notRequiredText);
+    }
+  }
+
+  try {
+    const backend = forStart
+      ? await waitForSttWarmupReady()
+      : await fetchDiagnosticsPreflight();
+    const stt = backend && backend.stt ? backend.stt : {};
+    const llm = backend && backend.llm ? backend.llm : {};
+
+    const sttWarmupError = String(stt.warmup_error || "").trim();
+    sttWarmupInProgress = Boolean(
+      stt.warmup_started && !stt.warmup_ready && !stt.provider_initialized && !sttWarmupError
+    );
+    sttOk = Boolean(
+      stt.warmup_ready || stt.provider_initialized || (!forStart && sttWarmupInProgress)
+    );
+    if (stt.warmup_ready || stt.provider_initialized) {
+      setDiagItemStatus(els.diagStt, "good");
+    } else if (sttWarmupInProgress) {
+      setDiagItemStatus(
+        els.diagStt,
+        "running",
+        (i18n[state.lang] && i18n[state.lang].diag_stt_warming) || "model warmup..."
+      );
+    } else {
+      setDiagItemStatus(els.diagStt, "bad", sttWarmupError || "");
+    }
+
+    llmRequired = Boolean(llm && llm.enabled);
+    if (!llmRequired) {
+      setDiagItemStatus(els.diagLlm, "muted", notRequiredText);
+      llmOk = true;
+    } else {
+      llmOk = Boolean(llm.available);
+      setDiagItemStatus(els.diagLlm, llmOk ? "good" : "bad");
+    }
+  } catch (err) {
+    sttOk = false;
+    setDiagItemStatus(els.diagStt, "bad");
+    llmOk = false;
+    setDiagItemStatus(els.diagLlm, "bad");
+  } finally {
+    if (els.runDiagnostics) {
+      els.runDiagnostics.disabled = false;
+    }
+  }
+
+  const criticalPassed = Boolean(audioOk && sttOk);
+  state.diagnosticsLast = {
+    criticalPassed,
+    systemOk,
+    micOk,
+    micSkipped,
+    sttWarmupInProgress,
+    llmOk,
+    llmRequired,
+    ts: Date.now(),
+  };
+  if (!criticalPassed) {
+    setDiagHint("diag_hint_fail", "bad");
+  } else if (systemOk && (micSkipped || micOk) && (!llmRequired || llmOk)) {
+    setDiagHint("diag_hint_ok", "good");
+  } else {
+    setDiagHint("diag_hint_levels_low", "muted");
+  }
+
+  if (forStart && !criticalPassed) {
+    throw new Error("diagnostics_failed");
+  }
+  refreshRecognitionDiagnosis();
+  return { criticalPassed, llmOk, llmRequired };
+};
+
 const uploadAudioFile = async () => {
   if (state.isUploading) return;
   const file = els.uploadAudio.files && els.uploadAudio.files[0];
   if (!file) return;
+  let interviewMeta = null;
+  try {
+    interviewMeta = validateInterviewMetadata();
+  } catch (err) {
+    setStatusHint(mapStartError(err, "system"), "bad");
+    return;
+  }
   state.isUploading = true;
   els.startBtn.disabled = true;
   els.stopBtn.disabled = true;
@@ -2800,7 +3601,17 @@ const uploadAudioFile = async () => {
     headers: buildHeaders(),
     body: JSON.stringify({
       mode: "postmeeting",
-      context: { source: "upload_audio", locale: state.lang, filename: file.name },
+      context: {
+        source: "upload_audio",
+        locale: state.lang,
+        language_profile: getLanguageProfile(),
+        filename: file.name,
+        ...(interviewMeta || {}),
+        source_track_roles: {
+          system: "candidate",
+          mic: "interviewer",
+        },
+      },
     }),
   });
   if (!res.ok) {
@@ -2835,6 +3646,7 @@ const uploadAudioFile = async () => {
     headers: buildHeaders(),
   });
   await fetchRecords();
+  await saveMeetingMp3(state.meetingId, { askUser: true });
 
   state.isUploading = false;
   setStatus("status_idle", "idle");
@@ -3039,11 +3851,17 @@ const syncResultsState = () => {
   if (els.reportArtifactBtn) els.reportArtifactBtn.dataset.source = source;
   if (els.structuredArtifactBtn) els.structuredArtifactBtn.dataset.source = source;
   const hasMeeting = Boolean(getSelectedMeeting());
-  [els.downloadArtifactBtn, els.reportArtifactBtn, els.structuredArtifactBtn].forEach(
+  [els.downloadArtifactBtn, els.reportArtifactBtn, els.structuredArtifactBtn, els.audioArtifactBtn].forEach(
     (btn) => {
       if (btn) btn.disabled = !hasMeeting;
     }
   );
+  if (els.recordMenuBtn) {
+    els.recordMenuBtn.disabled = !hasMeeting;
+  }
+  if (!hasMeeting) {
+    closeRecordMenu();
+  }
 };
 
 const chooseFolder = async () => {
@@ -3066,6 +3884,7 @@ const fetchRecords = async () => {
     const data = await res.json();
     const items = data.items || [];
     const current = getSelectedMeeting();
+    state.recordsMeta = new Map();
     els.recordsSelect.innerHTML = "";
     if (!items.length) {
       const opt = document.createElement("option");
@@ -3073,19 +3892,29 @@ const fetchRecords = async () => {
       opt.textContent = "—";
       els.recordsSelect.appendChild(opt);
       syncResultsState();
+      void fetchComparison();
       return;
     }
     items.forEach((item) => {
+      const meetingId = String(item.meeting_id || "").trim();
+      const displayName = String(item.display_name || "").trim() || meetingId;
+      state.recordsMeta.set(meetingId, {
+        meeting_id: meetingId,
+        display_name: displayName,
+        record_index: Number(item.record_index || 0),
+        audio_mp3: Boolean(item.audio_mp3),
+      });
       const opt = document.createElement("option");
-      opt.value = item.meeting_id;
+      opt.value = meetingId;
       const created = item.created_at ? new Date(item.created_at).toLocaleString() : "";
-      opt.textContent = `${item.meeting_id}${created ? ` (${created})` : ""}`;
-      if (current && item.meeting_id === current) {
+      opt.textContent = `${displayName}${created ? ` (${created})` : ""}`;
+      if (current && meetingId === current) {
         opt.selected = true;
       }
       els.recordsSelect.appendChild(opt);
     });
     syncResultsState();
+    void fetchComparison();
   } catch (err) {
     console.warn("fetch records failed", err);
   }
@@ -3095,9 +3924,49 @@ const getSelectedMeeting = () => {
   return els.recordsSelect.value || state.meetingId;
 };
 
-const buildFilename = ({ kind, source, fmt }) => {
+const getSelectedRecordMeta = () => {
+  const meetingId = getSelectedMeeting();
+  if (!meetingId) return null;
+  return state.recordsMeta.get(meetingId) || null;
+};
+
+const getSelectedRecordDisplayName = () => {
+  const meta = getSelectedRecordMeta();
+  if (meta && meta.display_name) return String(meta.display_name);
+  const meetingId = getSelectedMeeting();
+  return meetingId ? String(meetingId) : "record";
+};
+
+const sanitizeFilenamePart = (value) => {
+  const base = String(value || "")
+    .replace(/[\\\\/:*?\"<>|]/g, "_")
+    .replace(/\\s+/g, " ")
+    .trim();
+  return (base || "record").slice(0, 80);
+};
+
+const closeRecordMenu = () => {
+  if (els.recordMenu) {
+    els.recordMenu.classList.add("hidden");
+  }
+};
+
+const toggleRecordMenu = () => {
+  if (!els.recordMenu) return;
+  const hasMeeting = Boolean(getSelectedMeeting());
+  if (!hasMeeting) return;
+  els.recordMenu.classList.toggle("hidden");
+};
+
+const buildFilename = ({ kind, source, fmt, meetingId }) => {
   if (kind === "raw") return "raw.txt";
   if (kind === "clean") return "clean.txt";
+  if (kind === "audio") {
+    const targetMeeting = String(meetingId || "").trim() || getSelectedMeeting();
+    const meta = targetMeeting ? state.recordsMeta.get(targetMeeting) : null;
+    const label = meta && meta.display_name ? meta.display_name : getSelectedRecordDisplayName();
+    return `${sanitizeFilenamePart(label)}.mp3`;
+  }
   if (kind === "report") {
     return source === "raw" ? "report_raw.txt" : "report_clean.txt";
   }
@@ -3105,6 +3974,27 @@ const buildFilename = ({ kind, source, fmt }) => {
     return `structured_${source}.${fmt}`;
   }
   return "artifact.bin";
+};
+
+const saveBlobViaPicker = async (filename, blob) => {
+  if (!window.showSaveFilePicker) return false;
+  try {
+    const handle = await window.showSaveFilePicker({
+      suggestedName: filename,
+      types: [
+        {
+          description: "MP3 audio",
+          accept: { "audio/mpeg": [".mp3"] },
+        },
+      ],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return true;
+  } catch (err) {
+    return false;
+  }
 };
 
 const saveToFolder = async (filename, blob) => {
@@ -3121,13 +4011,20 @@ const saveToFolder = async (filename, blob) => {
   }
 };
 
-const downloadArtifact = async (url, filename) => {
+const downloadArtifact = async (url, filename, options = {}) => {
+  const { preferPicker = false } = options;
   try {
     const res = await fetch(url, { headers: buildAuthHeaders() });
-    if (!res.ok) return;
+    if (!res.ok) {
+      return { ok: false, status: res.status };
+    }
     const blob = await res.blob();
+    if (preferPicker) {
+      const savedPicker = await saveBlobViaPicker(filename, blob);
+      if (savedPicker) return { ok: true, status: 200 };
+    }
     const saved = await saveToFolder(filename, blob);
-    if (saved) return;
+    if (saved) return { ok: true, status: 200 };
     const link = document.createElement("a");
     const objectUrl = URL.createObjectURL(blob);
     link.href = objectUrl;
@@ -3136,8 +4033,58 @@ const downloadArtifact = async (url, filename) => {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(objectUrl), 500);
+    return { ok: true, status: 200 };
   } catch (err) {
     console.warn("download failed", err);
+    return { ok: false, status: 0 };
+  }
+};
+
+const saveMeetingMp3 = async (meetingId, options = {}) => {
+  const { askUser = false } = options;
+  if (!meetingId) return false;
+  const dict = i18n[state.lang] || {};
+  if (askUser) {
+    const question = dict.prompt_save_mp3_after_stop || "Recording is finished. Save MP3 now?";
+    if (!window.confirm(question)) {
+      return false;
+    }
+  }
+  const url = `/v1/meetings/${meetingId}/artifact?kind=audio&fmt=mp3`;
+  const filename = buildFilename({ kind: "audio", fmt: "mp3", meetingId });
+  const result = await downloadArtifact(url, filename, { preferPicker: true });
+  if (result && result.ok) {
+    setStatusHint("hint_mp3_saved", "good");
+    return true;
+  }
+  if (result && result.status === 404) {
+    setStatusHint("hint_mp3_not_found", "bad");
+  }
+  return false;
+};
+
+const renameSelectedRecord = async () => {
+  const meetingId = getSelectedMeeting();
+  if (!meetingId) return;
+  const dict = i18n[state.lang] || {};
+  const currentName = getSelectedRecordDisplayName();
+  const promptText = dict.prompt_rename_record || "Enter new recording name:";
+  const nextName = window.prompt(promptText, currentName);
+  if (nextName == null) return;
+  const value = String(nextName).trim();
+  if (!value) return;
+  try {
+    const res = await fetch(`/v1/meetings/${meetingId}/rename`, {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({ display_name: value }),
+    });
+    if (!res.ok) return;
+    closeRecordMenu();
+    setStatusHint("hint_record_renamed", "good");
+    await fetchRecords();
+  } catch (err) {
+    console.warn("rename record failed", err);
   }
 };
 
@@ -3190,21 +4137,42 @@ const handleRecordAction = async (event) => {
     const filename = buildFilename({ kind: "report", source, fmt: "txt" });
     await downloadArtifact(url, filename);
     await fetchRecords();
+    await fetchComparison();
     return;
   }
 
   if (action === "structured") {
     const source = button.dataset.source || state.resultsSource;
-    await fetch(`/v1/meetings/${meetingId}/structured`, {
+    const generated = await fetch(`/v1/meetings/${meetingId}/structured`, {
       method: "POST",
       headers: buildHeaders(),
       body: JSON.stringify({ source }),
     });
+    if (!generated.ok) return;
+    try {
+      const payload = await generated.json();
+      if (String(payload.status || "") === "insufficient_data") {
+        setStatusHint(
+          payload.message ||
+            (i18n[state.lang] && i18n[state.lang].structured_insufficient_data) ||
+            "Insufficient data",
+          "bad",
+          true
+        );
+      }
+    } catch (err) {
+      // ignore parse failures and continue with download
+    }
     const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${source}&fmt=csv`;
     const filename = buildFilename({ kind: "structured", source, fmt: "csv" });
     await downloadArtifact(url, filename);
     await fetchRecords();
+    await fetchComparison();
     return;
+  }
+
+  if (action === "audio") {
+    await saveMeetingMp3(meetingId, { askUser: false });
   }
 };
 
@@ -3229,6 +4197,26 @@ if (els.scanLlmModels) {
 if (els.applyLlmModel) {
   els.applyLlmModel.addEventListener("click", () => {
     void applyLlmModel();
+  });
+}
+if (els.qualityFast) {
+  els.qualityFast.addEventListener("click", () => setCaptureQuality("fast"));
+}
+if (els.qualityBalanced) {
+  els.qualityBalanced.addEventListener("click", () => setCaptureQuality("balanced"));
+}
+if (els.qualityAccurate) {
+  els.qualityAccurate.addEventListener("click", () => setCaptureQuality("accurate"));
+}
+if (els.languageProfileSelect) {
+  els.languageProfileSelect.addEventListener("change", () => {
+    state.languageProfile = getLanguageProfile();
+    refreshRecognitionDiagnosis();
+  });
+}
+if (els.runDiagnostics) {
+  els.runDiagnostics.addEventListener("click", () => {
+    void runDiagnostics({ forStart: false });
   });
 }
 
@@ -3276,23 +4264,53 @@ els.recordsSelect.addEventListener("change", () => {
   if (meetingId) {
     els.meetingIdText.textContent = meetingId;
   }
+  closeRecordMenu();
   syncResultsState();
 });
+if (els.recordMenuBtn) {
+  els.recordMenuBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleRecordMenu();
+  });
+}
+if (els.renameRecordBtn) {
+  els.renameRecordBtn.addEventListener("click", () => {
+    void renameSelectedRecord();
+  });
+}
+if (els.saveRecordMp3Btn) {
+  els.saveRecordMp3Btn.addEventListener("click", () => {
+    const meetingId = getSelectedMeeting();
+    if (!meetingId) return;
+    closeRecordMenu();
+    void saveMeetingMp3(meetingId, { askUser: false });
+  });
+}
 if (els.resultsRaw) {
   els.resultsRaw.addEventListener("click", () => {
     state.resultsSource = "raw";
     syncResultsState();
+    void fetchComparison();
   });
 }
 if (els.resultsClean) {
   els.resultsClean.addEventListener("click", () => {
     state.resultsSource = "clean";
     syncResultsState();
+    void fetchComparison();
   });
 }
 els.chooseFolder.addEventListener("click", chooseFolder);
 document.querySelectorAll("[data-action]").forEach((btn) => {
   btn.addEventListener("click", handleRecordAction);
+});
+document.addEventListener("click", (event) => {
+  if (!els.recordMenu || !els.recordMenuBtn) return;
+  const target = event && event.target ? event.target : null;
+  if (!target) return;
+  if (els.recordMenu.contains(target)) return;
+  if (els.recordMenuBtn.contains(target)) return;
+  closeRecordMenu();
 });
 els.startBtn.addEventListener("click", async () => {
   try {
@@ -3318,6 +4336,21 @@ if (els.quickRecordStop) {
     void stopQuickRecord();
   });
 }
+if (els.refreshCompare) {
+  els.refreshCompare.addEventListener("click", () => {
+    void fetchComparison();
+  });
+}
+if (els.downloadCompareCsv) {
+  els.downloadCompareCsv.addEventListener("click", () => {
+    void downloadComparison("csv");
+  });
+}
+if (els.downloadCompareJson) {
+  els.downloadCompareJson.addEventListener("click", () => {
+    void downloadComparison("json");
+  });
+}
 
 const savedTheme = (() => {
   try {
@@ -3327,7 +4360,10 @@ const savedTheme = (() => {
   }
 })();
 applyTheme(savedTheme || "light");
+setCaptureQuality(state.captureQuality || "balanced");
 updateI18n();
+_diagMarkAllMuted();
+setDiagHint("diag_hint_idle", "muted");
 pruneStaleCaptureLock();
 clearCaptureLock();
 listDevices();
@@ -3337,6 +4373,8 @@ fetchRecords();
 setRecordingButtons(false);
 setDriverHelpTab("mac");
 syncResultsState();
+setCompareHint("compare_hint_idle", "muted");
+renderComparisonTable();
 setQuickStatus("quick_record_state_idle", "muted");
 setQuickHint("quick_record_hint_ready", "muted");
 setQuickButtonsByStatus("idle");
