@@ -23,6 +23,8 @@ log = get_project_logger()
 
 _stt_provider = None
 _stt_warmup_started = False
+_stt_warmup_ready = False
+_stt_warmup_error = ""
 _stt_warmup_lock = threading.Lock()
 _TRACK_SPEAKERS = {"system", "mic", "mixed"}
 
@@ -35,6 +37,67 @@ def _status_for_chunk_processing(*, finished_at: object | None) -> PipelineStatu
 
 def _normalize_text(value: str) -> str:
     return " ".join((value or "").split()).strip()
+
+
+def _safe_label(value: str, *, limit: int = 24) -> str:
+    raw = "".join(ch if ch.isalnum() else "_" for ch in (value or "").strip())
+    compact = "_".join(part for part in raw.split("_") if part)
+    return (compact or "UNKNOWN").upper()[:limit]
+
+
+def _speaker_from_track(
+    *,
+    source_track: str | None,
+    meeting_context: dict[str, Any] | None,
+) -> str | None:
+    track = str(source_track or "").strip().lower()
+    if track not in _TRACK_SPEAKERS:
+        return None
+    ctx = meeting_context or {}
+    roles = ctx.get("source_track_roles") if isinstance(ctx.get("source_track_roles"), dict) else {}
+    role = str(roles.get(track) or "").strip().lower()
+    candidate_name = str(ctx.get("candidate_name") or "").strip()
+    interviewer_name = str(ctx.get("interviewer") or "").strip()
+    if role == "candidate":
+        suffix = _safe_label(candidate_name) if candidate_name else "UNKNOWN"
+        return f"CANDIDATE_{suffix}"
+    if role == "interviewer":
+        suffix = _safe_label(interviewer_name) if interviewer_name else "UNKNOWN"
+        return f"INTERVIEWER_{suffix}"
+    return track
+
+
+def _speaker_locked_for_track(speaker: str | None) -> bool:
+    normalized = str(speaker or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in _TRACK_SPEAKERS:
+        return True
+    return normalized.startswith("candidate_") or normalized.startswith("interviewer_")
+
+
+def _language_hint_from_context(meeting_context: dict[str, Any] | None) -> str | None:
+    ctx = meeting_context or {}
+    profile = str(ctx.get("language_profile") or "").strip().lower()
+    locale = str(ctx.get("locale") or "").strip().lower()
+    language = str(ctx.get("language") or "").strip().lower()
+    raw = profile or language or locale
+    if raw.startswith("ru"):
+        return "ru"
+    if raw.startswith("en"):
+        return "en"
+    if raw in {"mixed", "auto"}:
+        return "auto"
+    return None
+
+
+def _meeting_language_hint(meeting_id: str) -> str | None:
+    with db_session() as session:
+        mrepo = MeetingRepository(session)
+        meeting = mrepo.get(meeting_id)
+        if not meeting:
+            return None
+        return _language_hint_from_context(getattr(meeting, "context", None))
 
 
 def _extract_missing_tail(*, existing_text: str, backup_text: str) -> str:
@@ -85,10 +148,15 @@ def warmup_stt_provider_async() -> None:
         _stt_warmup_started = True
 
     def _worker() -> None:
+        global _stt_warmup_ready, _stt_warmup_error
         try:
             _get_stt_provider()
+            _stt_warmup_ready = True
+            _stt_warmup_error = ""
             log.info("stt_warmup_ready")
         except Exception as e:
+            _stt_warmup_ready = False
+            _stt_warmup_error = str(e)[:200]
             log.warning(
                 "stt_warmup_failed",
                 extra={"payload": {"err": str(e)[:200]}},
@@ -126,10 +194,27 @@ def _build_stt_provider():
 
 
 def _get_stt_provider():
-    global _stt_provider
+    global _stt_provider, _stt_warmup_ready, _stt_warmup_error
     if _stt_provider is None:
         _stt_provider = _build_stt_provider()
+    _stt_warmup_ready = True
+    _stt_warmup_error = ""
     return _stt_provider
+
+
+def stt_runtime_status() -> dict[str, object]:
+    """
+    Текущее состояние STT runtime для UI-диагностики.
+    """
+    settings = get_settings()
+    provider = str(getattr(settings, "stt_provider", "unknown") or "unknown").strip().lower()
+    return {
+        "provider": provider,
+        "warmup_started": bool(_stt_warmup_started),
+        "warmup_ready": bool(_stt_warmup_ready),
+        "warmup_error": str(_stt_warmup_error or ""),
+        "provider_initialized": _stt_provider is not None,
+    }
 
 
 def process_chunk_inline(
@@ -152,11 +237,13 @@ def process_chunk_inline(
         audio_bytes = get_bytes(blob_key)
 
     stt = _get_stt_provider()
+    language_hint = _meeting_language_hint(meeting_id)
     res = stt.transcribe_chunk(
         audio=audio_bytes,
         sample_rate=16000,
         quality_profile=quality_profile,
         source_track=source_track,
+        language_hint=language_hint,
     )
     text = (res.text or "").strip()
     if not text:
@@ -176,7 +263,7 @@ def process_chunk_inline(
         seg = TranscriptSegment(
             meeting_id=meeting_id,
             seq=chunk_seq,
-            speaker=res.speaker,
+            speaker=_speaker_from_track(source_track=source_track, meeting_context=m.context) or res.speaker,
             start_ms=None,
             end_ms=None,
             raw_text=text,
@@ -204,7 +291,7 @@ def process_chunk_inline(
             speaker_changed = bool(
                 inferred
                 and inferred != (s.speaker or "")
-                and (s.speaker or "").strip().lower() not in _TRACK_SPEAKERS
+                and not _speaker_locked_for_track(s.speaker)
             )
             if speaker_changed:
                 s.speaker = inferred
@@ -246,6 +333,7 @@ def retranscribe_meeting_high_quality(*, meeting_id: str) -> int:
         meeting = mrepo.get(meeting_id)
         if not meeting:
             return 0
+        language_hint = _language_hint_from_context(meeting.context)
 
         segs = srepo.list_by_meeting(meeting_id)
         if not segs:
@@ -267,6 +355,7 @@ def retranscribe_meeting_high_quality(*, meeting_id: str) -> int:
                     sample_rate=16000,
                     quality_profile="final",
                     source_track=source_track,
+                    language_hint=language_hint,
                 )
             except Exception:
                 continue
@@ -346,12 +435,14 @@ def recover_transcript_from_backup_audio(*, meeting_id: str) -> int:
         return 0
 
     stt = _get_stt_provider()
+    language_hint = _meeting_language_hint(meeting_id)
     try:
         res = stt.transcribe_chunk(
             audio=backup_audio,
             sample_rate=16000,
             quality_profile="final",
             source_track="mixed",
+            language_hint=language_hint,
         )
     except Exception:
         return 0
@@ -384,5 +475,74 @@ def recover_transcript_from_backup_audio(*, meeting_id: str) -> int:
     log.info(
         "meeting_recovered_from_backup_audio",
         extra={"payload": {"meeting_id": meeting_id, "added_seq": next_seq}},
+    )
+    return 1
+
+
+def final_pass_from_backup_audio(*, meeting_id: str) -> int:
+    """
+    Полный финальный проход по единому backup audio.
+    Если backup доступен — он становится primary источником итогового transcript.
+    """
+    backup_candidates = (
+        "backup_audio.webm",
+        "backup_audio.wav",
+        "backup_audio.mp4",
+        "backup_audio.ogg",
+        "backup_audio.m4a",
+    )
+    backup_path = None
+    for name in backup_candidates:
+        if records.exists(meeting_id, name):
+            backup_path = records.artifact_path(meeting_id, name)
+            break
+    if backup_path is None or not backup_path.exists():
+        return 0
+
+    try:
+        backup_audio = backup_path.read_bytes()
+    except Exception:
+        return 0
+    if not backup_audio:
+        return 0
+
+    stt = _get_stt_provider()
+    language_hint = _meeting_language_hint(meeting_id)
+    try:
+        res = stt.transcribe_chunk(
+            audio=backup_audio,
+            sample_rate=16000,
+            quality_profile="final",
+            source_track="mixed",
+            language_hint=language_hint,
+        )
+    except Exception:
+        return 0
+
+    full_text = (res.text or "").strip()
+    if not full_text:
+        return 0
+    full_clean, _meta = enhance_text(full_text)
+    full_clean = (full_clean or full_text).strip()
+
+    with db_session() as session:
+        srepo = TranscriptSegmentRepository(session)
+        # backup-final-pass является primary: пересобираем сегменты целиком.
+        session.query(TranscriptSegment).filter(TranscriptSegment.meeting_id == meeting_id).delete()
+        segment = TranscriptSegment(
+            meeting_id=meeting_id,
+            seq=0,
+            speaker="mixed",
+            start_ms=None,
+            end_ms=None,
+            raw_text=full_text,
+            enhanced_text=full_clean,
+            confidence=res.confidence,
+        )
+        srepo.upsert_by_meeting_seq(segment)
+
+    log.info(
+        "meeting_final_pass_from_backup_audio",
+        extra={"payload": {"meeting_id": meeting_id}},
     )
     return 1

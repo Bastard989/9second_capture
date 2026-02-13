@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -101,6 +102,34 @@ def _pick_port(range_start: int, range_end: int, preferred: int | None = None) -
         return int(sock.getsockname()[1])
 
 
+def _ensure_local_stt_dependencies(repo_root: Path) -> None:
+    provider = (os.getenv("STT_PROVIDER", "whisper_local") or "").strip().lower()
+    if provider != "whisper_local":
+        return
+    auto_install = (os.getenv("LOCAL_AGENT_AUTO_INSTALL_WHISPER_DEPS", "true") or "").strip().lower()
+    if auto_install not in {"1", "true", "yes"}:
+        return
+    try:
+        import av  # noqa: F401
+        from faster_whisper import WhisperModel  # noqa: F401
+        return
+    except Exception:
+        pass
+
+    req = repo_root / "requirements.whisper.txt"
+    if not req.exists():
+        return
+    print("[local-agent] whisper deps missing, installing requirements.whisper.txt ...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r", str(req)],
+            check=True,
+        )
+        print("[local-agent] whisper deps installed")
+    except Exception as err:
+        print(f"[local-agent] whisper deps install failed: {err}")
+
+
 def main() -> None:
     preferred_port = None
     raw_port = os.getenv("API_PORT")
@@ -118,16 +147,23 @@ def main() -> None:
     os.environ.setdefault("AUTH_MODE", "none")
     os.environ.setdefault("QUEUE_MODE", "inline")
     os.environ.setdefault("POSTGRES_DSN", "sqlite:///./data/local_agent/agent.db")
-    # Рекомендованный профиль для русской речи: баланс качества/скорости.
+    os.environ.setdefault("LLM_ENABLED", "true")
+    os.environ.setdefault("LLM_LIVE_ENABLED", "false")
+    os.environ.setdefault("OPENAI_API_BASE", "http://127.0.0.1:11434/v1")
+    os.environ.setdefault("OPENAI_API_KEY", "ollama")
+    os.environ.setdefault("LLM_MODEL_ID", "llama3.1:8b")
+    os.environ.setdefault("BACKUP_AUDIO_FINAL_PASS_ENABLED", "true")
+    # Рекомендованный профиль для mixed RU/EN интервью: баланс качества/скорости.
     os.environ.setdefault("WHISPER_MODEL_SIZE", "medium")
     os.environ.setdefault("WHISPER_COMPUTE_TYPE", "int8")
-    os.environ.setdefault("WHISPER_LANGUAGE", "ru")
-    os.environ.setdefault("WHISPER_BEAM_SIZE_LIVE", "3")
-    os.environ.setdefault("WHISPER_BEAM_SIZE_FINAL", "6")
+    os.environ.setdefault("WHISPER_LANGUAGE", "auto")
+    os.environ.setdefault("WHISPER_BEAM_SIZE_LIVE", "4")
+    os.environ.setdefault("WHISPER_BEAM_SIZE_FINAL", "7")
     os.environ.setdefault("WHISPER_VAD_FILTER", "true")
+    os.environ.setdefault("WHISPER_AUDIO_NOISE_GATE_DB", "-48")
+    os.environ.setdefault("WHISPER_AUDIO_SPECTRAL_DENOISE_STRENGTH", "0.22")
     os.environ.setdefault("WHISPER_WARMUP_ON_START", "true")
     _state_dir().mkdir(parents=True, exist_ok=True)
-    _apply_runtime_overrides()
 
     url = f"http://127.0.0.1:{port}"
     print(f"[local-agent] UI: {url}")
@@ -143,6 +179,8 @@ def main() -> None:
         text = str(path)
         if text not in sys.path:
             sys.path.insert(0, text)
+    _ensure_local_stt_dependencies(repo_root)
+    _apply_runtime_overrides()
 
     try:
         from apps.api_gateway.main import app as fastapi_app

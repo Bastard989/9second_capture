@@ -70,6 +70,8 @@ STRUCTURED_COLUMNS = [
 
 
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]{1,64}):\s*(.+)$")
+_MIN_STRUCTURED_CHARS = 48
+_MIN_STRUCTURED_LINES = 2
 
 
 def _speaker_id_from_name(name: str) -> str:
@@ -121,6 +123,34 @@ def _build_fallback_rows(
     return rows
 
 
+def _transcript_insufficient_reason(transcript: str) -> str | None:
+    lines = [line.strip() for line in (transcript or "").splitlines() if line.strip()]
+    total_chars = sum(len(line) for line in lines)
+    if not lines:
+        return "Нет распознанного текста для структурирования."
+    if len(lines) < _MIN_STRUCTURED_LINES or total_chars < _MIN_STRUCTURED_CHARS:
+        return (
+            "Недостаточно данных для структурирования "
+            f"(строк: {len(lines)}, символов: {total_chars})."
+        )
+    return None
+
+
+def _insufficient_rows(*, meeting_id: str, source: str, reason: str) -> list[dict[str, Any]]:
+    ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return [
+        {
+            "meeting_id": meeting_id,
+            "source": source,
+            "status": "insufficient_data",
+            "text": reason,
+            "clean_text": reason,
+            "timestamp": ts,
+            "confidence": 0.0,
+        }
+    ]
+
+
 def _build_orchestrator():
     s = get_settings()
     if not s.llm_enabled:
@@ -144,6 +174,22 @@ def build_structured_rows(
     transcript: str,
     report: dict | None,
 ) -> dict[str, Any]:
+    insufficient_reason = _transcript_insufficient_reason(transcript)
+    if insufficient_reason:
+        return {
+            "schema_version": "v1",
+            "meeting_id": meeting_id,
+            "source": source,
+            "status": "insufficient_data",
+            "message": insufficient_reason,
+            "columns": STRUCTURED_COLUMNS,
+            "rows": _insufficient_rows(
+                meeting_id=meeting_id,
+                source=source,
+                reason=insufficient_reason,
+            ),
+        }
+
     s = get_settings()
     fallback_rows = _build_fallback_rows(
         meeting_id=meeting_id,
@@ -153,7 +199,15 @@ def build_structured_rows(
     )
 
     if not s.llm_enabled:
-        return {"schema_version": "v1", "columns": STRUCTURED_COLUMNS, "rows": fallback_rows}
+        return {
+            "schema_version": "v1",
+            "meeting_id": meeting_id,
+            "source": source,
+            "status": "ok",
+            "message": "",
+            "columns": STRUCTURED_COLUMNS,
+            "rows": fallback_rows,
+        }
 
     try:
         orch = _build_orchestrator()
@@ -162,9 +216,25 @@ def build_structured_rows(
             "structured_llm_init_failed",
             extra={"payload": {"meeting_id": meeting_id, "source": source, "err": str(err)[:200]}},
         )
-        return {"schema_version": "v1", "columns": STRUCTURED_COLUMNS, "rows": fallback_rows}
+        return {
+            "schema_version": "v1",
+            "meeting_id": meeting_id,
+            "source": source,
+            "status": "ok",
+            "message": "",
+            "columns": STRUCTURED_COLUMNS,
+            "rows": fallback_rows,
+        }
     if orch is None:
-        return {"schema_version": "v1", "columns": STRUCTURED_COLUMNS, "rows": fallback_rows}
+        return {
+            "schema_version": "v1",
+            "meeting_id": meeting_id,
+            "source": source,
+            "status": "ok",
+            "message": "",
+            "columns": STRUCTURED_COLUMNS,
+            "rows": fallback_rows,
+        }
 
     system = (
         "Ты аналитик встреч. Верни ТОЛЬКО валидный JSON с ключами "
@@ -195,6 +265,10 @@ def build_structured_rows(
         )
         return {
             "schema_version": "v1",
+            "meeting_id": meeting_id,
+            "source": source,
+            "status": "ok",
+            "message": "",
             "columns": STRUCTURED_COLUMNS,
             "rows": fallback_rows,
         }
@@ -206,6 +280,10 @@ def build_structured_rows(
         rows = fallback_rows
     return {
         "schema_version": "v1",
+        "meeting_id": meeting_id,
+        "source": source,
+        "status": "ok",
+        "message": "",
         "columns": STRUCTURED_COLUMNS,
         "rows": rows,
     }
@@ -214,6 +292,12 @@ def build_structured_rows(
 def structured_to_csv(structured: dict[str, Any]) -> bytes:
     columns = structured.get("columns") or STRUCTURED_COLUMNS
     rows = structured.get("rows") or []
+    if not rows and str(structured.get("status") or "") == "insufficient_data":
+        rows = _insufficient_rows(
+            meeting_id=str(structured.get("meeting_id") or ""),
+            source=str(structured.get("source") or ""),
+            reason=str(structured.get("message") or "Нет структурируемых данных"),
+        )
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=columns)
     writer.writeheader()

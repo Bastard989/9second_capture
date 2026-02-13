@@ -19,5 +19,6 @@ class SaluteSpeechProvider(STTProvider):
         sample_rate: int,
         quality_profile: str = "live",
         source_track: str | None = None,
+        language_hint: str | None = None,
     ) -> STTResult:
         return STTResult(text="", confidence=None)

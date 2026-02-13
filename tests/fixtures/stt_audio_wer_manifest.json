@@ -1,0 +1,29 @@
+[
+  {
+    "id": "ru_interview_case",
+    "audio_path": "tests/fixtures/audio/ru_interview_case.wav",
+    "reference": "кандидат объяснил почему выбрал микросервисную архитектуру и предложил план миграции",
+    "max_wer": 0.45,
+    "quality_profile": "final",
+    "source_track": "system",
+    "language_hint": "ru"
+  },
+  {
+    "id": "en_interview_case",
+    "audio_path": "tests/fixtures/audio/en_interview_case.wav",
+    "reference": "the candidate explained architecture tradeoffs and estimated delivery risks for the next sprint",
+    "max_wer": 0.35,
+    "quality_profile": "final",
+    "source_track": "system",
+    "language_hint": "en"
+  },
+  {
+    "id": "mixed_interview_case",
+    "audio_path": "tests/fixtures/audio/mixed_interview_case.wav",
+    "reference": "кандидат предложил использовать feature flag и rollback plan для безопасного релиза",
+    "max_wer": 0.5,
+    "quality_profile": "final",
+    "source_track": "mixed",
+    "language_hint": "auto"
+  }
+]

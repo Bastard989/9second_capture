@@ -12,17 +12,21 @@ def test_build_structured_rows_fallback_when_llm_disabled(monkeypatch) -> None:
     result = structured.build_structured_rows(
         meeting_id="m1",
         source="raw",
-        transcript="mic: hello\ncandidate: answer",
+        transcript=(
+            "mic: hello team, let's review blockers and finalize ownership today\n"
+            "candidate: agreed, I will prepare update and send the summary after standup"
+        ),
         report={"summary": "standup"},
     )
 
     assert result["schema_version"] == "v1"
+    assert result["status"] == "ok"
     assert len(result["rows"]) == 2
     assert result["rows"][0]["speaker_name"] == "mic"
-    assert result["rows"][0]["text"] == "hello"
+    assert result["rows"][0]["text"] == "hello team, let's review blockers and finalize ownership today"
 
 
-def test_build_structured_rows_fallback_when_llm_returns_empty_rows(monkeypatch) -> None:
+def test_build_structured_rows_reports_insufficient_data(monkeypatch) -> None:
     class Settings:
         llm_enabled = True
 
@@ -40,5 +44,7 @@ def test_build_structured_rows_fallback_when_llm_returns_empty_rows(monkeypatch)
         report=None,
     )
 
+    assert result["status"] == "insufficient_data"
+    assert "Недостаточно данных" in result["message"]
     assert len(result["rows"]) == 1
-    assert result["rows"][0]["text"] == "some text"
+    assert result["rows"][0]["status"] == "insufficient_data"

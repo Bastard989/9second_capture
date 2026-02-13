@@ -9,7 +9,8 @@ PYTHON ?= python3
 	compose-up compose-down \
 	fmt lint fix test storage-smoke quick-record \
 	cycle cycle-autofix \
-	openapi-gen openapi-check release-check alerts-rules-check alerts-smoke alert-relay-metrics-smoke alert-relay-failure-smoke alert-relay-retry-guardrail load-guardrail ws-guardrail perf-guardrail-lite e2e-connector-live e2e-connector-real
+	openapi-gen openapi-check release-check alerts-rules-check alerts-smoke alert-relay-metrics-smoke alert-relay-failure-smoke alert-relay-retry-guardrail load-guardrail ws-guardrail stt-wer-guardrail perf-guardrail-lite e2e-connector-live e2e-connector-real \
+	e2e-browser-capture
 
 doctor:
 	@echo "== docker ==" && docker version >/dev/null && echo "OK"
@@ -112,6 +113,9 @@ load-guardrail:
 ws-guardrail:
 	$(PYTHON) tools/ws_contours_guardrail.py
 
+stt-wer-guardrail:
+	$(PYTHON) tools/stt_wer_guardrail.py --report-json reports/stt_wer_guardrail.json
+
 load-guardrail-real:
 	MEETING_CONNECTOR_PROVIDER=sberjazz $(PYTHON) tools/realtime_load_guardrail.py --require-real-connector
 
@@ -154,3 +158,6 @@ e2e-connector-live:
 
 e2e-connector-real:
 	$(PYTHON) tools/e2e_connector_live.py --provider sberjazz --require-report
+
+e2e-browser-capture:
+	$(PYTHON) tools/e2e_browser_capture_playwright.py --base-url http://127.0.0.1:8010 --user-key dev-user-key

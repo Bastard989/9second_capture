@@ -23,6 +23,7 @@ opentelemetry-exporter-otlp-proto-http==1.29.0
 pytest==8.3.3
 ruff==0.7.0
 pre-commit==4.0.1
+playwright==1.52.0
 
 # STT (whisper_local)
 numpy==2.4.1

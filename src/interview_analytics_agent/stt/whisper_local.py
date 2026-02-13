@@ -236,6 +236,28 @@ class WhisperLocalProvider(STTProvider):
             getattr(s, "whisper_audio_spectral_denoise_strength", 0.32) or 0.32
         )
 
+    def _normalize_language_hint(self, language_hint: str | None) -> str:
+        hint = str(language_hint or "").strip().lower()
+        if not hint:
+            return "auto"
+        if hint.startswith("ru"):
+            return "ru"
+        if hint.startswith("en"):
+            return "en"
+        if hint in {"mixed", "auto"}:
+            return "auto"
+        return "auto"
+
+    def _beam_for_quality_profile(self, quality_profile: str) -> int:
+        normalized = str(quality_profile or "live").strip().lower()
+        if normalized == "final":
+            return self.beam_size_final
+        if normalized in {"live_fast", "fast"}:
+            return max(1, self.beam_size_live - 1)
+        if normalized in {"live_accurate", "accurate"}:
+            return max(1, min(self.beam_size_final, self.beam_size_live + 1))
+        return self.beam_size_live
+
     def _transcribe_with_params(
         self,
         wav: np.ndarray,
@@ -243,8 +265,10 @@ class WhisperLocalProvider(STTProvider):
         language: str | None,
         beam_size: int,
         quality_profile: str,
+        language_profile: str = "auto",
         relaxed: bool = False,
     ) -> tuple[str, float | None]:
+        profile = self._normalize_language_hint(language_profile)
         if quality_profile == "final":
             base_vad = self.vad_filter
             no_speech_threshold = 0.5
@@ -255,6 +279,13 @@ class WhisperLocalProvider(STTProvider):
             no_speech_threshold = 0.55
             log_prob_threshold = -2.2
             compression_ratio_threshold = 2.9
+
+        if profile == "ru":
+            no_speech_threshold = max(0.42, no_speech_threshold - 0.07)
+            log_prob_threshold = min(log_prob_threshold + 0.22, -1.45)
+        elif profile == "en":
+            no_speech_threshold = min(0.64, no_speech_threshold + 0.03)
+            log_prob_threshold = max(log_prob_threshold - 0.08, -2.5)
         kwargs = {
             "language": language,
             "vad_filter": False if relaxed else base_vad,
@@ -301,18 +332,29 @@ class WhisperLocalProvider(STTProvider):
         sample_rate: int,
         quality_profile: str = "live",
         source_track: str | None = None,
+        language_hint: str | None = None,
     ) -> STTResult:
         wav = _decode_audio_to_float32(audio, target_sr=16000)
         wav = self._preprocess_audio(wav, sample_rate=16000)
         if wav.size == 0:
             return STTResult(text="", confidence=None)
 
-        beam = self.beam_size_live if quality_profile == "live" else self.beam_size_final
+        language_profile = self._normalize_language_hint(language_hint)
+        language_target = self.language
+        if language_profile in {"ru", "en"}:
+            language_target = language_profile
+        if language_profile == "auto":
+            language_target = self.language
+
+        beam = self._beam_for_quality_profile(quality_profile)
+        if language_profile in {"ru", "en"} and quality_profile in {"live_balanced", "live_accurate", "final"}:
+            beam = max(beam, self.beam_size_live)
         text, confidence = self._transcribe_with_params(
             wav,
-            language=self.language,
+            language=language_target,
             beam_size=beam,
             quality_profile=quality_profile,
+            language_profile=language_profile,
         )
         if not text:
             text, confidence = self._transcribe_with_params(
@@ -320,13 +362,15 @@ class WhisperLocalProvider(STTProvider):
                 language=None,
                 beam_size=beam,
                 quality_profile=quality_profile,
+                language_profile=language_profile,
             )
         if not text:
             text, confidence = self._transcribe_with_params(
                 wav,
-                language=self.language,
+                language=language_target,
                 beam_size=beam,
                 quality_profile=quality_profile,
+                language_profile=language_profile,
                 relaxed=True,
             )
         if not text:
@@ -335,6 +379,7 @@ class WhisperLocalProvider(STTProvider):
                 language=None,
                 beam_size=beam,
                 quality_profile=quality_profile,
+                language_profile=language_profile,
                 relaxed=True,
             )
 

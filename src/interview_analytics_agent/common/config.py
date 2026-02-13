@@ -139,30 +139,31 @@ class Settings(BaseSettings):
     whisper_compute_type: str = Field(
         default="float32", alias="WHISPER_COMPUTE_TYPE"
     )  # int8|int8_float16|float16|float32
-    whisper_language: str = Field(default="ru", alias="WHISPER_LANGUAGE")  # ru|en|auto
+    whisper_language: str = Field(default="auto", alias="WHISPER_LANGUAGE")  # ru|en|auto
     whisper_vad_filter: bool = Field(
         default=True, alias="WHISPER_VAD_FILTER"
     )  # VAD для улучшения качества сегментов
     whisper_beam_size: int = Field(default=3, alias="WHISPER_BEAM_SIZE")
-    whisper_beam_size_live: int = Field(default=3, alias="WHISPER_BEAM_SIZE_LIVE")
-    whisper_beam_size_final: int = Field(default=6, alias="WHISPER_BEAM_SIZE_FINAL")
+    whisper_beam_size_live: int = Field(default=4, alias="WHISPER_BEAM_SIZE_LIVE")
+    whisper_beam_size_final: int = Field(default=7, alias="WHISPER_BEAM_SIZE_FINAL")
     whisper_warmup_on_start: bool = Field(default=True, alias="WHISPER_WARMUP_ON_START")
     whisper_audio_hpf_enabled: bool = Field(default=True, alias="WHISPER_AUDIO_HPF_ENABLED")
     whisper_audio_hpf_cutoff_hz: int = Field(default=80, alias="WHISPER_AUDIO_HPF_CUTOFF_HZ")
     whisper_audio_noise_suppress_enabled: bool = Field(
         default=True, alias="WHISPER_AUDIO_NOISE_SUPPRESS_ENABLED"
     )
-    whisper_audio_noise_gate_db: float = Field(
-        default=-42.0, alias="WHISPER_AUDIO_NOISE_GATE_DB"
-    )
+    whisper_audio_noise_gate_db: float = Field(default=-48.0, alias="WHISPER_AUDIO_NOISE_GATE_DB")
     whisper_audio_spectral_denoise_enabled: bool = Field(
         default=True, alias="WHISPER_AUDIO_SPECTRAL_DENOISE_ENABLED"
     )
     whisper_audio_spectral_denoise_strength: float = Field(
-        default=0.32, alias="WHISPER_AUDIO_SPECTRAL_DENOISE_STRENGTH"
+        default=0.22, alias="WHISPER_AUDIO_SPECTRAL_DENOISE_STRENGTH"
     )
     backup_audio_recovery_enabled: bool = Field(
         default=True, alias="BACKUP_AUDIO_RECOVERY_ENABLED"
+    )
+    backup_audio_final_pass_enabled: bool = Field(
+        default=True, alias="BACKUP_AUDIO_FINAL_PASS_ENABLED"
     )
 
     # -------------------------------------------------------------------------

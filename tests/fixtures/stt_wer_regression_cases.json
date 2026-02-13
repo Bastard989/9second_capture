@@ -1,0 +1,26 @@
+[
+  {
+    "id": "case_sales_sync",
+    "reference": "we agreed to move the release to friday and notify the client by noon",
+    "hypothesis": "we agreed move the release to friday and notify client by noon",
+    "max_wer": 0.18
+  },
+  {
+    "id": "case_planning",
+    "reference": "the backend task is blocked by access to the production database",
+    "hypothesis": "backend task is blocked by access to production database",
+    "max_wer": 0.22
+  },
+  {
+    "id": "case_interview",
+    "reference": "candidate has strong python skills but limited experience with distributed systems",
+    "hypothesis": "candidate has strong python skill but limited experience with distributed system",
+    "max_wer": 0.25
+  },
+  {
+    "id": "case_meeting_noise",
+    "reference": "let us confirm action items and owners before we close this call",
+    "hypothesis": "lets confirm action items and owner before we close this call",
+    "max_wer": 0.25
+  }
+]
