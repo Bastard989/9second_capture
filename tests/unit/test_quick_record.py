@@ -53,8 +53,11 @@ def test_build_chunk_payload_contains_base64() -> None:
 def test_upload_recording_to_agent(monkeypatch, tmp_path: Path) -> None:
     calls: dict[str, list[tuple[str, dict]]] = {"post": [], "get": []}
 
-    def _fake_post(url, json, headers, timeout):
-        calls["post"].append((url, json))
+    def _fake_post(url, json=None, headers=None, timeout=None, files=None):
+        payload = dict(json or {})
+        if files:
+            payload["files"] = sorted(files.keys())
+        calls["post"].append((url, payload))
         return _FakeResponse({"ok": True})
 
     def _fake_get(url, headers, timeout):
@@ -92,4 +95,5 @@ def test_upload_recording_to_agent(monkeypatch, tmp_path: Path) -> None:
 
     assert calls["post"][0][0] == "http://127.0.0.1:8010/v1/meetings/start"
     assert calls["post"][1][0] == "http://127.0.0.1:8010/v1/meetings/quick-123/chunks"
+    assert calls["post"][2][0] == "http://127.0.0.1:8010/v1/meetings/quick-123/backup-audio"
     assert calls["get"][0][0] == "http://127.0.0.1:8010/v1/meetings/quick-123"

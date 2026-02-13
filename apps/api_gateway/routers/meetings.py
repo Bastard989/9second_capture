@@ -10,6 +10,8 @@ MVP:
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from apps.api_gateway.deps import auth_dep
@@ -33,6 +35,63 @@ from interview_analytics_agent.storage.repositories import MeetingRepository
 log = get_project_logger()
 
 router = APIRouter()
+
+_WORK_MODE_REALTIME = {"driver_audio", "browser_screen_audio"}
+_WORK_MODE_POSTMEETING = {"api_upload", "link_fallback"}
+_KNOWN_WORK_MODES = _WORK_MODE_REALTIME | _WORK_MODE_POSTMEETING
+
+
+def _normalize_context_for_work_mode(
+    *,
+    req: MeetingStartRequest,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    payload = dict(context or {})
+    raw_work_mode = str(payload.get("work_mode") or payload.get("source_mode") or "").strip().lower()
+    if not raw_work_mode:
+        return payload
+
+    if raw_work_mode not in _KNOWN_WORK_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_work_mode",
+                "message": raw_work_mode,
+            },
+        )
+
+    if raw_work_mode in _WORK_MODE_REALTIME and req.mode != MeetingMode.realtime:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_work_mode_for_mode",
+                "message": f"{raw_work_mode} requires mode=realtime",
+            },
+        )
+    if raw_work_mode in _WORK_MODE_POSTMEETING and req.mode != MeetingMode.postmeeting:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_work_mode_for_mode",
+                "message": f"{raw_work_mode} requires mode=postmeeting",
+            },
+        )
+
+    payload["work_mode"] = raw_work_mode
+    payload["source_mode"] = raw_work_mode
+
+    if raw_work_mode == "driver_audio":
+        payload["capture_mode"] = "system"
+        payload.pop("filename", None)
+    elif raw_work_mode == "browser_screen_audio":
+        payload["capture_mode"] = "screen"
+        payload.pop("filename", None)
+    elif raw_work_mode in {"api_upload", "link_fallback"}:
+        payload.pop("capture_mode", None)
+        payload.pop("include_mic", None)
+        payload.pop("mic_device_id", None)
+
+    return payload
 
 
 def _should_auto_join(req: MeetingStartRequest) -> bool:
@@ -77,6 +136,7 @@ def start_meeting(
     connector_provider: str | None = None
     connector_connected: bool | None = None
     context = apply_tenant_to_context(ctx, req.context)
+    context = _normalize_context_for_work_mode(req=req, context=context)
 
     with db_session() as s:
         repo = MeetingRepository(s)

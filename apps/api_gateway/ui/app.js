@@ -86,6 +86,7 @@ const state = {
   captureQuality: "balanced",
   languageProfile: "mixed",
   diagnosticsLast: null,
+  workMode: "driver_audio",
   instanceId: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
   captureLockTimer: null,
 };
@@ -106,6 +107,7 @@ const SIGNAL_LOW_EXIT = 0.015;
 const CAPTURE_LOCK_KEY = "9second_capture_active_lock";
 const CAPTURE_LOCK_TTL_MS = 20000;
 const CAPTURE_LOCK_HEARTBEAT_MS = 4000;
+const WORK_MODE_KEY = "9second_capture_work_mode";
 const QUALITY_PROFILES = {
   fast: {
     id: "fast",
@@ -126,6 +128,52 @@ const QUALITY_PROFILES = {
     hintKey: "quality_accurate_desc",
   },
 };
+const WORK_MODE_CONFIGS = {
+  driver_audio: {
+    id: "driver_audio",
+    labelKey: "work_mode_driver",
+    descriptionKey: "work_mode_desc_driver",
+    supportsRealtime: true,
+    supportsUpload: false,
+    supportsQuick: false,
+    forceCaptureMode: "system",
+    useDeviceDriver: true,
+    contextMode: "driver_audio",
+  },
+  browser_screen_audio: {
+    id: "browser_screen_audio",
+    labelKey: "work_mode_browser",
+    descriptionKey: "work_mode_desc_browser",
+    supportsRealtime: true,
+    supportsUpload: false,
+    supportsQuick: false,
+    forceCaptureMode: "screen",
+    useDeviceDriver: false,
+    contextMode: "browser_screen_audio",
+  },
+  api_upload: {
+    id: "api_upload",
+    labelKey: "work_mode_api",
+    descriptionKey: "work_mode_desc_api",
+    supportsRealtime: false,
+    supportsUpload: true,
+    supportsQuick: false,
+    forceCaptureMode: null,
+    useDeviceDriver: false,
+    contextMode: "api_upload",
+  },
+  link_fallback: {
+    id: "link_fallback",
+    labelKey: "work_mode_quick",
+    descriptionKey: "work_mode_desc_quick",
+    supportsRealtime: false,
+    supportsUpload: false,
+    supportsQuick: true,
+    forceCaptureMode: null,
+    useDeviceDriver: false,
+    contextMode: "link_fallback",
+  },
+};
 const VIRTUAL_DEVICE_PATTERNS = [
   "blackhole",
   "vb-cable",
@@ -142,6 +190,38 @@ const i18n = {
     theme_label: "Тема",
     theme_light: "Светлая",
     theme_dark: "Тёмная",
+    work_mode_title: "Режим работы",
+    work_mode_hint:
+      "Выберите один режим: его настройки будут активны, остальные секции станут неактивными.",
+    work_mode_active_label: "Активный режим:",
+    work_mode_driver: "Драйвер: системный звук",
+    work_mode_browser: "Браузер: экран + звук",
+    work_mode_api: "API/файл: загрузка аудио",
+    work_mode_quick: "Ссылка: quick fallback",
+    work_mode_desc_driver:
+      "Запись встреч в realtime через виртуальный драйвер (BlackHole/VB-CABLE/Monitor).",
+    work_mode_desc_browser:
+      "Запись через браузерный захват экрана и звука (Share audio в диалоге обязателен).",
+    work_mode_desc_api:
+      "Пост-обработка: загрузка готового аудиофайла в пайплайн агента.",
+    work_mode_desc_quick:
+      "Fallback-режим: запись встречи по ссылке через quick recorder и опциональная отправка в агент.",
+    work_mode_recording_disabled:
+      "Режим записи выключен для текущего профиля. Переключитесь на «Драйвер» или «Браузер».",
+    work_mode_upload_disabled:
+      "Загрузка файла выключена в текущем режиме. Активируйте «API/файл».",
+    work_mode_quick_disabled:
+      "Quick fallback выключен в текущем режиме. Активируйте «Ссылка: quick fallback».",
+    work_mode_device_disabled:
+      "Настройки драйвера доступны только в режиме «Драйвер: системный звук».",
+    err_work_mode_switch_locked:
+      "Нельзя переключить режим во время активной записи/загрузки. Сначала остановите текущий процесс.",
+    err_work_mode_realtime_only:
+      "Выбранный режим не поддерживает realtime запись. Переключитесь на «Драйвер» или «Браузер».",
+    err_work_mode_upload_only:
+      "Загрузка аудио доступна только в режиме «API/файл: загрузка аудио».",
+    err_work_mode_quick_only:
+      "Quick fallback доступен только в режиме «Ссылка: quick fallback».",
     connection_title: "Подключение",
     api_key_label: "API ключ (опционально)",
     api_key_placeholder: "X-API-Key",
@@ -406,6 +486,38 @@ const i18n = {
     theme_label: "Theme",
     theme_light: "Light",
     theme_dark: "Dark",
+    work_mode_title: "Work mode",
+    work_mode_hint:
+      "Choose one mode: only its settings stay active, other sections are dimmed and blocked.",
+    work_mode_active_label: "Active mode:",
+    work_mode_driver: "Driver: system audio",
+    work_mode_browser: "Browser: screen + audio",
+    work_mode_api: "API/file: upload audio",
+    work_mode_quick: "Link: quick fallback",
+    work_mode_desc_driver:
+      "Realtime interview capture via virtual loopback driver (BlackHole/VB-CABLE/Monitor).",
+    work_mode_desc_browser:
+      "Browser capture of screen + audio (Share audio must be enabled).",
+    work_mode_desc_api:
+      "Post-meeting flow: upload ready audio file to the agent pipeline.",
+    work_mode_desc_quick:
+      "Fallback mode: capture meeting by URL via quick recorder and optionally upload to agent.",
+    work_mode_recording_disabled:
+      "Recording controls are disabled for this profile. Switch to Driver or Browser mode.",
+    work_mode_upload_disabled:
+      "File upload is disabled for this profile. Switch to API/file mode.",
+    work_mode_quick_disabled:
+      "Quick fallback is disabled for this profile. Switch to Link quick fallback mode.",
+    work_mode_device_disabled:
+      "Driver controls are available only in Driver system-audio mode.",
+    err_work_mode_switch_locked:
+      "Cannot switch mode during active recording/upload. Stop current flow first.",
+    err_work_mode_realtime_only:
+      "Selected mode does not support realtime recording. Switch to Driver or Browser.",
+    err_work_mode_upload_only:
+      "Audio upload is available only in API/file mode.",
+    err_work_mode_quick_only:
+      "Quick fallback is available only in Link quick fallback mode.",
     connection_title: "Connection",
     api_key_label: "API key (optional)",
     api_key_placeholder: "X-API-Key",
@@ -663,6 +775,12 @@ const i18n = {
 };
 
 const els = {
+  workModeDriver: document.getElementById("workModeDriver"),
+  workModeBrowser: document.getElementById("workModeBrowser"),
+  workModeApi: document.getElementById("workModeApi"),
+  workModeQuick: document.getElementById("workModeQuick"),
+  workModeName: document.getElementById("workModeName"),
+  workModeHint: document.getElementById("workModeHint"),
   apiKey: document.getElementById("apiKey"),
   metaCandidateName: document.getElementById("metaCandidateName"),
   metaCandidateId: document.getElementById("metaCandidateId"),
@@ -684,6 +802,11 @@ const els = {
   qualityBalanced: document.getElementById("qualityBalanced"),
   qualityAccurate: document.getElementById("qualityAccurate"),
   qualityHint: document.getElementById("qualityHint"),
+  recordingModeHint: document.getElementById("recordingModeHint"),
+  uploadModeHint: document.getElementById("uploadModeHint"),
+  deviceModeBlock: document.getElementById("deviceModeBlock"),
+  uploadAudioBlock: document.getElementById("uploadAudioBlock"),
+  quickRecordBlock: document.getElementById("quickRecordBlock"),
   runDiagnostics: document.getElementById("runDiagnostics"),
   diagHint: document.getElementById("diagHint"),
   diagAudio: document.getElementById("diagAudio"),
@@ -745,6 +868,12 @@ const els = {
   quickRecordHint: document.getElementById("quickRecordHint"),
   themeLight: document.getElementById("themeLight"),
   themeDark: document.getElementById("themeDark"),
+  cardMode: document.querySelector(".card-mode"),
+  cardConnection: document.querySelector(".card-connection"),
+  cardRecording: document.querySelector(".card-recording"),
+  cardUpload: document.querySelector(".card-upload"),
+  workModeButtons: Array.from(document.querySelectorAll("[data-work-mode]")),
+  captureModeInputs: Array.from(document.querySelectorAll('input[name="captureMode"]')),
 };
 
 function getQualityConfig() {
@@ -911,6 +1040,7 @@ const updateI18n = () => {
   } else if (state.quickHintText) {
     setQuickHint(state.quickHintText, state.quickHintStyle || "muted", true);
   }
+  applyWorkModeUi();
   renderComparisonTable();
   if (Array.isArray(state.compareItems) && state.compareItems.length) {
     setCompareHint("compare_hint_idle", "good");
@@ -967,6 +1097,9 @@ const setRecognitionDiagnosis = (messageKeyOrText = "", style = "muted", isRaw =
 };
 
 const deriveRecognitionDiagnosis = () => {
+  if (!getWorkModeConfig().supportsRealtime) {
+    return { key: "work_mode_recording_disabled", style: "muted" };
+  }
   const hint = String(state.statusHintKey || "").trim();
   if (
     hint === "err_media_not_readable" ||
@@ -1305,13 +1438,15 @@ const syncCheckSignalButton = () => {
   const dict = i18n[state.lang];
   const busy = state.signalCheckInProgress;
   const recordingBlocked = isRecordingFlowActive();
-  els.checkSignal.disabled = busy || recordingBlocked;
+  const modeAllows = Boolean(getWorkModeConfig().supportsRealtime);
+  els.checkSignal.disabled = busy || recordingBlocked || !modeAllows;
   els.checkSignal.textContent = busy
     ? dict.signal_check_running || "Checking capture..."
     : dict.signal_check || "Check capture";
 };
 
 const setRecordingButtons = (isRecording) => {
+  const modeAllowsRealtime = Boolean(getWorkModeConfig().supportsRealtime);
   if (isRecording) {
     els.startBtn.disabled = true;
     els.stopBtn.disabled = false;
@@ -1320,10 +1455,10 @@ const setRecordingButtons = (isRecording) => {
     els.stopBtn.classList.add("is-active");
     els.stopBtn.classList.remove("is-inactive");
   } else {
-    els.startBtn.disabled = false;
+    els.startBtn.disabled = !modeAllowsRealtime;
     els.stopBtn.disabled = true;
-    els.startBtn.classList.add("is-active");
-    els.startBtn.classList.remove("is-inactive");
+    els.startBtn.classList.toggle("is-active", modeAllowsRealtime);
+    els.startBtn.classList.toggle("is-inactive", !modeAllowsRealtime);
     els.stopBtn.classList.add("is-inactive");
     els.stopBtn.classList.remove("is-active");
   }
@@ -1647,7 +1782,162 @@ const applyLlmModel = async () => {
   }
 };
 
+const normalizeWorkMode = (value) => {
+  const raw = String(value || "").trim();
+  return WORK_MODE_CONFIGS[raw] ? raw : "driver_audio";
+};
+
+const getWorkModeConfig = (value = state.workMode) => {
+  const mode = normalizeWorkMode(value);
+  return WORK_MODE_CONFIGS[mode] || WORK_MODE_CONFIGS.driver_audio;
+};
+
+const isQuickFlowActive = () => {
+  const key = String(state.quickStatusKey || "").trim();
+  return key === "quick_record_state_running" || key === "quick_record_state_stopping";
+};
+
+const isWorkModeSwitchLocked = () => {
+  return Boolean(state.isUploading || isRecordingFlowActive() || isQuickFlowActive());
+};
+
+const _setModeHintText = (el, messageKeyOrText = "", style = "muted", isRaw = false) => {
+  if (!el) return;
+  const dict = i18n[state.lang] || {};
+  if (!messageKeyOrText) {
+    el.textContent = "";
+    el.className = "hint mode-hint";
+    return;
+  }
+  el.textContent = !isRaw && dict[messageKeyOrText] ? dict[messageKeyOrText] : String(messageKeyOrText || "");
+  el.className = `hint mode-hint ${style || "muted"}`;
+};
+
+const applyWorkModeUi = () => {
+  const cfg = getWorkModeConfig();
+  state.workMode = cfg.id;
+  const dict = i18n[state.lang] || {};
+
+  (els.workModeButtons || []).forEach((btn) => {
+    const mode = normalizeWorkMode(btn && btn.dataset ? btn.dataset.workMode : "");
+    btn.classList.toggle("active", mode === cfg.id);
+  });
+
+  if (els.workModeName) {
+    const label = dict[cfg.labelKey] || cfg.id;
+    els.workModeName.textContent = label;
+  }
+  _setModeHintText(els.workModeHint, cfg.descriptionKey, "muted");
+
+  const recordingEnabled = Boolean(cfg.supportsRealtime);
+  const uploadEnabled = Boolean(cfg.supportsUpload);
+  const quickEnabled = Boolean(cfg.supportsQuick);
+  const driverEnabled = Boolean(cfg.useDeviceDriver);
+
+  if (cfg.forceCaptureMode) {
+    (els.captureModeInputs || []).forEach((input) => {
+      if (!input) return;
+      input.checked = input.value === cfg.forceCaptureMode;
+    });
+  }
+
+  (els.captureModeInputs || []).forEach((input) => {
+    if (!input) return;
+    input.disabled = !recordingEnabled || Boolean(cfg.forceCaptureMode);
+  });
+
+  if (els.cardRecording) {
+    els.cardRecording.classList.toggle("mode-active", recordingEnabled);
+    els.cardRecording.classList.toggle("mode-disabled", !recordingEnabled);
+  }
+  if (els.cardUpload) {
+    const uploadCardActive = uploadEnabled || quickEnabled;
+    els.cardUpload.classList.toggle("mode-active", uploadCardActive);
+    els.cardUpload.classList.toggle("mode-disabled", !uploadCardActive);
+  }
+  if (els.cardConnection) {
+    els.cardConnection.classList.toggle("mode-active", driverEnabled);
+  }
+
+  if (els.deviceModeBlock) {
+    els.deviceModeBlock.classList.toggle("mode-disabled", !driverEnabled);
+  }
+  [els.deviceSelect, els.refreshDevices, els.checkDriver, els.driverHelpBtn].forEach((el) => {
+    if (!el) return;
+    el.disabled = !driverEnabled;
+  });
+  if (!driverEnabled && els.driverHelp) {
+    els.driverHelp.classList.add("hidden");
+  }
+
+  _setModeHintText(
+    els.recordingModeHint,
+    recordingEnabled ? cfg.descriptionKey : "work_mode_recording_disabled",
+    recordingEnabled ? "muted" : "bad"
+  );
+
+  if (els.uploadAudioBlock) {
+    els.uploadAudioBlock.classList.toggle("mode-disabled", !uploadEnabled);
+  }
+  [els.uploadAudio, els.uploadAudioBtn].forEach((el) => {
+    if (!el) return;
+    el.disabled = !uploadEnabled || state.isUploading;
+  });
+
+  if (els.quickRecordBlock) {
+    els.quickRecordBlock.classList.toggle("mode-disabled", !quickEnabled);
+  }
+  const quickBusy = isQuickFlowActive();
+  [els.quickRecordUrl, els.quickRecordDuration, els.quickRecordTranscribe, els.quickRecordUpload].forEach(
+    (el) => {
+      if (!el) return;
+      el.disabled = !quickEnabled || quickBusy;
+    }
+  );
+  _setModeHintText(
+    els.uploadModeHint,
+    uploadEnabled
+      ? "work_mode_desc_api"
+      : quickEnabled
+      ? "work_mode_desc_quick"
+      : "work_mode_upload_disabled",
+    uploadEnabled || quickEnabled ? "muted" : "bad"
+  );
+
+  syncCheckSignalButton();
+  updateCaptureUi();
+  setQuickButtonsByStatus(state.quickStatusKey || "quick_record_state_idle");
+  if (!recordingEnabled) {
+    setRecordingButtons(false);
+    if (els.runDiagnostics) {
+      els.runDiagnostics.disabled = true;
+    }
+  }
+};
+
+const setWorkMode = (nextMode, options = {}) => {
+  const { persist = true, force = false } = options;
+  const normalized = normalizeWorkMode(nextMode);
+  if (!force && isWorkModeSwitchLocked()) {
+    setStatusHint("err_work_mode_switch_locked", "bad");
+    return false;
+  }
+  state.workMode = normalized;
+  if (persist) {
+    try {
+      localStorage.setItem(WORK_MODE_KEY, normalized);
+    } catch (_err) {
+      // ignore storage failures
+    }
+  }
+  applyWorkModeUi();
+  refreshRecognitionDiagnosis();
+  return true;
+};
+
 const getCaptureMode = () => {
+  const cfg = getWorkModeConfig();
+  if (cfg.forceCaptureMode) return cfg.forceCaptureMode;
   const el = document.querySelector('input[name="captureMode"]:checked');
   return el ? el.value : "system";
 };
@@ -1978,6 +2268,7 @@ const mapStartError = (err, mode) => {
   if (message.includes("Failed to fetch") || message.includes("NetworkError")) return "err_network";
   if (message.includes("pcm_capture_unsupported")) return "err_recorder_init";
   if (message.includes("diagnostics_failed")) return "err_diagnostics_failed";
+  if (message.includes("work_mode_realtime_only")) return "err_work_mode_realtime_only";
   if (message.includes("mic_same_as_system")) return "err_mic_same_as_system";
   if (name === "NotSupportedError" || name === "TypeError") return "err_recorder_init";
   if (message.includes("MediaRecorder")) return "err_recorder_init";
@@ -3015,6 +3306,13 @@ const startCountdown = (seconds) =>
 
 const startRecording = async () => {
   if (state.isUploading) return;
+  const workCfg = getWorkModeConfig();
+  if (!workCfg.supportsRealtime) {
+    setStatus("status_error", "error");
+    setStatusHint("err_work_mode_realtime_only", "bad");
+    setRecordingButtons(false);
+    return;
+  }
   const captureLock = isCaptureLockedByOtherTab();
   if (captureLock.locked) {
     setStatus("status_error", "error");
@@ -3074,6 +3372,8 @@ const startRecording = async () => {
         mode: "realtime",
         context: {
           source: "local_ui",
+          work_mode: workCfg.contextMode,
+          source_mode: workCfg.contextMode,
           locale: state.lang,
           language_profile: getLanguageProfile(),
           capture_mode: captureMode,
@@ -3253,6 +3553,10 @@ const emergencyReleaseOnUnload = () => {
 
 const checkSignal = async () => {
   if (state.signalCheckInProgress) return;
+  if (!getWorkModeConfig().supportsRealtime) {
+    setStatusHint("err_work_mode_realtime_only", "bad");
+    return;
+  }
   if (isRecordingFlowActive()) {
     setStatusHint("signal_check_blocked_recording", "muted");
     return;
@@ -3431,6 +3735,14 @@ const waitForSttWarmupReady = async (timeoutMs = 12000) => {
 
 const runDiagnostics = async (options = {}) => {
   const { forStart = false } = options;
+  if (!getWorkModeConfig().supportsRealtime) {
+    if (forStart) {
+      throw new Error("work_mode_realtime_only");
+    }
+    _diagMarkAllMuted();
+    setDiagHint("work_mode_recording_disabled", "bad");
+    return { criticalPassed: false, llmOk: false, llmRequired: false };
+  }
   if (els.runDiagnostics) {
     els.runDiagnostics.disabled = true;
   }
@@ -3581,6 +3893,11 @@ const runDiagnostics = async (options = {}) => {
 
 const uploadAudioFile = async () => {
   if (state.isUploading) return;
+  const workCfg = getWorkModeConfig();
+  if (!workCfg.supportsUpload) {
+    setStatusHint("err_work_mode_upload_only", "bad");
+    return;
+  }
   const file = els.uploadAudio.files && els.uploadAudio.files[0];
   if (!file) return;
   let interviewMeta = null;
@@ -3603,6 +3920,8 @@ const uploadAudioFile = async () => {
       mode: "postmeeting",
       context: {
         source: "upload_audio",
+        work_mode: workCfg.contextMode,
+        source_mode: workCfg.contextMode,
         locale: state.lang,
         language_profile: getLanguageProfile(),
         filename: file.name,
@@ -3660,14 +3979,22 @@ const clearQuickPollTimer = () => {
 };
 
 const setQuickButtonsByStatus = (status) => {
+  const quickEnabled = Boolean(getWorkModeConfig().supportsQuick);
   const running = status === "queued" || status === "running";
   const stopping = status === "stopping";
+  const busy = running || stopping;
   if (els.quickRecordStart) {
-    els.quickRecordStart.disabled = running || stopping;
+    els.quickRecordStart.disabled = !quickEnabled || busy;
   }
   if (els.quickRecordStop) {
-    els.quickRecordStop.disabled = !(running || stopping);
+    els.quickRecordStop.disabled = !quickEnabled || !busy;
   }
+  [els.quickRecordUrl, els.quickRecordDuration, els.quickRecordTranscribe, els.quickRecordUpload].forEach(
+    (el) => {
+      if (!el) return;
+      el.disabled = !quickEnabled || busy;
+    }
+  );
 };
 
 const applyQuickJobStatus = (job) => {
@@ -3745,6 +4072,11 @@ const fetchQuickRecordStatus = async (options = {}) => {
 };
 
 const startQuickRecord = async () => {
+  const workCfg = getWorkModeConfig();
+  if (!workCfg.supportsQuick) {
+    setQuickHint("err_work_mode_quick_only", "bad");
+    return;
+  }
   const meetingUrl = String((els.quickRecordUrl && els.quickRecordUrl.value) || "").trim();
   if (!meetingUrl || (!meetingUrl.startsWith("http://") && !meetingUrl.startsWith("https://"))) {
     setQuickHint("quick_record_hint_missing_url", "bad");
@@ -3769,6 +4101,7 @@ const startQuickRecord = async () => {
       body: JSON.stringify({
         meeting_url: meetingUrl,
         duration_sec: duration,
+        work_mode: workCfg.contextMode,
         transcribe: Boolean(els.quickRecordTranscribe && els.quickRecordTranscribe.checked),
         upload_to_agent: Boolean(els.quickRecordUpload && els.quickRecordUpload.checked),
       }),
@@ -3796,6 +4129,10 @@ const startQuickRecord = async () => {
 };
 
 const stopQuickRecord = async () => {
+  if (!getWorkModeConfig().supportsQuick) {
+    setQuickHint("err_work_mode_quick_only", "bad");
+    return;
+  }
   try {
     const res = await fetch("/v1/quick-record/stop", {
       method: "POST",
@@ -3814,16 +4151,36 @@ const stopQuickRecord = async () => {
 };
 
 const updateCaptureUi = () => {
+  const cfg = getWorkModeConfig();
+  const realtimeEnabled = Boolean(cfg.supportsRealtime);
   const mode = getCaptureMode();
-  els.deviceSelect.disabled = mode === "screen";
+  if (els.deviceSelect) {
+    els.deviceSelect.disabled = !cfg.useDeviceDriver || mode === "screen";
+  }
   if (els.includeMic) {
-    if (mode === "system") {
+    if (!realtimeEnabled) {
+      els.includeMic.disabled = true;
+    } else if (mode === "system") {
       els.includeMic.checked = true;
       els.includeMic.disabled = true;
     } else {
       els.includeMic.disabled = false;
     }
   }
+  if (els.micSelect) {
+    els.micSelect.disabled = !realtimeEnabled || !els.includeMic || !els.includeMic.checked;
+  }
+  if (els.languageProfileSelect) {
+    els.languageProfileSelect.disabled = !realtimeEnabled;
+  }
+  [els.qualityFast, els.qualityBalanced, els.qualityAccurate].forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = !realtimeEnabled;
+  });
+  if (els.runDiagnostics && !state.signalCheckInProgress) {
+    els.runDiagnostics.disabled = !realtimeEnabled;
+  }
+  setRecordingButtons(Boolean(realtimeEnabled && state.captureStopper));
 };
 
 const toggleDriverHelp = () => {
@@ -4185,8 +4542,15 @@ document.querySelectorAll(".lang-btn").forEach((btn) => {
   });
 });
 
-document.querySelectorAll('input[name="captureMode"]').forEach((el) => {
+els.captureModeInputs.forEach((el) => {
   el.addEventListener("change", updateCaptureUi);
+});
+
+(els.workModeButtons || []).forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const mode = btn && btn.dataset ? btn.dataset.workMode : "";
+    setWorkMode(mode);
+  });
 });
 
 if (els.scanLlmModels) {
@@ -4359,7 +4723,15 @@ const savedTheme = (() => {
     return null;
   }
 })();
+const savedWorkMode = (() => {
+  try {
+    return localStorage.getItem(WORK_MODE_KEY);
+  } catch (err) {
+    return null;
+  }
+})();
 applyTheme(savedTheme || "light");
+setWorkMode(savedWorkMode || state.workMode, { persist: false, force: true });
 setCaptureQuality(state.captureQuality || "balanced");
 updateI18n();
 _diagMarkAllMuted();

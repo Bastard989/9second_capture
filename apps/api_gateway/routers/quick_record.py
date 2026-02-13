@@ -20,6 +20,7 @@ AUTH_DEP = Depends(auth_dep)
 class QuickRecordStartRequest(BaseModel):
     meeting_url: str = Field(min_length=8)
     duration_sec: int | None = Field(default=None, ge=5, le=86_400)
+    work_mode: str | None = None
     transcribe: bool = False
     transcribe_language: str = Field(default="ru", min_length=2, max_length=8)
     upload_to_agent: bool = False

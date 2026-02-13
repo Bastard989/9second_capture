@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <title>9second_capture — Local Agent</title>
-    <link rel="stylesheet" href="/ui/styles.css?v=20260213a" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260213c" />
   </head>
   <body>
     <div class="bg-layer"></div>
@@ -41,6 +41,32 @@
     </header>
 
     <main class="layout">
+      <section class="card card-mode">
+        <h2 data-i18n="work_mode_title">Режим работы</h2>
+        <div class="hint" data-i18n="work_mode_hint">
+          Выберите один режим: его настройки будут активны, остальные секции станут неактивными.
+        </div>
+        <div class="work-mode-grid">
+          <button id="workModeDriver" class="ghost mode-option active" data-work-mode="driver_audio">
+            <span data-i18n="work_mode_driver">Драйвер: системный звук</span>
+          </button>
+          <button id="workModeBrowser" class="ghost mode-option" data-work-mode="browser_screen_audio">
+            <span data-i18n="work_mode_browser">Браузер: экран + звук</span>
+          </button>
+          <button id="workModeApi" class="ghost mode-option" data-work-mode="api_upload">
+            <span data-i18n="work_mode_api">API/файл: загрузка аудио</span>
+          </button>
+          <button id="workModeQuick" class="ghost mode-option" data-work-mode="link_fallback">
+            <span data-i18n="work_mode_quick">Ссылка: quick fallback</span>
+          </button>
+        </div>
+        <div class="mode-summary">
+          <span class="label" data-i18n="work_mode_active_label">Активный режим:</span>
+          <strong id="workModeName" data-i18n="work_mode_driver">Драйвер: системный звук</strong>
+        </div>
+        <div id="workModeHint" class="hint mode-hint"></div>
+      </section>
+
       <section class="card card-connection">
         <h2 data-i18n="connection_title">Подключение</h2>
         <div class="field">
@@ -111,105 +137,108 @@
             Загружаем настройки LLM...
           </div>
         </div>
-        <div class="field">
-          <label for="deviceSelect" data-i18n="device_label">Источник аудио</label>
+        <div id="deviceModeBlock" class="mode-block">
+          <div class="field">
+            <label for="deviceSelect" data-i18n="device_label">Источник аудио</label>
+            <div class="row">
+              <select id="deviceSelect"></select>
+              <button id="refreshDevices" class="ghost" data-i18n="refresh_devices">
+                Обновить
+              </button>
+            </div>
+          </div>
+          <div class="hint" data-i18n="device_hint">
+            Выберите виртуальный драйвер захвата системного звука.
+          </div>
+          <div id="deviceStatusText" class="hint device-status" data-i18n="device_status_unknown">
+            Устройства не проверены.
+          </div>
           <div class="row">
-            <select id="deviceSelect"></select>
-            <button id="refreshDevices" class="ghost" data-i18n="refresh_devices">
-              Обновить
+            <button id="checkDriver" class="ghost" data-i18n="driver_check">
+              Проверить драйвер
             </button>
-          </div>
-        </div>
-        <div class="hint" data-i18n="device_hint">
-          Выберите виртуальный драйвер захвата системного звука.
-        </div>
-        <div id="deviceStatusText" class="hint device-status" data-i18n="device_status_unknown">
-          Устройства не проверены.
-        </div>
-        <div class="row">
-          <button id="checkDriver" class="ghost" data-i18n="driver_check">
-            Проверить драйвер
-          </button>
-          <button id="driverHelpBtn" class="ghost" data-i18n="driver_help_btn">
-            Инструкция
-          </button>
-          <span id="driverStatus" class="pill muted" data-i18n="driver_unknown">
-            Драйвер не проверен
-          </span>
-        </div>
-        <div id="driverHelp" class="driver-help hidden">
-          <div class="driver-tabs">
-            <button class="driver-tab active" data-os="mac" data-i18n="os_mac">
-              macOS
+            <button id="driverHelpBtn" class="ghost" data-i18n="driver_help_btn">
+              Инструкция
             </button>
-            <button class="driver-tab" data-os="win" data-i18n="os_windows">
-              Windows
-            </button>
-            <button class="driver-tab" data-os="linux" data-i18n="os_linux">
-              Linux
-            </button>
+            <span id="driverStatus" class="pill muted" data-i18n="driver_unknown">
+              Драйвер не проверен
+            </span>
           </div>
-          <div class="driver-panel" data-os="mac">
-            <div data-i18n="driver_mac_1">
-              Установите BlackHole (2ch) и создайте Multi‑Output Device.
+          <div id="driverHelp" class="driver-help hidden">
+            <div class="driver-tabs">
+              <button class="driver-tab active" data-os="mac" data-i18n="os_mac">
+                macOS
+              </button>
+              <button class="driver-tab" data-os="win" data-i18n="os_windows">
+                Windows
+              </button>
+              <button class="driver-tab" data-os="linux" data-i18n="os_linux">
+                Linux
+              </button>
             </div>
-            <div data-i18n="driver_mac_2">
-              Выход системы → Multi‑Output, вход агента → BlackHole.
+            <div class="driver-panel" data-os="mac">
+              <div data-i18n="driver_mac_1">
+                Установите BlackHole (2ch) и создайте Multi‑Output Device.
+              </div>
+              <div data-i18n="driver_mac_2">
+                Выход системы → Multi‑Output, вход агента → BlackHole.
+              </div>
+              <a
+                class="driver-link"
+                href="https://existential.audio/blackhole/"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                BlackHole — скачать
+              </a>
             </div>
-            <a
-              class="driver-link"
-              href="https://existential.audio/blackhole/"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              BlackHole — скачать
-            </a>
-          </div>
-          <div class="driver-panel hidden" data-os="win">
-            <div data-i18n="driver_win_1">
-              Установите VB‑CABLE.
+            <div class="driver-panel hidden" data-os="win">
+              <div data-i18n="driver_win_1">
+                Установите VB‑CABLE.
+              </div>
+              <div data-i18n="driver_win_2">
+                Выход системы → CABLE Input, вход агента → CABLE Output.
+              </div>
+              <a
+                class="driver-link"
+                href="https://vb-audio.com/Cable/"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                VB‑CABLE — скачать
+              </a>
             </div>
-            <div data-i18n="driver_win_2">
-              Выход системы → CABLE Input, вход агента → CABLE Output.
+            <div class="driver-panel hidden" data-os="linux">
+              <div data-i18n="driver_linux_1">
+                Выберите “Monitor of …” для нужного sink в списке устройств.
+              </div>
+              <div data-i18n="driver_linux_2">
+                Если нет monitor — включите loopback в PulseAudio/PipeWire.
+              </div>
+              <a
+                class="driver-link"
+                href="https://wiki.archlinux.org/title/PulseAudio/Examples#Loopback"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                PulseAudio loopback
+              </a>
+              <a
+                class="driver-link"
+                href="https://docs.pipewire.org/page_pulse.html"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                PipeWire (PulseAudio)
+              </a>
             </div>
-            <a
-              class="driver-link"
-              href="https://vb-audio.com/Cable/"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              VB‑CABLE — скачать
-            </a>
-          </div>
-          <div class="driver-panel hidden" data-os="linux">
-            <div data-i18n="driver_linux_1">
-              Выберите “Monitor of …” для нужного sink в списке устройств.
-            </div>
-            <div data-i18n="driver_linux_2">
-              Если нет monitor — включите loopback в PulseAudio/PipeWire.
-            </div>
-            <a
-              class="driver-link"
-              href="https://wiki.archlinux.org/title/PulseAudio/Examples#Loopback"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              PulseAudio loopback
-            </a>
-            <a
-              class="driver-link"
-              href="https://docs.pipewire.org/page_pulse.html"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              PipeWire (PulseAudio)
-            </a>
           </div>
         </div>
       </section>
 
       <section class="card card-recording">
         <h2 data-i18n="recording_title">Запись</h2>
+        <div id="recordingModeHint" class="hint mode-hint"></div>
         <div class="field">
           <label data-i18n="capture_mode_label">Режим захвата</label>
           <div class="row">
@@ -356,71 +385,76 @@
 
       <section class="card card-upload">
         <h2 data-i18n="upload_title">Загрузка конференции</h2>
-        <div class="field">
-          <label data-i18n="upload_audio_label">Аудио файл</label>
-          <div class="row">
-            <input id="uploadAudio" type="file" accept="audio/*" />
-            <button id="uploadAudioBtn" class="ghost" data-i18n="upload_audio_btn">
-              Загрузить аудио
-            </button>
+        <div id="uploadModeHint" class="hint mode-hint"></div>
+        <div id="uploadAudioBlock" class="mode-block">
+          <div class="field">
+            <label data-i18n="upload_audio_label">Аудио файл</label>
+            <div class="row">
+              <input id="uploadAudio" type="file" accept="audio/*" />
+              <button id="uploadAudioBtn" class="ghost" data-i18n="upload_audio_btn">
+                Загрузить аудио
+              </button>
+            </div>
+          </div>
+          <div class="field">
+            <label data-i18n="upload_video_label">Видео файл</label>
+            <div class="row">
+              <input id="uploadVideo" type="file" accept="video/*" disabled />
+              <button id="uploadVideoBtn" class="ghost" disabled data-i18n="upload_video_btn">
+                Видео (в разработке)
+              </button>
+            </div>
+          </div>
+          <div class="hint" data-i18n="upload_hint">
+            Видео‑анализ появится после интеграции мультимодальной LLM.
           </div>
         </div>
-        <div class="field">
-          <label data-i18n="upload_video_label">Видео файл</label>
-          <div class="row">
-            <input id="uploadVideo" type="file" accept="video/*" disabled />
-            <button id="uploadVideoBtn" class="ghost" disabled data-i18n="upload_video_btn">
-              Видео (в разработке)
-            </button>
+        <div id="quickRecordBlock" class="mode-block">
+          <div class="hint" data-i18n="quick_record_title">Quick fallback запись</div>
+          <div class="field">
+            <label for="quickRecordUrl" data-i18n="quick_record_url_label">Ссылка встречи</label>
+            <input
+              id="quickRecordUrl"
+              type="url"
+              placeholder="https://..."
+              data-i18n-placeholder="quick_record_url_placeholder"
+            />
           </div>
-        </div>
-        <div class="hint" data-i18n="upload_hint">
-          Видео‑анализ появится после интеграции мультимодальной LLM.
-        </div>
-        <div class="hint" data-i18n="quick_record_title">Quick fallback запись</div>
-        <div class="field">
-          <label for="quickRecordUrl" data-i18n="quick_record_url_label">Ссылка встречи</label>
-          <input
-            id="quickRecordUrl"
-            type="url"
-            placeholder="https://..."
-            data-i18n-placeholder="quick_record_url_placeholder"
-          />
-        </div>
-        <div class="field">
-          <label for="quickRecordDuration" data-i18n="quick_record_duration_label"
-            >Длительность (сек)</label
-          >
-          <input id="quickRecordDuration" type="number" min="5" step="5" value="900" />
-        </div>
-        <div class="row">
-          <label class="checkbox">
-            <input id="quickRecordTranscribe" type="checkbox" />
-            <span data-i18n="quick_record_transcribe_label">Сделать локальную транскрибацию</span>
-          </label>
-          <label class="checkbox">
-            <input id="quickRecordUpload" type="checkbox" />
-            <span data-i18n="quick_record_upload_label">Отправить запись в пайплайн агента</span>
-          </label>
-        </div>
-        <div class="row">
-          <button id="quickRecordStart" class="ghost" data-i18n="quick_record_start_btn">
-            Quick старт
-          </button>
-          <button
-            id="quickRecordStop"
-            class="ghost"
-            data-i18n="quick_record_stop_btn"
-            disabled
-          >
-            Quick стоп
-          </button>
-          <span id="quickRecordState" class="pill muted" data-i18n="quick_record_state_idle"
-            >Не запущено</span
-          >
-        </div>
-        <div id="quickRecordHint" class="hint" data-i18n="quick_record_hint_ready">
-          Fallback запись готова к запуску.
+          <div class="field">
+            <label for="quickRecordDuration" data-i18n="quick_record_duration_label"
+              >Длительность (сек)</label
+            >
+            <input id="quickRecordDuration" type="number" min="5" step="5" value="900" />
+          </div>
+          <div class="row">
+            <label class="checkbox">
+              <input id="quickRecordTranscribe" type="checkbox" />
+              <span data-i18n="quick_record_transcribe_label">Сделать локальную транскрибацию</span>
+            </label>
+            <label class="checkbox">
+              <input id="quickRecordUpload" type="checkbox" />
+              <span data-i18n="quick_record_upload_label">Отправить запись в пайплайн агента</span>
+            </label>
+          </div>
+          <div class="row">
+            <button id="quickRecordStart" class="ghost" data-i18n="quick_record_start_btn">
+              Quick старт
+            </button>
+            <button
+              id="quickRecordStop"
+              class="ghost"
+              data-i18n="quick_record_stop_btn"
+              disabled
+            >
+              Quick стоп
+            </button>
+            <span id="quickRecordState" class="pill muted" data-i18n="quick_record_state_idle"
+              >Не запущено</span
+            >
+          </div>
+          <div id="quickRecordHint" class="hint" data-i18n="quick_record_hint_ready">
+            Fallback запись готова к запуску.
+          </div>
         </div>
       </section>
 
@@ -580,6 +614,6 @@
       </span>
     </footer>
 
-    <script src="/ui/app.js?v=20260213b"></script>
+    <script src="/ui/app.js?v=20260213c"></script>
   </body>
 </html>

@@ -36,7 +36,7 @@ def auth_settings():
             setattr(s, k, v)
 
 
-def _client(monkeypatch) -> TestClient:
+def _client(monkeypatch, create_meeting_fn=None) -> TestClient:
     @contextmanager
     def _fake_db_session():
         yield object()
@@ -53,15 +53,14 @@ def _client(monkeypatch) -> TestClient:
 
     monkeypatch.setattr("apps.api_gateway.routers.meetings.db_session", _fake_db_session)
     monkeypatch.setattr("apps.api_gateway.routers.meetings.MeetingRepository", _FakeMeetingRepo)
-    monkeypatch.setattr(
-        "apps.api_gateway.routers.meetings.create_meeting",
-        lambda meeting_id, context, consent: SimpleNamespace(
+    if create_meeting_fn is None:
+        create_meeting_fn = lambda meeting_id, context, consent: SimpleNamespace(
             id=meeting_id or "m-auto",
             status="queued",
             context=context,
             consent=consent,
-        ),
-    )
+        )
+    monkeypatch.setattr("apps.api_gateway.routers.meetings.create_meeting", create_meeting_fn)
 
     app = FastAPI()
     app.include_router(meetings_router, prefix="/v1")
@@ -264,3 +263,55 @@ def test_start_meeting_ignores_finished_local_recording(monkeypatch, auth_settin
         },
     )
     assert resp.status_code == 200
+
+
+def test_start_meeting_rejects_incompatible_work_mode(monkeypatch, auth_settings) -> None:
+    client = _client(monkeypatch)
+
+    resp = client.post(
+        "/v1/meetings/start",
+        headers={"X-API-Key": "user-1"},
+        json={
+            "meeting_id": "m-bad-work-mode",
+            "mode": "postmeeting",
+            "consent": "unknown",
+            "context": {"work_mode": "driver_audio"},
+        },
+    )
+    assert resp.status_code == 422
+    detail = resp.json().get("detail") or {}
+    assert detail.get("code") == "invalid_work_mode_for_mode"
+
+
+def test_start_meeting_normalizes_browser_work_mode_context(monkeypatch, auth_settings) -> None:
+    captured = {"context": None}
+
+    def _create_meeting(meeting_id, context, consent):
+        captured["context"] = dict(context or {})
+        return SimpleNamespace(
+            id=meeting_id or "m-auto",
+            status="queued",
+            context=context,
+            consent=consent,
+        )
+
+    client = _client(monkeypatch, create_meeting_fn=_create_meeting)
+    resp = client.post(
+        "/v1/meetings/start",
+        headers={"X-API-Key": "user-1"},
+        json={
+            "meeting_id": "m-browser-mode",
+            "mode": "realtime",
+            "consent": "unknown",
+            "context": {
+                "source": "local_ui",
+                "work_mode": "browser_screen_audio",
+                "capture_mode": "system",
+            },
+        },
+    )
+    assert resp.status_code == 200
+    normalized = captured["context"] or {}
+    assert normalized.get("work_mode") == "browser_screen_audio"
+    assert normalized.get("source_mode") == "browser_screen_audio"
+    assert normalized.get("capture_mode") == "screen"
