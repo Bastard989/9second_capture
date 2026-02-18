@@ -38,3 +38,6 @@ venv/
 data/
 tmp/
 reports/*.json
+reports/cycle_*.md
+Dockerfile.bak.*
+docker-compose.yml.bak.*
