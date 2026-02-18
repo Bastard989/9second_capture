@@ -581,6 +581,15 @@ button:disabled {
   color: var(--bad-ink);
 }
 
+.status-actions {
+  min-height: 34px;
+}
+
+.status-actions .ghost {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
 .countdown {
   display: flex;
   gap: 8px;

@@ -295,17 +295,6 @@
                 </label>
               </div>
               <div class="row">
-                <button id="quickRecordStart" class="ghost" data-i18n="quick_record_start_btn">
-                  Quick старт
-                </button>
-                <button
-                  id="quickRecordStop"
-                  class="ghost"
-                  data-i18n="quick_record_stop_btn"
-                  disabled
-                >
-                  Quick стоп
-                </button>
                 <span id="quickRecordState" class="pill muted" data-i18n="quick_record_state_idle"
                   >Не запущено</span
                 >
@@ -412,6 +401,11 @@
           >
         </div>
         <div id="statusHint" class="status-hint"></div>
+        <div class="status-actions">
+          <button id="claimCaptureBtn" class="ghost hidden" data-i18n="capture_claim_btn">
+            Забрать управление в этом окне
+          </button>
+        </div>
         <div class="countdown">
           <span data-i18n="countdown_label">Отсчёт:</span>
           <span id="countdownValue">—</span>

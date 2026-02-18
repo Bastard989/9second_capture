@@ -103,6 +103,8 @@ const state = {
   workMode: "driver_audio",
   instanceId: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
   captureLockTimer: null,
+  captureLockConflictMeetingId: "",
+  captureClaimInProgress: false,
 };
 
 const PREFER_PCM_CAPTURE = true;
@@ -574,7 +576,12 @@ const i18n = {
     warn_system_source_fallback:
       "Выбранный источник недоступен. Автоматически переключились на другой аудиовход.",
     err_capture_locked_other_tab:
-      "Запись уже запущена в другом окне/вкладке. Остановите её там и повторите.",
+      "Обнаружена активная запись в другом окне/вкладке или зависшая сессия. Нажмите «Забрать управление в этом окне» и повторите.",
+    capture_claim_btn: "Забрать управление в этом окне",
+    capture_claim_running: "Освобождаем захват и завершаем зависшую сессию...",
+    capture_claim_success: "Управление захватом передано этому окну. Можно запускать запись.",
+    capture_claim_no_active: "Активных сессий не найдено. Можно запускать запись.",
+    capture_claim_failed: "Не удалось передать управление. Проверьте локальный API и повторите.",
     err_no_device_selected:
       "Не выбран источник аудио. Выберите устройство и повторите.",
     err_interview_meta_missing:
@@ -985,7 +992,12 @@ const i18n = {
     warn_system_source_fallback:
       "Selected source is unavailable. Switched automatically to another audio input.",
     err_capture_locked_other_tab:
-      "Recording is already running in another tab/window. Stop it there and retry.",
+      "Active recording is detected in another tab/window or stale session. Click “Claim capture in this window” and retry.",
+    capture_claim_btn: "Claim capture in this window",
+    capture_claim_running: "Releasing capture and finishing stale session...",
+    capture_claim_success: "Capture control is moved to this window. You can start recording.",
+    capture_claim_no_active: "No active sessions found. You can start recording.",
+    capture_claim_failed: "Failed to claim capture control. Check local API and retry.",
     err_no_device_selected:
       "Audio source is not selected. Choose a device and retry.",
     err_interview_meta_missing:
@@ -1088,6 +1100,7 @@ const els = {
   stopBtn: document.getElementById("stopBtn"),
   statusText: document.getElementById("statusText"),
   statusHint: document.getElementById("statusHint"),
+  claimCaptureBtn: document.getElementById("claimCaptureBtn"),
   recognitionDiagnosis: document.getElementById("recognitionDiagnosis"),
   countdownValue: document.getElementById("countdownValue"),
   levelBar: document.getElementById("levelBar"),
@@ -2018,6 +2031,118 @@ const stopCaptureLockHeartbeat = () => {
   }
   state.captureLockTimer = null;
   clearCaptureLock();
+};
+
+const forceClearCaptureLock = () => {
+  try {
+    localStorage.removeItem(CAPTURE_LOCK_KEY);
+  } catch (_err) {
+    // ignore storage failures
+  }
+};
+
+const clearCaptureLockConflict = () => {
+  state.captureLockConflictMeetingId = "";
+  if (els.claimCaptureBtn) {
+    els.claimCaptureBtn.classList.add("hidden");
+    els.claimCaptureBtn.disabled = false;
+  }
+};
+
+const showCaptureLockConflict = (meetingId = "") => {
+  const nextMeetingId = String(meetingId || "").trim();
+  if (nextMeetingId) {
+    state.captureLockConflictMeetingId = nextMeetingId;
+  }
+  if (els.claimCaptureBtn) {
+    els.claimCaptureBtn.classList.remove("hidden");
+    els.claimCaptureBtn.disabled = false;
+  }
+};
+
+const extractCaptureLockMeetingId = (err) => {
+  const message = err && typeof err === "object" ? err.message || "" : String(err || "");
+  const marker = "capture_locked_other_tab:";
+  const idx = message.indexOf(marker);
+  if (idx < 0) return "";
+  return String(message.slice(idx + marker.length) || "").trim();
+};
+
+const isActiveMeetingStatus = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (normalized.includes("done")) return false;
+  if (normalized.includes("failed")) return false;
+  if (normalized.includes("error")) return false;
+  return true;
+};
+
+const findActiveMeetingCandidate = async () => {
+  const res = await fetch("/v1/meetings?limit=80", { headers: buildAuthHeaders() });
+  if (!res.ok) return "";
+  const body = await res.json();
+  const items = Array.isArray(body.items) ? body.items : [];
+  const active = items.find((item) => {
+    if (!item || typeof item !== "object") return false;
+    const finishedAt = String(item.finished_at || "").trim();
+    if (finishedAt) return false;
+    return isActiveMeetingStatus(item.status);
+  });
+  return String((active && active.meeting_id) || "").trim();
+};
+
+const claimCaptureInThisWindow = async () => {
+  if (state.captureClaimInProgress) return;
+  state.captureClaimInProgress = true;
+  if (els.claimCaptureBtn) {
+    els.claimCaptureBtn.disabled = true;
+    els.claimCaptureBtn.classList.remove("hidden");
+  }
+  setStatus("status_idle", "idle");
+  setStatusHint("capture_claim_running", "muted");
+  try {
+    let meetingId = String(state.captureLockConflictMeetingId || "").trim();
+    if (!meetingId) {
+      const lock = readCaptureLock();
+      meetingId = String((lock && lock.meetingId) || "").trim();
+    }
+    forceClearCaptureLock();
+    if (!meetingId) {
+      meetingId = await findActiveMeetingCandidate();
+    }
+    if (meetingId) {
+      const finishRes = await fetch(`/v1/meetings/${meetingId}/finish`, {
+        method: "POST",
+        headers: buildHeaders(),
+      });
+      if (!finishRes.ok && finishRes.status !== 404) {
+        throw new Error(`capture_claim_finish_failed_${finishRes.status}`);
+      }
+    }
+    await fetchQuickRecordStatus({ silentErrors: true });
+    await fetchRecords();
+    clearCaptureLockConflict();
+    setRecordingButtons(false);
+    setStatus("status_idle", "idle");
+    if (meetingId) {
+      setStatusHint("capture_claim_success", "good");
+    } else {
+      setStatusHint("capture_claim_no_active", "muted");
+    }
+  } catch (err) {
+    console.warn("claim capture failed", err);
+    setStatus("status_error", "error");
+    setStatusHint("capture_claim_failed", "bad");
+    if (els.claimCaptureBtn) {
+      els.claimCaptureBtn.classList.remove("hidden");
+      els.claimCaptureBtn.disabled = false;
+    }
+  } finally {
+    state.captureClaimInProgress = false;
+    if (els.claimCaptureBtn && !els.claimCaptureBtn.classList.contains("hidden")) {
+      els.claimCaptureBtn.disabled = false;
+    }
+  }
 };
 
 const isVirtualAudioDevice = (label = "") => {
@@ -3804,29 +3929,6 @@ const runCapturePreflight = async (mode) => {
     throw new Error("no_device_selected");
   }
   validateSystemSourceSelection();
-
-  let probeStream = null;
-  try {
-    probeStream = await withBusyRetry(() =>
-      navigator.mediaDevices.getUserMedia({
-        audio: { deviceId: { exact: deviceId } },
-      })
-    );
-    const tracks = probeStream.getAudioTracks();
-    if (!tracks.length) {
-      throw new Error("preflight_no_audio_track");
-    }
-  } finally {
-    if (probeStream) {
-      try {
-        probeStream.getTracks().forEach((track) => track.stop());
-      } catch (err) {
-        void err;
-      }
-    }
-    // Safari/Chrome иногда освобождают аудио-девайс не мгновенно после stop().
-    await sleepMs(140);
-  }
 };
 
 const buildCaptureTargets = (captureMode) => {
@@ -3958,6 +4060,7 @@ const startCountdown = (seconds) =>
 
 const startRecording = async () => {
   if (state.isUploading) return;
+  clearCaptureLockConflict();
   const workCfg = getWorkModeConfig();
   if (!workCfg.supportsRealtime) {
     setStatus("status_error", "error");
@@ -3967,6 +4070,7 @@ const startRecording = async () => {
   }
   const captureLock = isCaptureLockedByOtherTab();
   if (captureLock.locked) {
+    showCaptureLockConflict(captureLock.meetingId || "");
     setStatus("status_error", "error");
     setStatusHint("err_capture_locked_other_tab", "bad");
     setRecordingButtons(false);
@@ -3985,13 +4089,12 @@ const startRecording = async () => {
     if (captureMode === "system" && !els.deviceSelect.value) {
       throw new Error("no_device_selected");
     }
-    await runDiagnostics({ forStart: true });
     await runCapturePreflight(captureMode);
     await ensureStream(captureMode, { force: true });
-    if (captureMode === "screen" && state.screenAudioMissing && !state.micAdded) {
-      throw new Error("screen capture no audio track");
+    if (!state.stream || !state.stream.getAudioTracks().length) {
+      throw new Error("preflight_no_audio_track");
     }
-    await buildAudioMeter(captureMode, { force: true });
+    await buildAudioMeter(captureMode, { force: false });
     startMeter();
 
     await startCountdown(9);
@@ -4004,6 +4107,7 @@ const startRecording = async () => {
     if (String(err || "").includes("countdown_cancelled")) {
       return;
     }
+    clearCaptureLockConflict();
     setStatus("status_error", "error");
     setStatusHint(mapStartError(err, captureMode), "bad");
     return;
@@ -4084,8 +4188,14 @@ const startRecording = async () => {
     }
   } catch (err) {
     console.error("start recording failed", err);
+    const hintKey = mapStartError(err, captureMode);
+    if (hintKey === "err_capture_locked_other_tab") {
+      showCaptureLockConflict(extractCaptureLockMeetingId(err));
+    } else {
+      clearCaptureLockConflict();
+    }
     setStatus("status_error", "error");
-    setStatusHint(mapStartError(err, captureMode), "bad");
+    setStatusHint(hintKey, "bad");
     await stopRecording({ preserveStatus: true, preserveHint: true, forceFinish: true });
     throw err;
   }
@@ -4533,6 +4643,14 @@ const applyQuickJobStatus = (job) => {
     setTranscriptUiState(hasTranscriptContent() ? "ready" : "waiting");
     if (quickPrimaryMode) {
       setStatus("status_idle", "idle");
+      clearCaptureLockConflict();
+      if (
+        state.statusHintKey === "err_media_not_readable" ||
+        state.statusHintKey === "err_capture_locked_other_tab" ||
+        state.statusHintKey === "err_diagnostics_failed"
+      ) {
+        setStatusHint("");
+      }
     }
     clearQuickPollTimer();
     return;
@@ -4545,6 +4663,7 @@ const applyQuickJobStatus = (job) => {
     setQuickButtonsByStatus(status);
     setTranscriptUiState("recording");
     if (quickPrimaryMode) {
+      clearCaptureLockConflict();
       setStatus("status_recording", "recording");
       if (apiMode) {
         setStatusHint("api_record_started", "good");
@@ -4637,6 +4756,7 @@ const fetchQuickRecordStatus = async (options = {}) => {
 
 const startQuickRecord = async () => {
   const workCfg = getWorkModeConfig();
+  clearCaptureLockConflict();
   if (!workCfg.supportsQuick) {
     setQuickHint("err_work_mode_quick_only", "bad");
     return;
@@ -5464,6 +5584,11 @@ if (els.runDiagnostics) {
     void runDiagnostics({ forStart: false });
   });
 }
+if (els.claimCaptureBtn) {
+  els.claimCaptureBtn.addEventListener("click", () => {
+    void claimCaptureInThisWindow();
+  });
+}
 
 els.refreshDevices.addEventListener("click", () => {
   void listDevices({ requestAccess: true });
@@ -5485,6 +5610,8 @@ window.addEventListener("storage", (event) => {
   const lock = isCaptureLockedByOtherTab();
   if (!lock.locked) return;
   if (isRecordingFlowActive()) {
+    showCaptureLockConflict(lock.meetingId || "");
+    setStatus("status_error", "error");
     setStatusHint("err_capture_locked_other_tab", "bad");
   }
 });
