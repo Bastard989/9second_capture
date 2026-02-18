@@ -105,6 +105,8 @@ const state = {
   captureLockTimer: null,
   captureLockConflictMeetingId: "",
   captureClaimInProgress: false,
+  uiLogLastByKey: new Map(),
+  warnedSystemLowAt: 0,
 };
 
 const PREFER_PCM_CAPTURE = true;
@@ -131,6 +133,9 @@ const CAPTURE_LOCK_KEY = "9second_capture_active_lock";
 const CAPTURE_LOCK_TTL_MS = 20000;
 const CAPTURE_LOCK_HEARTBEAT_MS = 4000;
 const WORK_MODE_KEY = "9second_capture_work_mode";
+const UI_EVENT_ENDPOINT = "/v1/diagnostics/ui-event";
+const UI_EVENT_THROTTLE_MS = 3000;
+const MEETING_TIME_ZONE = "Europe/Moscow";
 const QUALITY_PROFILES = {
   fast: {
     id: "fast",
@@ -501,6 +506,7 @@ const i18n = {
     prompt_rename_record: "Введите новое название записи:",
     prompt_save_mp3_after_stop: "Запись завершена. Укажите имя MP3 файла:",
     hint_record_renamed: "Название записи обновлено.",
+    hint_record_rename_failed: "Не удалось переименовать запись. Проверьте лог локального API.",
     hint_mp3_saved: "MP3 сохранен.",
     hint_mp3_not_found: "MP3 пока недоступен для этой записи.",
     hint_mp3_import_started: "Загружаем MP3 в агент и строим запись...",
@@ -582,6 +588,8 @@ const i18n = {
     capture_claim_success: "Управление захватом передано этому окну. Можно запускать запись.",
     capture_claim_no_active: "Активных сессий не найдено. Можно запускать запись.",
     capture_claim_failed: "Не удалось передать управление. Проверьте локальный API и повторите.",
+    warn_system_level_low:
+      "Системный звук очень тихий. Проверьте маршрутизацию: вывод встречи должен идти в BlackHole/VB-CABLE/Monitor.",
     err_no_device_selected:
       "Не выбран источник аудио. Выберите устройство и повторите.",
     err_interview_meta_missing:
@@ -921,6 +929,7 @@ const i18n = {
     prompt_rename_record: "Enter new recording name:",
     prompt_save_mp3_after_stop: "Recording is finished. Enter MP3 file name:",
     hint_record_renamed: "Recording name updated.",
+    hint_record_rename_failed: "Failed to rename recording. Check local API logs.",
     hint_mp3_saved: "MP3 saved.",
     hint_mp3_not_found: "MP3 is not available for this recording yet.",
     hint_mp3_import_started: "Importing MP3 and creating record...",
@@ -998,6 +1007,8 @@ const i18n = {
     capture_claim_success: "Capture control is moved to this window. You can start recording.",
     capture_claim_no_active: "No active sessions found. You can start recording.",
     capture_claim_failed: "Failed to claim capture control. Check local API and retry.",
+    warn_system_level_low:
+      "System audio level is very low. Check routing: meeting output must go to BlackHole/VB-CABLE/Monitor.",
     err_no_device_selected:
       "Audio source is not selected. Choose a device and retry.",
     err_interview_meta_missing:
@@ -1545,6 +1556,24 @@ const setStatusHint = (messageKeyOrText = "", style = "muted", isRaw = false) =>
   }
   state.statusHintStyle = style;
   els.statusHint.className = `status-hint ${style}`;
+  if (style === "bad") {
+    logUiEvent(
+      "status_hint_bad",
+      {
+        hint_key: state.statusHintKey || "",
+        hint_text: state.statusHintText || "",
+        capture_mode: getCaptureMode(),
+        chunk_count: Number(state.chunkCount || 0),
+        levels: {
+          mixed: Number(state.meterLevels.mixed || 0),
+          system: Number(state.meterLevels.system || 0),
+          mic: Number(state.meterLevels.mic || 0),
+        },
+      },
+      "warning",
+      { throttleKey: `status_bad:${state.statusHintKey || state.statusHintText}`, throttleMs: 1800 }
+    );
+  }
   refreshRecognitionDiagnosis();
 };
 
@@ -1955,6 +1984,43 @@ const buildAuthHeaders = () => {
   return headers;
 };
 
+const _nowMs = () => Date.now();
+
+const _uiLogShouldSend = (throttleKey = "", throttleMs = UI_EVENT_THROTTLE_MS) => {
+  const key = String(throttleKey || "").trim();
+  if (!key) return true;
+  const now = _nowMs();
+  const lastTs = Number(state.uiLogLastByKey.get(key) || 0);
+  if (now - lastTs < Math.max(0, Number(throttleMs) || 0)) {
+    return false;
+  }
+  state.uiLogLastByKey.set(key, now);
+  return true;
+};
+
+const logUiEvent = (eventName, payload = {}, level = "info", options = {}) => {
+  const event = String(eventName || "").trim();
+  if (!event) return;
+  const throttleKey = String((options && options.throttleKey) || event).trim();
+  const throttleMs = Number((options && options.throttleMs) || UI_EVENT_THROTTLE_MS);
+  if (!_uiLogShouldSend(throttleKey, throttleMs)) return;
+  const workCfg = getWorkModeConfig();
+  const headers = { "Content-Type": "application/json", ...buildAuthHeaders() };
+  const body = {
+    event,
+    level: String(level || "info").trim().toLowerCase(),
+    work_mode: String((workCfg && workCfg.id) || state.workMode || "").trim(),
+    meeting_id: String(state.meetingId || "").trim(),
+    payload,
+  };
+  fetch(UI_EVENT_ENDPOINT, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    keepalive: true,
+  }).catch(() => {});
+};
+
 const nowMs = () => Date.now();
 
 const readCaptureLock = () => {
@@ -2094,6 +2160,7 @@ const findActiveMeetingCandidate = async () => {
 const claimCaptureInThisWindow = async () => {
   if (state.captureClaimInProgress) return;
   state.captureClaimInProgress = true;
+  logUiEvent("capture_claim_start", { conflict_meeting_id: state.captureLockConflictMeetingId || "" }, "warning");
   if (els.claimCaptureBtn) {
     els.claimCaptureBtn.disabled = true;
     els.claimCaptureBtn.classList.remove("hidden");
@@ -2126,13 +2193,20 @@ const claimCaptureInThisWindow = async () => {
     setStatus("status_idle", "idle");
     if (meetingId) {
       setStatusHint("capture_claim_success", "good");
+      logUiEvent("capture_claim_success", { finished_meeting_id: meetingId }, "info");
     } else {
       setStatusHint("capture_claim_no_active", "muted");
+      logUiEvent("capture_claim_no_active", {}, "info");
     }
   } catch (err) {
     console.warn("claim capture failed", err);
     setStatus("status_error", "error");
     setStatusHint("capture_claim_failed", "bad");
+    logUiEvent(
+      "capture_claim_failed",
+      { error_name: String((err && err.name) || ""), error_message: String((err && err.message) || err || "") },
+      "error"
+    );
     if (els.claimCaptureBtn) {
       els.claimCaptureBtn.classList.remove("hidden");
       els.claimCaptureBtn.disabled = false;
@@ -2263,9 +2337,28 @@ const listDevices = async (options = {}) => {
         els.micSelect.value = "";
       }
     }
+    const selectedSystem = inputs.find((device) => device.deviceId === String(els.deviceSelect.value || ""));
+    logUiEvent(
+      "device_list_refreshed",
+      {
+        request_access: Boolean(requestAccess),
+        audio_inputs_count: inputs.length,
+        selected_system_device_id: String(els.deviceSelect.value || ""),
+        selected_system_device_label: String((selectedSystem && selectedSystem.label) || ""),
+        selected_system_is_virtual: Boolean(selectedSystem && isVirtualAudioDevice(selectedSystem.label)),
+        selected_mic_device_id: String((els.micSelect && els.micSelect.value) || ""),
+      },
+      "debug",
+      { throttleKey: "device_list_refreshed", throttleMs: 2000 }
+    );
   } catch (err) {
     console.warn("device list failed", err);
     const denied = err && typeof err === "object" && err.name === "NotAllowedError";
+    logUiEvent(
+      "device_list_failed",
+      { error_name: String((err && err.name) || ""), error_message: String((err && err.message) || err || "") },
+      "error"
+    );
     if (denied) {
       setDeviceStatus("device_status_access_denied", "bad", 0);
     } else {
@@ -3083,6 +3176,30 @@ const updateMeter = () => {
   };
   updateLiveMonitorFromLevels(state.meterLevels);
   renderMeterDetailLabels();
+  if (state.captureStopper && getCaptureMode() === "system") {
+    const now = Date.now();
+    const elapsedMs = state.monitor.startedAt ? now - Number(state.monitor.startedAt || 0) : 0;
+    const levelsVeryLow = mixedLevel < 0.02 && systemLevel < 0.02;
+    if (elapsedMs > 9000 && levelsVeryLow && now - Number(state.warnedSystemLowAt || 0) > 18000) {
+      state.warnedSystemLowAt = now;
+      const currentHint = String(state.statusHintKey || "");
+      if (!currentHint || currentHint === "hint_recording_record_first" || currentHint === "hint_no_speech_yet") {
+        setStatusHint("warn_system_level_low", "muted");
+      }
+      logUiEvent(
+        "capture_system_level_low",
+        {
+          mixed: Number(mixedLevel.toFixed(4)),
+          system: Number(systemLevel.toFixed(4)),
+          mic: Number(micLevel.toFixed(4)),
+          elapsed_ms: elapsedMs,
+          selected_device: String((els.deviceSelect && els.deviceSelect.value) || ""),
+        },
+        "warning",
+        { throttleKey: "capture_system_level_low", throttleMs: 12000 }
+      );
+    }
+  }
   if (els.systemLevelBar) {
     els.systemLevelBar.style.transform = `scaleX(${systemLevel})`;
   }
@@ -3396,6 +3513,21 @@ const sendChunk = async (blob, mimeType, sourceTrack = "mixed") => {
   state.seq += 1;
   state.chunkCount += 1;
   els.chunkCount.textContent = String(state.chunkCount);
+  if (state.chunkCount <= 3 || state.chunkCount % 20 === 0) {
+    logUiEvent(
+      "capture_chunk_sent",
+      {
+        seq: Number(payload.seq),
+        source_track: track,
+        mixed_level: Number(payload.mixed_level || 0),
+        system_level: Number(payload.system_level || 0),
+        mic_level: Number(payload.mic_level || 0),
+        codec: String(payload.codec || ""),
+      },
+      "debug",
+      { throttleKey: `chunk:${payload.seq}`, throttleMs: 1 }
+    );
+  }
   if (state.chunkCount >= 4 && state.nonEmptyRawUpdates === 0) {
     setSignal("signal_no_audio");
     const protectedHints = new Set([
@@ -3888,6 +4020,7 @@ const resetSessionState = () => {
   state.signalPeak = 0;
   state.signalSmooth = 0;
   state.signalState = "signal_waiting";
+  state.warnedSystemLowAt = 0;
   state.lastAckSeq = -1;
   state.wsHasServerActivity = false;
   state.wsBootstrapDeadlineMs = 0;
@@ -4062,6 +4195,17 @@ const startRecording = async () => {
   if (state.isUploading) return;
   clearCaptureLockConflict();
   const workCfg = getWorkModeConfig();
+  logUiEvent(
+    "recording_start_click",
+    {
+      work_mode: workCfg.id,
+      capture_mode: getCaptureMode(),
+      selected_device: String((els.deviceSelect && els.deviceSelect.value) || ""),
+      include_mic: Boolean(els.includeMic && els.includeMic.checked),
+      selected_mic: String((els.micSelect && els.micSelect.value) || ""),
+    },
+    "info"
+  );
   if (!workCfg.supportsRealtime) {
     setStatus("status_error", "error");
     setStatusHint("err_work_mode_realtime_only", "bad");
@@ -4070,6 +4214,11 @@ const startRecording = async () => {
   }
   const captureLock = isCaptureLockedByOtherTab();
   if (captureLock.locked) {
+    logUiEvent(
+      "recording_blocked_capture_lock",
+      { lock_meeting_id: String(captureLock.meetingId || "") },
+      "warning"
+    );
     showCaptureLockConflict(captureLock.meetingId || "");
     setStatus("status_error", "error");
     setStatusHint("err_capture_locked_other_tab", "bad");
@@ -4105,11 +4254,21 @@ const startRecording = async () => {
     setStatusHint("");
     setRecordingButtons(false);
     if (String(err || "").includes("countdown_cancelled")) {
+      logUiEvent("recording_start_cancelled", {}, "info");
       return;
     }
     clearCaptureLockConflict();
     setStatus("status_error", "error");
     setStatusHint(mapStartError(err, captureMode), "bad");
+    logUiEvent(
+      "recording_start_prepare_failed",
+      {
+        error_name: String((err && err.name) || ""),
+        error_message: String((err && err.message) || err || ""),
+        capture_mode: captureMode,
+      },
+      "error"
+    );
     return;
   }
 
@@ -4196,6 +4355,16 @@ const startRecording = async () => {
     }
     setStatus("status_error", "error");
     setStatusHint(hintKey, "bad");
+    logUiEvent(
+      "recording_start_failed",
+      {
+        hint_key: hintKey,
+        error_name: String((err && err.name) || ""),
+        error_message: String((err && err.message) || err || ""),
+        capture_mode: captureMode,
+      },
+      "error"
+    );
     await stopRecording({ preserveStatus: true, preserveHint: true, forceFinish: true });
     throw err;
   }
@@ -4270,6 +4439,22 @@ const stopRecording = async (options = {}) => {
     setStatusHint("");
   }
   els.countdownValue.textContent = preserveStatus ? "0s" : "—";
+  logUiEvent(
+    "recording_stopped",
+    {
+      meeting_id: String(activeMeetingId || ""),
+      finished_ok: finishedOk,
+      force_finish: Boolean(forceFinish),
+      chunks: Number(state.chunkCount || 0),
+      levels_last: {
+        mixed: Number(state.meterLevels.mixed || 0),
+        system: Number(state.meterLevels.system || 0),
+        mic: Number(state.meterLevels.mic || 0),
+      },
+    },
+    finishedOk ? "info" : "warning",
+    { throttleKey: `recording_stopped:${activeMeetingId || "none"}`, throttleMs: 1 }
+  );
   state.meetingId = null;
   els.meetingIdText.textContent = "—";
   setRecordingButtons(false);
@@ -4583,6 +4768,24 @@ const runDiagnostics = async (options = {}) => {
   } else {
     setDiagHint("diag_hint_levels_low", "muted");
   }
+  logUiEvent(
+    forStart ? "capture_diagnostics_for_start" : "capture_diagnostics_manual",
+    {
+      critical_passed: criticalPassed,
+      system_ok: systemOk,
+      mic_ok: micOk,
+      mic_skipped: micSkipped,
+      mp3_ready: mp3Ready,
+      capture_mode: mode,
+      levels: {
+        mixed: Number(state.meterLevels.mixed || 0),
+        system: Number(state.meterLevels.system || 0),
+        mic: Number(state.meterLevels.mic || 0),
+      },
+    },
+    criticalPassed ? "info" : "warning",
+    { throttleKey: `diag:${forStart ? "start" : "manual"}`, throttleMs: 1200 }
+  );
 
   if (forStart && !criticalPassed) {
     throw new Error("diagnostics_failed");
@@ -4757,6 +4960,14 @@ const fetchQuickRecordStatus = async (options = {}) => {
 const startQuickRecord = async () => {
   const workCfg = getWorkModeConfig();
   clearCaptureLockConflict();
+  logUiEvent(
+    "quick_record_start_click",
+    {
+      work_mode: workCfg.id,
+      is_api_mode: workCfg.id === "api_upload",
+    },
+    "info"
+  );
   if (!workCfg.supportsQuick) {
     setQuickHint("err_work_mode_quick_only", "bad");
     return;
@@ -4811,6 +5022,14 @@ const startQuickRecord = async () => {
     }
     const body = await res.json();
     setQuickHint("quick_record_hint_started", "good");
+    logUiEvent(
+      "quick_record_started",
+      {
+        job_id: String((body && body.job && body.job.job_id) || ""),
+        work_mode: workCfg.id,
+      },
+      "info"
+    );
     if (apiMode) {
       setStatusHint("api_record_started", "good");
     }
@@ -4818,6 +5037,11 @@ const startQuickRecord = async () => {
   } catch (err) {
     console.warn("quick record start failed", err);
     setQuickHint("quick_record_hint_start_failed", "bad");
+    logUiEvent(
+      "quick_record_start_failed",
+      { error_name: String((err && err.name) || ""), error_message: String((err && err.message) || err || "") },
+      "error"
+    );
     if (apiMode) {
       setStatusHint("api_record_failed", "bad");
     }
@@ -4921,14 +5145,33 @@ const setDriverHelpTab = (os) => {
   });
 };
 
+const formatMeetingCreatedAtMsk = (isoValue) => {
+  const raw = String(isoValue || "").trim();
+  if (!raw) return "";
+  const dt = new Date(raw);
+  if (!Number.isFinite(dt.valueOf())) return "";
+  const locale = state.lang === "ru" ? "ru-RU" : "en-GB";
+  const formatter = new Intl.DateTimeFormat(locale, {
+    timeZone: MEETING_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const base = formatter.format(dt);
+  return state.lang === "ru" ? `${base} МСК` : `${base} MSK`;
+};
+
 const formatMeetingOptionLabel = (meta) => {
   if (!meta || typeof meta !== "object") return "—";
   const display = String(meta.display_name || meta.meeting_id || "").trim() || "record";
   const createdRaw = String(meta.created_at || "").trim();
-  if (!createdRaw) return display;
-  const dt = new Date(createdRaw);
-  if (!Number.isFinite(dt.valueOf())) return display;
-  return `${display} (${dt.toLocaleString()})`;
+  const createdLabel = formatMeetingCreatedAtMsk(createdRaw);
+  if (!createdLabel) return display;
+  return `${display} (${createdLabel})`;
 };
 
 const getReportSelectEl = (source = "raw") => {
@@ -5261,17 +5504,58 @@ const renameSelectedRecord = async () => {
   const value = String(nextName).trim();
   if (!value) return;
   try {
+    logUiEvent(
+      "record_rename_submit",
+      {
+        meeting_id: meetingId,
+        old_name: currentName,
+        new_name: value,
+      },
+      "info"
+    );
     const res = await fetch(`/v1/meetings/${meetingId}/rename`, {
       method: "POST",
       headers: buildHeaders(),
       body: JSON.stringify({ display_name: value }),
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      setStatusHint("hint_record_rename_failed", "bad");
+      logUiEvent(
+        "record_rename_failed_http",
+        { meeting_id: meetingId, status: res.status, attempted_name: value },
+        "error"
+      );
+      return;
+    }
+    const body = await res.json();
+    const confirmedName = String((body && body.display_name) || value).trim() || value;
+    const existing = state.recordsMeta.get(meetingId) || { meeting_id: meetingId };
+    state.recordsMeta.set(meetingId, {
+      ...existing,
+      display_name: confirmedName,
+    });
+    if (els.recordsSelect && els.recordsSelect.options) {
+      const option = Array.from(els.recordsSelect.options).find((opt) => String(opt.value || "") === meetingId);
+      if (option) {
+        option.textContent = formatMeetingOptionLabel(state.recordsMeta.get(meetingId));
+      }
+    }
     closeRecordMenu();
     setStatusHint("hint_record_renamed", "good");
+    logUiEvent(
+      "record_rename_success",
+      { meeting_id: meetingId, display_name: confirmedName },
+      "info"
+    );
     await fetchRecords();
   } catch (err) {
     console.warn("rename record failed", err);
+    setStatusHint("hint_record_rename_failed", "bad");
+    logUiEvent(
+      "record_rename_failed_exception",
+      { meeting_id: meetingId, error_name: String((err && err.name) || ""), error_message: String((err && err.message) || err || "") },
+      "error"
+    );
   }
 };
 

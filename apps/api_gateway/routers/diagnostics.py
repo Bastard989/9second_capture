@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from urllib.parse import urlparse
 
 import requests
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.api_gateway.deps import auth_dep
 from interview_analytics_agent.common.config import get_settings
+from interview_analytics_agent.common.logging import get_project_logger
 from interview_analytics_agent.services.local_pipeline import stt_runtime_status
 
 router = APIRouter()
+log = get_project_logger()
 
 
 class DiagnosticsSTTStatus(BaseModel):
@@ -44,6 +47,14 @@ class DiagnosticsPreflightResponse(BaseModel):
     stt: DiagnosticsSTTStatus
     llm: DiagnosticsLLMStatus
     quality_profiles: list[DiagnosticsQualityProfile] = Field(default_factory=list)
+
+
+class DiagnosticsUiEventRequest(BaseModel):
+    event: str = Field(min_length=2, max_length=120)
+    level: str = Field(default="info", min_length=4, max_length=10)
+    work_mode: str = Field(default="", max_length=64)
+    meeting_id: str = Field(default="", max_length=128)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 def _is_local_base(api_base: str) -> bool:
@@ -114,6 +125,37 @@ def _llm_status() -> DiagnosticsLLMStatus:
     )
 
 
+def _normalize_log_level(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if value in {"debug", "info", "warning", "error"}:
+        return value
+    return "info"
+
+
+def _safe_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for idx, (key, value) in enumerate(raw.items()):
+        if idx >= 24:
+            break
+        k = str(key).strip()[:80]
+        if not k:
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            v: Any = value
+            if isinstance(v, str):
+                v = v[:500]
+            out[k] = v
+        elif isinstance(value, dict):
+            out[k] = {"_type": "dict", "size": len(value)}
+        elif isinstance(value, list):
+            out[k] = {"_type": "list", "size": len(value)}
+        else:
+            out[k] = {"_type": type(value).__name__}
+    return out
+
+
 @router.get("/diagnostics/preflight", response_model=DiagnosticsPreflightResponse)
 def diagnostics_preflight(_=Depends(auth_dep)) -> DiagnosticsPreflightResponse:
     stt_status = stt_runtime_status()
@@ -142,3 +184,26 @@ def diagnostics_preflight(_=Depends(auth_dep)) -> DiagnosticsPreflightResponse:
             ),
         ],
     )
+
+
+@router.post("/diagnostics/ui-event")
+def diagnostics_ui_event(req: DiagnosticsUiEventRequest, request: Request, _=Depends(auth_dep)) -> dict[str, Any]:
+    level = _normalize_log_level(req.level)
+    event = req.event.strip()
+    payload = {
+        "event": event,
+        "work_mode": (req.work_mode or "").strip(),
+        "meeting_id": (req.meeting_id or "").strip(),
+        "client_ip": request.client.host if request.client else "",
+        "user_agent": (request.headers.get("user-agent") or "")[:180],
+        "payload": _safe_payload(req.payload),
+    }
+    if level == "error":
+        log.error("ui_event", extra={"payload": payload})
+    elif level == "warning":
+        log.warning("ui_event", extra={"payload": payload})
+    elif level == "debug":
+        log.debug("ui_event", extra={"payload": payload})
+    else:
+        log.info("ui_event", extra={"payload": payload})
+    return {"ok": True}

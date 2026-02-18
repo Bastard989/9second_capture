@@ -137,6 +137,19 @@ def start_meeting(
     connector_connected: bool | None = None
     context = apply_tenant_to_context(ctx, req.context)
     context = _normalize_context_for_work_mode(req=req, context=context)
+    log.info(
+        "meeting_start_request",
+        extra={
+            "payload": {
+                "meeting_id_requested": req.meeting_id or "",
+                "mode": str(req.mode),
+                "work_mode": str(context.get("work_mode") or context.get("source_mode") or ""),
+                "capture_mode": str(context.get("capture_mode") or ""),
+                "subject": ctx.subject,
+                "auth_type": ctx.auth_type,
+            }
+        },
+    )
 
     with db_session() as s:
         repo = MeetingRepository(s)
@@ -146,6 +159,15 @@ def start_meeting(
                 requested_meeting_id=req.meeting_id,
             )
             if active_meeting_id:
+                log.warning(
+                    "meeting_start_blocked_active_recording",
+                    extra={
+                        "payload": {
+                            "active_meeting_id": active_meeting_id,
+                            "requested_meeting_id": req.meeting_id or "",
+                        }
+                    },
+                )
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail={

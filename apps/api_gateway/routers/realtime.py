@@ -85,11 +85,19 @@ def _ingest_chunk_impl(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestR
                 idempotency_prefix="http-chunk",
             )
         except ValueError as e:
+            log.warning(
+                "http_chunk_bad_audio",
+                extra={"payload": {"meeting_id": meeting_id, "seq": req.seq, "codec": req.codec}},
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "bad_audio", "message": "content_b64 не декодируется"},
             ) from e
         except Exception as e:
+            log.error(
+                "http_chunk_ingest_error",
+                extra={"payload": {"meeting_id": meeting_id, "seq": req.seq, "err": str(e)[:240]}},
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "ingest_error", "message": "Ошибка ingest аудио-чанка"},
@@ -98,7 +106,18 @@ def _ingest_chunk_impl(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestR
         log.info(
             "http_chunk_ingested",
             extra={
-                "payload": {"meeting_id": meeting_id, "seq": req.seq, "codec": req.codec},
+                "payload": {
+                    "meeting_id": meeting_id,
+                    "seq": req.seq,
+                    "codec": req.codec,
+                    "source_track": req.source_track or "",
+                    "quality_profile": req.quality_profile,
+                    "capture_levels": {
+                        "mixed": req.mixed_level,
+                        "system": req.system_level,
+                        "mic": req.mic_level,
+                    },
+                },
             },
         )
         return ChunkIngestResponse(

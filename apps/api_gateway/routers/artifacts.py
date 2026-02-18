@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from apps.api_gateway.deps import auth_dep
 from interview_analytics_agent.common.config import get_settings
+from interview_analytics_agent.common.logging import get_project_logger
 from interview_analytics_agent.domain.enums import PipelineStatus
 from interview_analytics_agent.processing.aggregation import (
     build_enhanced_transcript,
@@ -33,6 +34,7 @@ from interview_analytics_agent.storage.db import db_session
 from interview_analytics_agent.storage.repositories import MeetingRepository, TranscriptSegmentRepository
 
 router = APIRouter()
+log = get_project_logger()
 
 
 class MeetingListItem(BaseModel):
@@ -346,6 +348,10 @@ def list_meetings(
                     artifacts=records.list_artifacts(m.id),
                 )
             )
+    log.info(
+        "meetings_list",
+        extra={"payload": {"limit": limit, "items_count": len(items)}},
+    )
     return MeetingListResponse(items=items)
 
 
@@ -354,6 +360,7 @@ def finish_meeting(
     meeting_id: str,
     _=Depends(auth_dep),
 ) -> dict[str, Any]:
+    log.info("meeting_finish_requested", extra={"payload": {"meeting_id": meeting_id}})
     with db_session() as session:
         repo = MeetingRepository(session)
         m = repo.get(meeting_id)
@@ -378,6 +385,10 @@ def finish_meeting(
     _ensure_transcripts(meeting_id)
     records.ensure_meeting_metadata(meeting_id)
     materialize_meeting_audio_mp3(meeting_id=meeting_id)
+    log.info(
+        "meeting_finish_completed",
+        extra={"payload": {"meeting_id": meeting_id, "queue_mode": str(get_settings().queue_mode or "")}},
+    )
     return {"ok": True, "meeting_id": meeting_id}
 
 
@@ -395,11 +406,20 @@ def rename_meeting(
     try:
         meta = records.update_meeting_display_name(meeting_id, req.display_name)
     except ValueError as exc:
+        log.warning(
+            "meeting_rename_invalid",
+            extra={"payload": {"meeting_id": meeting_id, "error": str(exc)[:200]}},
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    display_name = str(meta.get("display_name") or meeting_id)
+    log.info(
+        "meeting_renamed",
+        extra={"payload": {"meeting_id": meeting_id, "display_name": display_name}},
+    )
     return {
         "ok": True,
         "meeting_id": meeting_id,
-        "display_name": str(meta.get("display_name") or meeting_id),
+        "display_name": display_name,
         "record_index": int(meta.get("record_index") or 0),
     }
 

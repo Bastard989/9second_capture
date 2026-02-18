@@ -86,6 +86,12 @@ def _parse_scopes(raw: str) -> set[str]:
     return {s.strip() for s in (raw or "").split(",") if s.strip()}
 
 
+def _should_log_capture_snapshot(seq: int, accepted_chunks: int) -> bool:
+    if seq < 3:
+        return True
+    return accepted_chunks > 0 and accepted_chunks % 25 == 0
+
+
 def _audit_ws_allow(*, ws: WebSocket, ctx: AuthContext, reason: str) -> None:
     log.info(
         "security_audit_allow",
@@ -528,6 +534,38 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                 continue
             accepted_chunks += 1
             last_acked_seq = max(last_acked_seq, seq)
+            if _should_log_capture_snapshot(seq, accepted_chunks):
+                levels = capture_levels if isinstance(capture_levels, dict) else {}
+                log.info(
+                    "ws_chunk_capture_snapshot",
+                    extra={
+                        "payload": {
+                            "meeting_id": meeting_id,
+                            "seq": seq,
+                            "accepted_chunks": accepted_chunks,
+                            "source_track": source_track or "",
+                            "quality_profile": quality_profile,
+                            "levels": {
+                                "mixed": float(levels.get("mixed", -1.0)),
+                                "system": float(levels.get("system", -1.0)),
+                                "mic": float(levels.get("mic", -1.0)),
+                            },
+                        }
+                    },
+                )
+                if float(levels.get("system", -1.0)) >= 0 and float(levels.get("system", 0.0)) < 0.02:
+                    log.warning(
+                        "ws_chunk_low_system_level",
+                        extra={
+                            "payload": {
+                                "meeting_id": meeting_id,
+                                "seq": seq,
+                                "system_level": float(levels.get("system", 0.0)),
+                                "mic_level": float(levels.get("mic", -1.0)),
+                                "hint": "check_loopback_routing",
+                            }
+                        },
+                    )
 
             sent = await _ws_send_json_safe(
                 ws,

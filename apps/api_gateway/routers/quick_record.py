@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from apps.api_gateway.deps import auth_dep
 from interview_analytics_agent.common.config import get_settings
+from interview_analytics_agent.common.logging import get_project_logger
 from interview_analytics_agent.quick_record import (
     QuickRecordConfig,
     QuickRecordJobStatus,
@@ -15,6 +16,7 @@ from interview_analytics_agent.quick_record import (
 
 router = APIRouter()
 AUTH_DEP = Depends(auth_dep)
+log = get_project_logger()
 
 
 class QuickRecordStartRequest(BaseModel):
@@ -56,6 +58,18 @@ def quick_record_start(req: QuickRecordStartRequest, _=AUTH_DEP) -> QuickRecordS
     manager = get_quick_record_manager()
     duration = req.duration_sec or int(getattr(s, "quick_record_default_duration_sec", 1800))
     api_key = (req.agent_api_key or getattr(s, "quick_record_agent_api_key", None) or "").strip()
+    log.info(
+        "quick_record_start_request",
+        extra={
+            "payload": {
+                "meeting_url_host": req.meeting_url.split("/")[2] if "://" in req.meeting_url else "",
+                "duration_sec": duration,
+                "work_mode": req.work_mode or "",
+                "transcribe": bool(req.transcribe),
+                "upload_to_agent": bool(req.upload_to_agent),
+            }
+        },
+    )
 
     cfg = QuickRecordConfig(
         meeting_url=req.meeting_url,
@@ -89,21 +103,45 @@ def quick_record_start(req: QuickRecordStartRequest, _=AUTH_DEP) -> QuickRecordS
     try:
         job = manager.start(cfg)
     except RuntimeError as exc:
+        log.warning(
+            "quick_record_start_conflict",
+            extra={"payload": {"error": str(exc)[:240]}},
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
 
+    log.info(
+        "quick_record_started",
+        extra={
+            "payload": {
+                "job_id": job.job_id,
+                "status": job.status,
+                "duration_sec": duration,
+            }
+        },
+    )
     return QuickRecordStartResponse(job=job)
 
 
 @router.get("/quick-record/status", response_model=QuickRecordStatusResponse)
 def quick_record_status(job_id: str | None = None, _=AUTH_DEP) -> QuickRecordStatusResponse:
     manager = get_quick_record_manager()
-    return QuickRecordStatusResponse(job=manager.get_status(job_id=job_id))
+    job = manager.get_status(job_id=job_id)
+    log.info(
+        "quick_record_status",
+        extra={"payload": {"job_id": job_id or "", "has_job": bool(job), "status": (job.status if job else "")}},
+    )
+    return QuickRecordStatusResponse(job=job)
 
 
 @router.post("/quick-record/stop", response_model=QuickRecordStopResponse)
 def quick_record_stop(_=AUTH_DEP) -> QuickRecordStopResponse:
     manager = get_quick_record_manager()
-    return QuickRecordStopResponse(job=manager.stop())
+    job = manager.stop()
+    log.info(
+        "quick_record_stop",
+        extra={"payload": {"job_id": (job.job_id if job else ""), "status": (job.status if job else "")}},
+    )
+    return QuickRecordStopResponse(job=job)

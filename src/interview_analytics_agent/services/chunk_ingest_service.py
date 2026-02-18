@@ -13,11 +13,14 @@ from dataclasses import dataclass
 
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.ids import new_idempotency_key
+from interview_analytics_agent.common.logging import get_project_logger
 from interview_analytics_agent.common.utils import b64_decode
 from interview_analytics_agent.queue.dispatcher import enqueue_stt
 from interview_analytics_agent.queue.idempotency import check_and_set
 from interview_analytics_agent.services.local_pipeline import process_chunk_inline
 from interview_analytics_agent.storage.blob import put_bytes
+
+log = get_project_logger()
 
 
 @dataclass
@@ -48,6 +51,17 @@ def ingest_audio_chunk_bytes(
     blob_key = f"meetings/{meeting_id}/chunks/{seq}.bin"
 
     if not check_and_set(idempotency_scope, meeting_id, idem_key):
+        log.info(
+            "chunk_ingest_duplicate",
+            extra={
+                "payload": {
+                    "meeting_id": meeting_id,
+                    "seq": seq,
+                    "scope": idempotency_scope,
+                    "source_track": source_track or "",
+                }
+            },
+        )
         return ChunkIngestResult(
             accepted=True,
             meeting_id=meeting_id,
@@ -58,6 +72,21 @@ def ingest_audio_chunk_bytes(
         )
 
     put_bytes(blob_key, audio_bytes)
+    if seq < 3 or seq % 25 == 0:
+        log.info(
+            "chunk_ingest_saved",
+            extra={
+                "payload": {
+                    "meeting_id": meeting_id,
+                    "seq": seq,
+                    "bytes": len(audio_bytes),
+                    "blob_key": blob_key,
+                    "source_track": source_track or "",
+                    "quality_profile": quality_profile,
+                    "capture_levels": capture_levels or {},
+                }
+            },
+        )
     inline_updates: list[dict] | None = None
     settings = get_settings()
     if (settings.queue_mode or "").strip().lower() == "inline":

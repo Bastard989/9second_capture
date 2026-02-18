@@ -585,9 +585,12 @@ button:disabled {
   min-height: 34px;
 }
 
-.status-actions .ghost {
-  padding: 6px 10px;
-  font-size: 13px;
+.capture-claim-btn {
+  width: 100%;
+  max-width: 360px;
+  padding: 10px 16px;
+  font-size: 15px;
+  font-weight: 800;
 }
 
 .countdown {
