@@ -15,6 +15,7 @@ API Gateway (FastAPI).
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -68,10 +69,22 @@ def _cors_params() -> tuple[list[str], bool]:
     return allow_origins, allow_credentials
 
 
-def _create_app() -> FastAPI:
-    app = FastAPI(title="Interview Analytics Agent", version="0.1.0")
-    allow_origins, allow_credentials = _cors_params()
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
     settings = get_settings()
+    queue_mode = (settings.queue_mode or "").strip().lower()
+    if (
+        queue_mode == "inline"
+        and (settings.stt_provider or "").strip().lower() == "whisper_local"
+        and bool(getattr(settings, "whisper_warmup_on_start", True))
+    ):
+        warmup_stt_provider_async()
+    yield
+
+
+def _create_app() -> FastAPI:
+    app = FastAPI(title="Interview Analytics Agent", version="0.1.0", lifespan=_app_lifespan)
+    allow_origins, allow_credentials = _cors_params()
 
     # CORS (настраивается через ENV; в prod wildcard запрещён)
     app.add_middleware(
@@ -101,17 +114,6 @@ def _create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {"ok": True}
-
-    @app.on_event("startup")
-    async def startup_warmup() -> None:
-        queue_mode = (settings.queue_mode or "").strip().lower()
-        if queue_mode != "inline":
-            return
-        if (settings.stt_provider or "").strip().lower() != "whisper_local":
-            return
-        if not bool(getattr(settings, "whisper_warmup_on_start", True)):
-            return
-        warmup_stt_provider_async()
 
     ui_dir = Path(__file__).parent / "ui"
     if ui_dir.exists():

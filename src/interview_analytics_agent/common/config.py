@@ -159,6 +159,27 @@ class Settings(BaseSettings):
     whisper_audio_spectral_denoise_strength: float = Field(
         default=0.22, alias="WHISPER_AUDIO_SPECTRAL_DENOISE_STRENGTH"
     )
+    whisper_adaptive_low_signal_enabled: bool = Field(
+        default=True, alias="WHISPER_ADAPTIVE_LOW_SIGNAL_ENABLED"
+    )
+    whisper_low_signal_rms_threshold: float = Field(
+        default=0.016, alias="WHISPER_LOW_SIGNAL_RMS_THRESHOLD"
+    )
+    whisper_low_signal_track_level_threshold: float = Field(
+        default=0.015, alias="WHISPER_LOW_SIGNAL_TRACK_LEVEL_THRESHOLD"
+    )
+    whisper_low_signal_gain_boost: float = Field(
+        default=2.2, alias="WHISPER_LOW_SIGNAL_GAIN_BOOST"
+    )
+    whisper_low_signal_disable_noise_gate: bool = Field(
+        default=True, alias="WHISPER_LOW_SIGNAL_DISABLE_NOISE_GATE"
+    )
+    whisper_low_signal_disable_spectral_denoise: bool = Field(
+        default=True, alias="WHISPER_LOW_SIGNAL_DISABLE_SPECTRAL_DENOISE"
+    )
+    whisper_low_signal_force_vad_off: bool = Field(
+        default=True, alias="WHISPER_LOW_SIGNAL_FORCE_VAD_OFF"
+    )
     backup_audio_recovery_enabled: bool = Field(
         default=True, alias="BACKUP_AUDIO_RECOVERY_ENABLED"
     )
@@ -246,6 +267,9 @@ class Settings(BaseSettings):
     )
     llm_transcript_cleanup_chunk_chars: int = Field(
         default=1800, alias="LLM_TRANSCRIPT_CLEANUP_CHUNK_CHARS"
+    )
+    llm_cleanup_probe_timeout_sec: float = Field(
+        default=2.0, alias="LLM_CLEANUP_PROBE_TIMEOUT_SEC"
     )
 
     # -------------------------------------------------------------------------

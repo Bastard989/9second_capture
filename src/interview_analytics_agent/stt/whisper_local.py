@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import math
 import wave
 
@@ -25,6 +26,8 @@ from faster_whisper import WhisperModel
 from interview_analytics_agent.common.config import get_settings
 
 from .base import STTProvider, STTResult
+
+log = logging.getLogger(__name__)
 
 
 def _decode_audio_to_float32(audio_bytes: bytes, target_sr: int = 16000) -> np.ndarray:
@@ -114,6 +117,12 @@ def _normalize_audio(samples: np.ndarray) -> np.ndarray:
 
     audio = np.clip(audio * gain, -1.0, 1.0)
     return audio.astype(np.float32)
+
+
+def _calc_rms(samples: np.ndarray) -> float:
+    if samples.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(samples.astype(np.float32)))))
 
 
 def _high_pass_filter(samples: np.ndarray, sample_rate: int, cutoff_hz: float) -> np.ndarray:
@@ -235,6 +244,25 @@ class WhisperLocalProvider(STTProvider):
         self.spectral_denoise_strength = float(
             getattr(s, "whisper_audio_spectral_denoise_strength", 0.32) or 0.32
         )
+        self.adaptive_low_signal_enabled = bool(
+            getattr(s, "whisper_adaptive_low_signal_enabled", True)
+        )
+        self.low_signal_rms_threshold = float(
+            getattr(s, "whisper_low_signal_rms_threshold", 0.016) or 0.016
+        )
+        self.low_signal_track_level_threshold = float(
+            getattr(s, "whisper_low_signal_track_level_threshold", 0.015) or 0.015
+        )
+        self.low_signal_gain_boost = float(
+            getattr(s, "whisper_low_signal_gain_boost", 2.2) or 2.2
+        )
+        self.low_signal_disable_noise_gate = bool(
+            getattr(s, "whisper_low_signal_disable_noise_gate", True)
+        )
+        self.low_signal_disable_spectral_denoise = bool(
+            getattr(s, "whisper_low_signal_disable_spectral_denoise", True)
+        )
+        self.low_signal_force_vad_off = bool(getattr(s, "whisper_low_signal_force_vad_off", True))
 
     def _normalize_language_hint(self, language_hint: str | None) -> str:
         hint = str(language_hint or "").strip().lower()
@@ -258,6 +286,48 @@ class WhisperLocalProvider(STTProvider):
             return max(1, min(self.beam_size_final, self.beam_size_live + 1))
         return self.beam_size_live
 
+    def _sanitize_capture_levels(
+        self, capture_levels: dict[str, float] | None
+    ) -> dict[str, float]:
+        if not isinstance(capture_levels, dict):
+            return {}
+        cleaned: dict[str, float] = {}
+        for key in ("system", "mic", "mixed"):
+            raw = capture_levels.get(key)
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value >= 0:
+                cleaned[key] = value
+        return cleaned
+
+    def _is_low_signal_mode(
+        self,
+        *,
+        wav: np.ndarray,
+        source_track: str | None,
+        capture_levels: dict[str, float],
+    ) -> bool:
+        if not self.adaptive_low_signal_enabled:
+            return False
+        track = str(source_track or "").strip().lower()
+        if track in {"system", "mic", "mixed"}:
+            level = capture_levels.get(track)
+            if level is not None and level < self.low_signal_track_level_threshold:
+                return True
+            if track == "system":
+                mixed = capture_levels.get("mixed")
+                mic = capture_levels.get("mic")
+                if (
+                    mixed is not None
+                    and mic is not None
+                    and mixed < self.low_signal_track_level_threshold
+                    and mic >= self.low_signal_track_level_threshold
+                ):
+                    return True
+        return _calc_rms(wav) < self.low_signal_rms_threshold
+
     def _transcribe_with_params(
         self,
         wav: np.ndarray,
@@ -267,6 +337,8 @@ class WhisperLocalProvider(STTProvider):
         quality_profile: str,
         language_profile: str = "auto",
         relaxed: bool = False,
+        force_vad_off: bool = False,
+        low_signal_mode: bool = False,
     ) -> tuple[str, float | None]:
         profile = self._normalize_language_hint(language_profile)
         if quality_profile == "final":
@@ -288,7 +360,7 @@ class WhisperLocalProvider(STTProvider):
             log_prob_threshold = max(log_prob_threshold - 0.08, -2.5)
         kwargs = {
             "language": language,
-            "vad_filter": False if relaxed else base_vad,
+            "vad_filter": False if (relaxed or force_vad_off) else base_vad,
             "beam_size": 1 if relaxed else beam_size,
             "condition_on_previous_text": False,
             "temperature": 0.0,
@@ -296,6 +368,9 @@ class WhisperLocalProvider(STTProvider):
             "log_prob_threshold": -3.0 if relaxed else log_prob_threshold,
             "compression_ratio_threshold": 3.2 if relaxed else compression_ratio_threshold,
         }
+        if low_signal_mode and not relaxed:
+            kwargs["no_speech_threshold"] = max(0.34, float(kwargs["no_speech_threshold"]) - 0.16)
+            kwargs["log_prob_threshold"] = min(-1.35, float(kwargs["log_prob_threshold"]) + 0.28)
         try:
             segments, _info = self.model.transcribe(wav, **kwargs)
         except TypeError:
@@ -312,17 +387,31 @@ class WhisperLocalProvider(STTProvider):
                 text_parts.append(seg.text.strip())
         return " ".join([t for t in text_parts if t]).strip(), None
 
-    def _preprocess_audio(self, wav: np.ndarray, sample_rate: int) -> np.ndarray:
+    def _preprocess_audio(
+        self,
+        wav: np.ndarray,
+        *,
+        sample_rate: int,
+        low_signal_mode: bool = False,
+    ) -> np.ndarray:
         processed = wav
         if self.hpf_enabled:
             processed = _high_pass_filter(processed, sample_rate=sample_rate, cutoff_hz=self.hpf_cutoff_hz)
-        if self.noise_suppress_enabled:
+        gate_enabled = self.noise_suppress_enabled
+        if low_signal_mode and self.low_signal_disable_noise_gate:
+            gate_enabled = False
+        if gate_enabled:
             processed = _noise_gate(processed, gate_db=self.noise_gate_db)
-        if self.spectral_denoise_enabled:
+        spectral_enabled = self.spectral_denoise_enabled
+        if low_signal_mode and self.low_signal_disable_spectral_denoise:
+            spectral_enabled = False
+        if spectral_enabled:
             processed = _spectral_denoise(
                 processed,
                 strength=self.spectral_denoise_strength,
             )
+        if low_signal_mode and self.low_signal_gain_boost > 1.0:
+            processed = np.clip(processed * self.low_signal_gain_boost, -1.0, 1.0)
         return _normalize_audio(processed)
 
     def transcribe_chunk(
@@ -333,11 +422,33 @@ class WhisperLocalProvider(STTProvider):
         quality_profile: str = "live",
         source_track: str | None = None,
         language_hint: str | None = None,
+        capture_levels: dict[str, float] | None = None,
     ) -> STTResult:
         wav = _decode_audio_to_float32(audio, target_sr=16000)
-        wav = self._preprocess_audio(wav, sample_rate=16000)
+        levels = self._sanitize_capture_levels(capture_levels)
+        low_signal_mode = self._is_low_signal_mode(
+            wav=wav,
+            source_track=source_track,
+            capture_levels=levels,
+        )
+        wav = self._preprocess_audio(
+            wav,
+            sample_rate=16000,
+            low_signal_mode=low_signal_mode,
+        )
         if wav.size == 0:
             return STTResult(text="", confidence=None)
+        if low_signal_mode:
+            log.debug(
+                "stt_low_signal_mode_enabled",
+                extra={
+                    "payload": {
+                        "source_track": source_track or "",
+                        "quality_profile": quality_profile,
+                        "levels": levels,
+                    }
+                },
+            )
 
         language_profile = self._normalize_language_hint(language_hint)
         language_target = self.language
@@ -349,39 +460,34 @@ class WhisperLocalProvider(STTProvider):
         beam = self._beam_for_quality_profile(quality_profile)
         if language_profile in {"ru", "en"} and quality_profile in {"live_balanced", "live_accurate", "final"}:
             beam = max(beam, self.beam_size_live)
-        text, confidence = self._transcribe_with_params(
-            wav,
-            language=language_target,
-            beam_size=beam,
-            quality_profile=quality_profile,
-            language_profile=language_profile,
-        )
-        if not text:
+        text = ""
+        confidence: float | None = None
+        first_relaxed = bool(low_signal_mode and quality_profile != "final")
+        attempt_plan = [
+            (language_target, first_relaxed),
+            (None, first_relaxed),
+            (language_target, True),
+            (None, True),
+        ]
+        attempted: set[tuple[str, bool]] = set()
+        for attempt_language, relaxed in attempt_plan:
+            lang_key = attempt_language or "__auto__"
+            key = (lang_key, relaxed)
+            if key in attempted:
+                continue
+            attempted.add(key)
             text, confidence = self._transcribe_with_params(
                 wav,
-                language=None,
+                language=attempt_language,
                 beam_size=beam,
                 quality_profile=quality_profile,
                 language_profile=language_profile,
+                relaxed=relaxed,
+                force_vad_off=bool(low_signal_mode and self.low_signal_force_vad_off),
+                low_signal_mode=low_signal_mode,
             )
-        if not text:
-            text, confidence = self._transcribe_with_params(
-                wav,
-                language=language_target,
-                beam_size=beam,
-                quality_profile=quality_profile,
-                language_profile=language_profile,
-                relaxed=True,
-            )
-        if not text:
-            text, confidence = self._transcribe_with_params(
-                wav,
-                language=None,
-                beam_size=beam,
-                quality_profile=quality_profile,
-                language_profile=language_profile,
-                relaxed=True,
-            )
+            if text:
+                break
 
         # faster-whisper не даёт "confidence" как одно число стабильно,
         # оставим None, позже можно считать среднюю logprob.

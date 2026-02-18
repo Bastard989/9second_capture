@@ -65,6 +65,13 @@ def _as_int(value: object, default: int = 0) -> int:
         return default
 
 
+def _as_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except Exception:
+        return default
+
+
 def _is_service_ctx(ctx: AuthContext) -> bool:
     return ctx.auth_type == "service_api_key" or (
         ctx.auth_type == "jwt" and is_service_jwt_claims(ctx.claims)
@@ -173,6 +180,8 @@ async def _process_inline_chunk_job(*, job: dict[str, object]) -> list[dict]:
     blob_key = str(job.get("blob_key") or "").strip() or None
     source_track = str(job.get("source_track") or "").strip() or None
     quality_profile = str(job.get("quality_profile") or "live").strip() or "live"
+    raw_levels = job.get("capture_levels")
+    capture_levels = raw_levels if isinstance(raw_levels, dict) else None
     if not meeting_id or seq < 0:
         return []
 
@@ -184,6 +193,7 @@ async def _process_inline_chunk_job(*, job: dict[str, object]) -> list[dict]:
             blob_key=blob_key,
             source_track=source_track,
             quality_profile=quality_profile,
+            capture_levels=capture_levels,
         )
     except Exception as e:
         log.error(
@@ -437,6 +447,18 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
             content_b64 = event.get("content_b64", "")
             source_track = event.get("source_track")
             quality_profile = str(event.get("quality_profile") or "live")
+            mixed_level = _as_float(event.get("mixed_level"), -1.0)
+            system_level = _as_float(event.get("system_level"), -1.0)
+            mic_level = _as_float(event.get("mic_level"), -1.0)
+            capture_levels = None
+            if mixed_level >= 0.0 or system_level >= 0.0 or mic_level >= 0.0:
+                capture_levels = {}
+                if mixed_level >= 0.0:
+                    capture_levels["mixed"] = mixed_level
+                if system_level >= 0.0:
+                    capture_levels["system"] = system_level
+                if mic_level >= 0.0:
+                    capture_levels["mic"] = mic_level
             idem_key = event.get("idempotency_key")
 
             try:
@@ -466,6 +488,7 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                         audio_bytes=audio_bytes,
                         source_track=source_track,
                         quality_profile=quality_profile,
+                        capture_levels=capture_levels,
                         idempotency_key=idem_key,
                         idempotency_scope="audio_chunk_ws",
                         idempotency_prefix="ws",
@@ -529,6 +552,7 @@ async def _websocket_endpoint_impl(ws: WebSocket, *, service_only: bool) -> None
                             "blob_key": result.blob_key,
                             "source_track": source_track,
                             "quality_profile": quality_profile,
+                            "capture_levels": capture_levels or {},
                         }
                     )
                 except Exception:

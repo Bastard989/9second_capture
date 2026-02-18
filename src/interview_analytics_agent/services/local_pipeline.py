@@ -225,6 +225,7 @@ def process_chunk_inline(
     blob_key: str | None = None,
     quality_profile: str = "live",
     source_track: str | None = None,
+    capture_levels: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Локальная обработка чанка без Redis-очередей.
@@ -244,6 +245,7 @@ def process_chunk_inline(
         quality_profile=quality_profile,
         source_track=source_track,
         language_hint=language_hint,
+        capture_levels=capture_levels,
     )
     text = (res.text or "").strip()
     if not text:
@@ -356,6 +358,7 @@ def retranscribe_meeting_high_quality(*, meeting_id: str) -> int:
                     quality_profile="final",
                     source_track=source_track,
                     language_hint=language_hint,
+                    capture_levels=None,
                 )
             except Exception:
                 continue
@@ -443,6 +446,7 @@ def recover_transcript_from_backup_audio(*, meeting_id: str) -> int:
             quality_profile="final",
             source_track="mixed",
             language_hint=language_hint,
+            capture_levels=None,
         )
     except Exception:
         return 0
@@ -515,6 +519,7 @@ def final_pass_from_backup_audio(*, meeting_id: str) -> int:
             quality_profile="final",
             source_track="mixed",
             language_hint=language_hint,
+            capture_levels=None,
         )
     except Exception:
         return 0

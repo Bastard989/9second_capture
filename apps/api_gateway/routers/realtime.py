@@ -40,6 +40,9 @@ class ChunkIngestRequest(BaseModel):
     channels: int = 1
     source_track: str | None = None
     quality_profile: str = "live"
+    mixed_level: float | None = None
+    system_level: float | None = None
+    mic_level: float | None = None
     idempotency_key: str | None = None
 
 
@@ -68,6 +71,15 @@ def _ingest_chunk_impl(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestR
                 content_b64=req.content_b64,
                 source_track=req.source_track,
                 quality_profile=req.quality_profile,
+                capture_levels={
+                    "mixed": float(req.mixed_level),
+                    "system": float(req.system_level),
+                    "mic": float(req.mic_level),
+                }
+                if req.mixed_level is not None
+                or req.system_level is not None
+                or req.mic_level is not None
+                else None,
                 idempotency_key=req.idempotency_key,
                 idempotency_scope="audio_chunk_http",
                 idempotency_prefix="http-chunk",

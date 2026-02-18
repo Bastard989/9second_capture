@@ -28,4 +28,5 @@ class STTProvider(Protocol):
         quality_profile: str = "live",
         source_track: str | None = None,
         language_hint: str | None = None,
+        capture_levels: dict[str, float] | None = None,
     ) -> STTResult: ...

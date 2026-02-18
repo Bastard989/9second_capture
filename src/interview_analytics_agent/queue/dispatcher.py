@@ -48,6 +48,7 @@ def enqueue_stt(
     blob_key: str,
     source_track: str | None = None,
     quality_profile: str = "live",
+    capture_levels: dict[str, float] | None = None,
 ) -> str:
     """
     Поставить задачу STT на обработку аудио-чанка.
@@ -61,6 +62,7 @@ def enqueue_stt(
         "blob_key": blob_key,
         "source_track": source_track or "",
         "quality_profile": quality_profile or "live",
+        "capture_levels": capture_levels or {},
         "timestamp": _now_iso(),
     }
     inject_trace_context(payload, meeting_id=meeting_id, source="queue.stt")
@@ -73,6 +75,7 @@ def enqueue_stt(
             blob_key=blob_key,
             source_track=source_track,
             quality_profile=quality_profile,
+            capture_levels=capture_levels,
         )
         log.info(
             "enqueue_stt_inline",

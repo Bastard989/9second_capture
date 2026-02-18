@@ -44,6 +44,36 @@ def test_ingest_audio_chunk_bytes_enqueues(monkeypatch) -> None:
     }
 
 
+def test_ingest_audio_chunk_bytes_forwards_capture_levels(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "interview_analytics_agent.services.chunk_ingest_service.check_and_set",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "interview_analytics_agent.services.chunk_ingest_service.put_bytes",
+        lambda key, data: calls.update({"blob_key": key, "audio": data}),
+    )
+    monkeypatch.setattr(
+        "interview_analytics_agent.services.chunk_ingest_service.enqueue_stt",
+        lambda **kwargs: calls.update({"task": kwargs}),
+    )
+
+    result = ingest_audio_chunk_bytes(
+        meeting_id="m-1",
+        seq=7,
+        audio_bytes=b"abc",
+        capture_levels={"system": 0.004, "mic": 0.092},
+        idempotency_key="idem-1",
+        idempotency_scope="audio_chunk_test",
+    )
+    assert result.accepted is True
+    task = calls["task"]
+    assert isinstance(task, dict)
+    assert task["capture_levels"] == {"system": 0.004, "mic": 0.092}
+
+
 def test_ingest_audio_chunk_bytes_duplicate(monkeypatch) -> None:
     monkeypatch.setattr(
         "interview_analytics_agent.services.chunk_ingest_service.check_and_set",

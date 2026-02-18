@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -163,6 +166,57 @@ def _profile_bucket(quality_profile: str) -> str:
     return "balanced"
 
 
+def _probe_whisper_runtime_init(timeout_sec: int = 15) -> str:
+    """
+    Запускает отдельный процесс с инициализацией WhisperLocalProvider.
+    Это защищает основной guardrail от native-crash/hang в OpenMP runtime.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    py_path_parts: list[str] = [str(repo_root), str(repo_root / "src")]
+    existing_py = str(env.get("PYTHONPATH") or "").strip()
+    if existing_py:
+        py_path_parts.append(existing_py)
+    env["PYTHONPATH"] = os.pathsep.join(py_path_parts)
+
+    probe_code = (
+        "from interview_analytics_agent.stt.whisper_local import WhisperLocalProvider;"
+        "WhisperLocalProvider();"
+        "print('ok')"
+    )
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-c", probe_code],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    except Exception as err:
+        return f"whisper_runtime_probe_spawn_error:{err}"
+
+    try:
+        out, err = proc.communicate(timeout=int(timeout_sec))
+    except subprocess.TimeoutExpired:
+        with suppress(Exception):
+            proc.kill()
+        return f"whisper_runtime_probe_timeout:{int(timeout_sec)}s"
+    except Exception as err:
+        with suppress(Exception):
+            proc.kill()
+        return f"whisper_runtime_probe_error:{err}"
+
+    if proc.returncode == 0:
+        return ""
+    details = " ".join(
+        part.strip()
+        for part in (str(out or "").strip(), str(err or "").strip())
+        if part and part.strip()
+    ).strip()
+    return details or f"whisper_runtime_probe_failed:exit_code={int(proc.returncode or -1)}"
+
+
 def main() -> int:
     args = _args()
     manifest_path = Path(args.manifest).resolve()
@@ -214,6 +268,22 @@ def main() -> int:
         }
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[stt-wer-guardrail] stt runtime unavailable: {err}")
+        return 0 if bool(args.allow_missing_fixtures) else 1
+
+    probe_error = _probe_whisper_runtime_init()
+    if probe_error:
+        report = {
+            "ok": bool(args.allow_missing_fixtures),
+            "status": "skipped" if bool(args.allow_missing_fixtures) else "failed",
+            "reason": "stt_runtime_init_failed",
+            "error": probe_error,
+            "manifest": str(manifest_path),
+            "cases_total": len(cases),
+            "cases_executed": 0,
+            "results": [],
+        }
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[stt-wer-guardrail] stt runtime init failed: {probe_error}")
         return 0 if bool(args.allow_missing_fixtures) else 1
 
     provider = WhisperLocalProvider()

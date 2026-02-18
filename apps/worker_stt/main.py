@@ -105,6 +105,11 @@ def run_loop() -> None:
                     if isinstance(task, dict)
                     else "live"
                 )
+                capture_levels = (
+                    task.get("capture_levels")
+                    if isinstance(task, dict) and isinstance(task.get("capture_levels"), dict)
+                    else None
+                )
 
                 audio = get_bytes(blob_key)
 
@@ -114,6 +119,7 @@ def run_loop() -> None:
                     sample_rate=16000,
                     source_track=source_track,
                     quality_profile=quality_profile,
+                    capture_levels=capture_levels,
                 )
 
                 with db_session() as session:

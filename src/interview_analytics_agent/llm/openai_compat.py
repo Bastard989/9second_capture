@@ -44,6 +44,29 @@ class OpenAICompatProvider:
             api_base=api_base, api_key=api_key, model=model, timeout_s=timeout_s
         )
 
+    def _models_url(self) -> str:
+        return self.cfg.api_base.rstrip("/") + "/models"
+
+    def _chat_url(self) -> str:
+        return self.cfg.api_base.rstrip("/") + "/chat/completions"
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.cfg.api_key:
+            headers["Authorization"] = f"Bearer {self.cfg.api_key}"
+        return headers
+
+    def is_available(self, timeout_s: float = 2.5) -> bool:
+        try:
+            resp = requests.get(
+                self._models_url(),
+                headers=self._headers(),
+                timeout=max(0.8, float(timeout_s)),
+            )
+        except requests.RequestException:
+            return False
+        return resp.status_code < 400
+
     def complete_text(self, *, system: str, user: str) -> str:
         payload = {
             "model": self.cfg.model,
@@ -54,13 +77,13 @@ class OpenAICompatProvider:
             "temperature": 0.2,
         }
 
-        url = self.cfg.api_base.rstrip("/") + "/chat/completions"
-        headers = {"Content-Type": "application/json"}
-        if self.cfg.api_key:
-            headers["Authorization"] = f"Bearer {self.cfg.api_key}"
-
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=self.cfg.timeout_s)
+            resp = requests.post(
+                self._chat_url(),
+                headers=self._headers(),
+                json=payload,
+                timeout=self.cfg.timeout_s,
+            )
         except requests.RequestException as e:
             log.error(
                 "llm_http_error",

@@ -253,7 +253,14 @@ def _is_compatible_model(target_model: str, candidate_model: str) -> bool:
     candidate_name, candidate_tag = _split_model_id(candidate_model)
     if not target_name or not candidate_name:
         return False
-    if target_tag != candidate_tag:
+    tag_match = (
+        target_tag == candidate_tag
+        or not target_tag
+        or not candidate_tag
+        or candidate_tag.startswith(target_tag)
+        or target_tag.startswith(candidate_tag)
+    )
+    if not tag_match:
         return False
     if target_name == candidate_name:
         return True
@@ -532,6 +539,9 @@ def _start_app() -> str:
     env.setdefault("OPENAI_API_BASE", "http://127.0.0.1:11434/v1")
     env.setdefault("OPENAI_API_KEY", "ollama")
     env.setdefault("LLM_MODEL_ID", "llama3.1:8b")
+    env.setdefault("LLM_REQUEST_TIMEOUT_SEC", "15")
+    env.setdefault("LLM_RETRIES", "1")
+    env.setdefault("LLM_CLEANUP_PROBE_TIMEOUT_SEC", "2.0")
     env.setdefault("BACKUP_AUDIO_RECOVERY_ENABLED", "true")
     env["POSTGRES_DSN"] = f"sqlite:///{(root / 'agent.db').as_posix()}"
     env["RECORDS_DIR"] = str(root / "records")
@@ -541,10 +551,14 @@ def _start_app() -> str:
     if INSTALL_MODE == "full":
         env.setdefault("WHISPER_MODEL_SIZE", "medium")
         env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
-        env.setdefault("WHISPER_LANGUAGE", "ru")
+        env.setdefault("WHISPER_LANGUAGE", "auto")
         env.setdefault("WHISPER_VAD_FILTER", "true")
-        env.setdefault("WHISPER_BEAM_SIZE_LIVE", "3")
-        env.setdefault("WHISPER_BEAM_SIZE_FINAL", "6")
+        env.setdefault("WHISPER_BEAM_SIZE_LIVE", "4")
+        env.setdefault("WHISPER_BEAM_SIZE_FINAL", "7")
+        env.setdefault("WHISPER_ADAPTIVE_LOW_SIGNAL_ENABLED", "true")
+        env.setdefault("WHISPER_LOW_SIGNAL_FORCE_VAD_OFF", "true")
+        env.setdefault("WHISPER_LOW_SIGNAL_GAIN_BOOST", "2.2")
+        env.setdefault("WHISPER_LOW_SIGNAL_TRACK_LEVEL_THRESHOLD", "0.015")
         env.setdefault("WHISPER_WARMUP_ON_START", "true")
     env["LOCAL_AGENT_AUTO_OPEN"] = "false"
     env["PYTHONUNBUFFERED"] = "1"

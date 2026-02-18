@@ -130,7 +130,18 @@ def _build_transcript_cleanup_orchestrator():
     from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
     from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
 
-    return LLMOrchestrator(OpenAICompatProvider())
+    provider = OpenAICompatProvider()
+    probe_timeout = min(
+        2.8,
+        max(1.0, float(getattr(s, "llm_cleanup_probe_timeout_sec", 2.0) or 2.0)),
+    )
+    if not provider.is_available(timeout_s=probe_timeout):
+        log.warning(
+            "llm_transcript_cleanup_unavailable",
+            extra={"payload": {"api_base": str(s.openai_api_base or ""), "timeout_sec": probe_timeout}},
+        )
+        return None
+    return LLMOrchestrator(provider)
 
 
 def cleanup_transcript_with_llm(transcript: str) -> tuple[str, dict]:
