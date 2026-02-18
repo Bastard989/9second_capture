@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <title>9second_capture — Local Agent</title>
-    <link rel="stylesheet" href="/ui/styles.css?v=20260213c" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260218c" />
   </head>
   <body>
     <div class="bg-layer"></div>
@@ -42,21 +42,44 @@
 
     <main class="layout">
       <section class="card card-mode">
-        <h2 data-i18n="work_mode_title">Режим работы</h2>
+        <h2>
+          <span data-i18n="work_mode_title">Режим работы</span>
+          <span class="help-tip" data-help-i18n="help_work_mode" aria-label="help">?</span>
+        </h2>
         <div class="hint" data-i18n="work_mode_hint">
           Выберите один режим: его настройки будут активны, остальные секции станут неактивными.
         </div>
         <div class="work-mode-grid">
-          <button id="workModeDriver" class="ghost mode-option active" data-work-mode="driver_audio">
+          <button
+            id="workModeDriver"
+            class="ghost mode-option active"
+            data-work-mode="driver_audio"
+            data-help-i18n="help_mode_driver"
+          >
             <span data-i18n="work_mode_driver">Драйвер: системный звук</span>
           </button>
-          <button id="workModeBrowser" class="ghost mode-option" data-work-mode="browser_screen_audio">
+          <button
+            id="workModeBrowser"
+            class="ghost mode-option"
+            data-work-mode="browser_screen_audio"
+            data-help-i18n="help_mode_browser"
+          >
             <span data-i18n="work_mode_browser">Браузер: экран + звук</span>
           </button>
-          <button id="workModeApi" class="ghost mode-option" data-work-mode="api_upload">
+          <button
+            id="workModeApi"
+            class="ghost mode-option"
+            data-work-mode="api_upload"
+            data-help-i18n="help_mode_api"
+          >
             <span data-i18n="work_mode_api">API/файл: загрузка аудио</span>
           </button>
-          <button id="workModeQuick" class="ghost mode-option" data-work-mode="link_fallback">
+          <button
+            id="workModeQuick"
+            class="ghost mode-option"
+            data-work-mode="link_fallback"
+            data-help-i18n="help_mode_quick"
+          >
             <span data-i18n="work_mode_quick">Ссылка: quick fallback</span>
           </button>
         </div>
@@ -65,22 +88,243 @@
           <strong id="workModeName" data-i18n="work_mode_driver">Драйвер: системный звук</strong>
         </div>
         <div id="workModeHint" class="hint mode-hint"></div>
+        <div class="mode-settings-deck">
+          <div id="modeSettingsDriver" class="mode-settings-panel active" data-mode-panel="driver_audio">
+            <div class="mode-settings-head">
+              <strong data-i18n="mode_settings_title">Настройки выбранного режима</strong>
+            </div>
+            <div id="deviceModeBlock" class="mode-block">
+              <div class="field">
+                <label for="deviceSelect">
+                  <span data-i18n="device_label">Источник аудио</span>
+                  <span class="help-tip" data-help-i18n="help_device" aria-label="help">?</span>
+                </label>
+                <div class="row">
+                  <select id="deviceSelect"></select>
+                  <button id="refreshDevices" class="ghost" data-i18n="refresh_devices">
+                    Обновить
+                  </button>
+                </div>
+              </div>
+              <div class="hint" data-i18n="device_hint">
+                Выберите виртуальный драйвер захвата системного звука.
+              </div>
+              <div id="deviceStatusText" class="hint device-status" data-i18n="device_status_unknown">
+                Устройства не проверены.
+              </div>
+              <div class="row">
+                <button id="checkDriver" class="ghost" data-i18n="driver_check">
+                  Проверить драйвер
+                </button>
+                <button id="driverHelpBtn" class="ghost" data-i18n="driver_help_btn">
+                  Инструкция
+                </button>
+                <span id="driverStatus" class="pill muted" data-i18n="driver_unknown">
+                  Драйвер не проверен
+                </span>
+              </div>
+              <div id="driverHelp" class="driver-help hidden">
+                <div class="driver-tabs">
+                  <button class="driver-tab active" data-os="mac" data-i18n="os_mac">
+                    macOS
+                  </button>
+                  <button class="driver-tab" data-os="win" data-i18n="os_windows">
+                    Windows
+                  </button>
+                  <button class="driver-tab" data-os="linux" data-i18n="os_linux">
+                    Linux
+                  </button>
+                </div>
+                <div class="driver-panel" data-os="mac">
+                  <div data-i18n="driver_mac_1">
+                    Установите BlackHole (2ch) и создайте Multi‑Output Device.
+                  </div>
+                  <div data-i18n="driver_mac_2">
+                    Выход системы → Multi‑Output, вход агента → BlackHole.
+                  </div>
+                  <a
+                    class="driver-link"
+                    href="https://existential.audio/blackhole/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    BlackHole — скачать
+                  </a>
+                </div>
+                <div class="driver-panel hidden" data-os="win">
+                  <div data-i18n="driver_win_1">
+                    Установите VB‑CABLE.
+                  </div>
+                  <div data-i18n="driver_win_2">
+                    Выход системы → CABLE Input, вход агента → CABLE Output.
+                  </div>
+                  <a
+                    class="driver-link"
+                    href="https://vb-audio.com/Cable/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    VB‑CABLE — скачать
+                  </a>
+                </div>
+                <div class="driver-panel hidden" data-os="linux">
+                  <div data-i18n="driver_linux_1">
+                    Выберите “Monitor of …” для нужного sink в списке устройств.
+                  </div>
+                  <div data-i18n="driver_linux_2">
+                    Если нет monitor — включите loopback в PulseAudio/PipeWire.
+                  </div>
+                  <a
+                    class="driver-link"
+                    href="https://wiki.archlinux.org/title/PulseAudio/Examples#Loopback"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    PulseAudio loopback
+                  </a>
+                  <a
+                    class="driver-link"
+                    href="https://docs.pipewire.org/page_pulse.html"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    PipeWire (PulseAudio)
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="modeSettingsBrowser" class="mode-settings-panel" data-mode-panel="browser_screen_audio">
+            <div class="mode-settings-head">
+              <strong data-i18n="mode_settings_title">Настройки выбранного режима</strong>
+            </div>
+            <div class="hint" data-i18n="mode_settings_browser_hint">
+              Для браузерного захвата выберите вкладку/экран и включите “Share audio”.
+            </div>
+            <div class="hint" data-i18n="mode_settings_browser_hint_2">
+              Микрофон, язык и профиль качества настраиваются в блоке «Запись».
+            </div>
+          </div>
+
+          <div id="modeSettingsApi" class="mode-settings-panel" data-mode-panel="api_upload">
+            <div class="mode-settings-head">
+              <strong data-i18n="mode_settings_title">Настройки выбранного режима</strong>
+            </div>
+            <div class="hint" data-i18n="mode_settings_api_hint">
+              Подключение к встрече по API: по кнопкам «Старт/Стоп» агент пишет MP3 и затем формирует отчёты.
+            </div>
+            <div id="uploadModeHint" class="hint mode-hint"></div>
+            <div id="apiConnectBlock" class="mode-block">
+              <div class="field">
+                <label for="apiKey">
+                  <span data-i18n="api_key_label">API ключ (опционально)</span>
+                  <span class="help-tip" data-help-i18n="help_api_key" aria-label="help">?</span>
+                </label>
+                <input
+                  id="apiKey"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="X-API-Key"
+                  data-i18n-placeholder="api_key_placeholder"
+                />
+              </div>
+              <div class="field">
+                <label for="apiRecordUrl">
+                  <span data-i18n="api_record_url_label">Ссылка встречи</span>
+                  <span class="help-tip" data-help-i18n="help_api_meeting_url" aria-label="help">?</span>
+                </label>
+                <input
+                  id="apiRecordUrl"
+                  type="url"
+                  placeholder="https://..."
+                  data-i18n-placeholder="api_record_url_placeholder"
+                />
+              </div>
+              <div class="field">
+                <label for="apiRecordDuration">
+                  <span data-i18n="api_record_duration_label">Длительность (сек)</span>
+                  <span class="help-tip" data-help-i18n="help_api_duration" aria-label="help">?</span>
+                </label>
+                <input id="apiRecordDuration" type="number" min="5" step="5" value="900" />
+              </div>
+              <label class="checkbox">
+                <input id="apiRecordUpload" type="checkbox" checked disabled />
+                <span data-i18n="api_record_upload_label">Отправить запись в пайплайн агента</span>
+              </label>
+              <div id="apiRecordHint" class="hint" data-i18n="api_record_hint">
+                Запуск и остановка выполняются кнопками «Старт/Стоп» в блоке «Запись».
+              </div>
+            </div>
+          </div>
+
+          <div id="modeSettingsQuick" class="mode-settings-panel" data-mode-panel="link_fallback">
+            <div class="mode-settings-head">
+              <strong data-i18n="mode_settings_title">Настройки выбранного режима</strong>
+            </div>
+            <div id="uploadModeHintQuick" class="hint mode-hint"></div>
+            <div id="quickRecordBlock" class="mode-block">
+              <div class="hint" data-i18n="quick_record_title">Quick fallback запись</div>
+              <div class="field">
+                <label for="quickRecordUrl">
+                  <span data-i18n="quick_record_url_label">Ссылка встречи</span>
+                  <span class="help-tip" data-help-i18n="help_quick_url" aria-label="help">?</span>
+                </label>
+                <input
+                  id="quickRecordUrl"
+                  type="url"
+                  placeholder="https://..."
+                  data-i18n-placeholder="quick_record_url_placeholder"
+                />
+              </div>
+              <div class="field">
+                <label for="quickRecordDuration">
+                  <span data-i18n="quick_record_duration_label">Длительность (сек)</span>
+                  <span class="help-tip" data-help-i18n="help_quick_duration" aria-label="help">?</span>
+                </label>
+                <input id="quickRecordDuration" type="number" min="5" step="5" value="900" />
+              </div>
+              <div class="row">
+                <label class="checkbox">
+                  <input id="quickRecordTranscribe" type="checkbox" />
+                  <span data-i18n="quick_record_transcribe_label">Сделать локальную транскрибацию</span>
+                </label>
+                <label class="checkbox">
+                  <input id="quickRecordUpload" type="checkbox" />
+                  <span data-i18n="quick_record_upload_label">Отправить запись в пайплайн агента</span>
+                </label>
+              </div>
+              <div class="row">
+                <button id="quickRecordStart" class="ghost" data-i18n="quick_record_start_btn">
+                  Quick старт
+                </button>
+                <button
+                  id="quickRecordStop"
+                  class="ghost"
+                  data-i18n="quick_record_stop_btn"
+                  disabled
+                >
+                  Quick стоп
+                </button>
+                <span id="quickRecordState" class="pill muted" data-i18n="quick_record_state_idle"
+                  >Не запущено</span
+                >
+              </div>
+              <div id="quickRecordHint" class="hint" data-i18n="quick_record_hint_ready">
+                Fallback запись готова к запуску.
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="card card-connection">
-        <h2 data-i18n="connection_title">Подключение</h2>
-        <div class="field">
-          <label for="apiKey" data-i18n="api_key_label">API ключ (опционально)</label>
-          <input
-            id="apiKey"
-            type="password"
-            autocomplete="off"
-            placeholder="X-API-Key"
-            data-i18n-placeholder="api_key_placeholder"
-          />
-        </div>
+        <h2 data-i18n="connection_title">Контекст интервью</h2>
         <div class="field interview-meta">
-          <label data-i18n="interview_meta_title">Контекст интервью (обязательно)</label>
+          <label>
+            <span data-i18n="interview_meta_title">Контекст интервью (опционально)</span>
+            <span class="help-tip" data-help-i18n="help_interview_meta" aria-label="help">?</span>
+          </label>
           <div class="meta-grid">
             <input
               id="metaCandidateName"
@@ -119,119 +363,7 @@
             />
           </div>
           <div class="hint" data-i18n="interview_meta_hint">
-            Эти поля обязательны для объективного сравнения кандидатов между интервью.
-          </div>
-        </div>
-        <div class="field">
-          <label for="llmModelSelect" data-i18n="llm_model_label">LLM модель</label>
-          <div class="row llm-row">
-            <select id="llmModelSelect"></select>
-            <button id="scanLlmModels" class="ghost" data-i18n="llm_scan_btn">
-              Сканировать
-            </button>
-            <button id="applyLlmModel" class="ghost" data-i18n="llm_apply_btn">
-              Сменить модель
-            </button>
-          </div>
-          <div id="llmStatusText" class="hint llm-status" data-i18n="llm_status_loading">
-            Загружаем настройки LLM...
-          </div>
-        </div>
-        <div id="deviceModeBlock" class="mode-block">
-          <div class="field">
-            <label for="deviceSelect" data-i18n="device_label">Источник аудио</label>
-            <div class="row">
-              <select id="deviceSelect"></select>
-              <button id="refreshDevices" class="ghost" data-i18n="refresh_devices">
-                Обновить
-              </button>
-            </div>
-          </div>
-          <div class="hint" data-i18n="device_hint">
-            Выберите виртуальный драйвер захвата системного звука.
-          </div>
-          <div id="deviceStatusText" class="hint device-status" data-i18n="device_status_unknown">
-            Устройства не проверены.
-          </div>
-          <div class="row">
-            <button id="checkDriver" class="ghost" data-i18n="driver_check">
-              Проверить драйвер
-            </button>
-            <button id="driverHelpBtn" class="ghost" data-i18n="driver_help_btn">
-              Инструкция
-            </button>
-            <span id="driverStatus" class="pill muted" data-i18n="driver_unknown">
-              Драйвер не проверен
-            </span>
-          </div>
-          <div id="driverHelp" class="driver-help hidden">
-            <div class="driver-tabs">
-              <button class="driver-tab active" data-os="mac" data-i18n="os_mac">
-                macOS
-              </button>
-              <button class="driver-tab" data-os="win" data-i18n="os_windows">
-                Windows
-              </button>
-              <button class="driver-tab" data-os="linux" data-i18n="os_linux">
-                Linux
-              </button>
-            </div>
-            <div class="driver-panel" data-os="mac">
-              <div data-i18n="driver_mac_1">
-                Установите BlackHole (2ch) и создайте Multi‑Output Device.
-              </div>
-              <div data-i18n="driver_mac_2">
-                Выход системы → Multi‑Output, вход агента → BlackHole.
-              </div>
-              <a
-                class="driver-link"
-                href="https://existential.audio/blackhole/"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                BlackHole — скачать
-              </a>
-            </div>
-            <div class="driver-panel hidden" data-os="win">
-              <div data-i18n="driver_win_1">
-                Установите VB‑CABLE.
-              </div>
-              <div data-i18n="driver_win_2">
-                Выход системы → CABLE Input, вход агента → CABLE Output.
-              </div>
-              <a
-                class="driver-link"
-                href="https://vb-audio.com/Cable/"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                VB‑CABLE — скачать
-              </a>
-            </div>
-            <div class="driver-panel hidden" data-os="linux">
-              <div data-i18n="driver_linux_1">
-                Выберите “Monitor of …” для нужного sink в списке устройств.
-              </div>
-              <div data-i18n="driver_linux_2">
-                Если нет monitor — включите loopback в PulseAudio/PipeWire.
-              </div>
-              <a
-                class="driver-link"
-                href="https://wiki.archlinux.org/title/PulseAudio/Examples#Loopback"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                PulseAudio loopback
-              </a>
-              <a
-                class="driver-link"
-                href="https://docs.pipewire.org/page_pulse.html"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                PipeWire (PulseAudio)
-              </a>
-            </div>
+            Поля не обязательны, но помогают делать сравнимую аналитику между интервью.
           </div>
         </div>
       </section>
@@ -240,78 +372,68 @@
         <h2 data-i18n="recording_title">Запись</h2>
         <div id="recordingModeHint" class="hint mode-hint"></div>
         <div class="field">
-          <label data-i18n="capture_mode_label">Режим захвата</label>
-          <div class="row">
-            <label class="radio">
-              <input type="radio" name="captureMode" value="system" checked />
-              <span data-i18n="capture_mode_system">Системный звук</span>
-            </label>
-            <label class="radio">
-              <input type="radio" name="captureMode" value="screen" />
-              <span data-i18n="capture_mode_screen">Экран + звук</span>
-            </label>
-          </div>
-          <div class="hint" data-i18n="capture_mode_hint">
-            Для экрана со звуком включите “Share audio” в окне браузера.
-          </div>
-          <div class="hint" data-i18n="capture_mode_system_note">
-            Важно: «Системный звук» пишет только выбранный виртуальный источник (не прямой микрофон).
-          </div>
-          <label class="checkbox include-mic">
-            <input id="includeMic" type="checkbox" checked />
-            <span data-i18n="include_mic_label">Добавлять микрофон в запись</span>
+          <label>
+            <span data-i18n="capture_mode_label">Режим захвата</span>
+            <span class="help-tip" data-help-i18n="help_capture_method" aria-label="help">?</span>
           </label>
-          <div class="field mic-picker">
-            <label for="micSelect" data-i18n="mic_input_label">Микрофон</label>
-            <select id="micSelect">
-              <option value="" data-i18n="mic_input_auto">Авто (рекомендуется)</option>
-            </select>
+          <div class="mode-chip-row">
+            <span id="captureMethodChip" class="pill muted" data-i18n="capture_mode_system">Системный звук</span>
           </div>
-          <div class="field language-profile-picker">
-            <label for="languageProfileSelect" data-i18n="language_profile_label">Язык интервью</label>
-            <select id="languageProfileSelect">
-              <option value="mixed" data-i18n="language_profile_mixed">Mixed (RU + EN)</option>
-              <option value="ru" data-i18n="language_profile_ru">Русский</option>
-              <option value="en" data-i18n="language_profile_en">English</option>
-            </select>
-            <div class="hint" data-i18n="language_profile_hint">
-              Влияет на языковую подсказку STT и точность распознавания терминов.
+          <div id="realtimeOnlySettings">
+            <div class="hint" data-i18n="capture_mode_hint">
+              Для экрана со звуком включите “Share audio” в окне браузера.
+            </div>
+            <div class="hint" data-i18n="capture_mode_system_note">
+              Важно: «Системный звук» пишет только выбранный виртуальный источник (не прямой микрофон).
+            </div>
+            <label class="checkbox include-mic">
+              <input id="includeMic" type="checkbox" checked />
+              <span data-i18n="include_mic_label">Добавлять микрофон в запись</span>
+              <span class="help-tip" data-help-i18n="help_mic" aria-label="help">?</span>
+            </label>
+            <div class="field mic-picker">
+              <label for="micSelect">
+                <span data-i18n="mic_input_label">Микрофон</span>
+                <span class="help-tip" data-help-i18n="help_mic" aria-label="help">?</span>
+              </label>
+              <select id="micSelect">
+                <option value="" data-i18n="mic_input_auto">Авто (рекомендуется)</option>
+              </select>
             </div>
           </div>
-          <div class="field quality-picker">
-            <label data-i18n="quality_profile_label">Профиль качества</label>
-            <div class="segmented">
-              <button id="qualityFast" class="ghost" data-quality="fast" data-i18n="quality_fast">
-                Fast
-              </button>
-              <button
-                id="qualityBalanced"
-                class="ghost active"
-                data-quality="balanced"
-                data-i18n="quality_balanced"
-              >
-                Balanced
-              </button>
-              <button
-                id="qualityAccurate"
-                class="ghost"
-                data-quality="accurate"
-                data-i18n="quality_accurate"
-              >
-                Accurate
-              </button>
-            </div>
-            <div id="qualityHint" class="hint" data-i18n="quality_balanced_desc">
-              Баланс точности и задержки.
-            </div>
+          <div class="hint" data-i18n="recording_stt_moved_hint">
+            STT-настройки перенесены в блок «Результаты»: они применяются при формировании отчётов из MP3.
           </div>
+        </div>
+        <div class="status">
+          <span data-i18n="status_label">Статус:</span>
+          <span id="statusText" class="status-pill idle" data-i18n="status_idle"
+            >Ожидание</span
+          >
+        </div>
+        <div id="statusHint" class="status-hint"></div>
+        <div class="countdown">
+          <span data-i18n="countdown_label">Отсчёт:</span>
+          <span id="countdownValue">—</span>
+        </div>
+        <div class="controls">
+          <button id="startBtn" class="primary" data-i18n="start_btn">Старт</button>
+          <button id="stopBtn" class="secondary" data-i18n="stop_btn" disabled>
+            Стоп
+          </button>
+        </div>
+        <details class="advanced-block">
+          <summary data-i18n="recording_advanced_title">Расширенная диагностика (опционально)</summary>
           <div class="diag-block">
             <div class="row diag-header">
-              <strong data-i18n="diag_title">Проверка перед стартом</strong>
+              <strong>
+                <span data-i18n="diag_title">Проверка захвата перед стартом</span>
+                <span class="help-tip" data-help-i18n="help_diagnostics" aria-label="help">?</span>
+              </strong>
               <button id="runDiagnostics" class="ghost" data-i18n="diag_run_btn">Проверить</button>
             </div>
             <div id="diagHint" class="hint" data-i18n="diag_hint_idle">
-              Запустите диагностику перед записью.
+              Запустите проверку только если есть проблемы со звуком.
             </div>
             <div class="diag-grid">
               <div id="diagAudio" class="diag-item muted" data-i18n="diag_audio_access">
@@ -323,221 +445,341 @@
               <div id="diagMic" class="diag-item muted" data-i18n="diag_mic_level">
                 Уровень mic
               </div>
-              <div id="diagStt" class="diag-item muted" data-i18n="diag_stt_ready">
-                STT готов
+              <div id="diagStt" class="diag-item muted" data-i18n="diag_mp3_ready">
+                MP3 поток готов
               </div>
-              <div id="diagLlm" class="diag-item muted" data-i18n="diag_llm_ready">
+              <div id="diagLlm" class="diag-item muted hidden" data-i18n="diag_llm_ready">
                 LLM доступен
               </div>
             </div>
           </div>
-        </div>
-        <div class="status">
-          <span data-i18n="status_label">Статус:</span>
-          <span id="statusText" class="status-pill idle" data-i18n="status_idle"
-            >Ожидание</span
-          >
-        </div>
-        <div id="statusHint" class="status-hint"></div>
-        <div id="recognitionDiagnosis" class="status-hint muted" data-i18n="diag_reason_none">
-          Диагноз: пока данных недостаточно.
-        </div>
-        <div class="countdown">
-          <span data-i18n="countdown_label">Отсчёт:</span>
-          <span id="countdownValue">—</span>
-        </div>
-        <div class="controls">
-          <button id="startBtn" class="primary" data-i18n="start_btn">Старт</button>
-          <button id="stopBtn" class="secondary" data-i18n="stop_btn" disabled>
-            Стоп
-          </button>
-        </div>
-        <div class="meter">
-          <div class="meter-bar" id="levelBar"></div>
-        </div>
-        <div class="meter-detail">
-          <div class="meter-row">
-            <span id="systemLevelText" data-i18n="meter_system_label">System: —</span>
-            <div class="meter meter-mini"><div class="meter-bar" id="systemLevelBar"></div></div>
+          <div class="meter">
+            <div class="meter-bar" id="levelBar"></div>
           </div>
-          <div class="meter-row">
-            <span id="micLevelText" data-i18n="meter_mic_label">Mic: —</span>
-            <div class="meter meter-mini"><div class="meter-bar" id="micLevelBar"></div></div>
-          </div>
-        </div>
-        <div class="signal-row">
-          <span id="signalText" data-i18n="signal_waiting">Сигнал: ожидание</span>
-          <button id="checkSignal" class="ghost" data-i18n="signal_check">
-            Проверить захват
-          </button>
-        </div>
-        <div class="meta">
-          <div>
-            <span data-i18n="meeting_id_label">Meeting ID:</span>
-            <span id="meetingIdText">—</span>
-          </div>
-          <div>
-            <span data-i18n="chunks_label">Чанки:</span>
-            <span id="chunkCount">0</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="card card-upload">
-        <h2 data-i18n="upload_title">Загрузка конференции</h2>
-        <div id="uploadModeHint" class="hint mode-hint"></div>
-        <div id="uploadAudioBlock" class="mode-block">
-          <div class="field">
-            <label data-i18n="upload_audio_label">Аудио файл</label>
-            <div class="row">
-              <input id="uploadAudio" type="file" accept="audio/*" />
-              <button id="uploadAudioBtn" class="ghost" data-i18n="upload_audio_btn">
-                Загрузить аудио
-              </button>
+          <div class="meter-detail">
+            <div class="meter-row">
+              <span id="systemLevelText" data-i18n="meter_system_label">System: —</span>
+              <div class="meter meter-mini"><div class="meter-bar" id="systemLevelBar"></div></div>
+            </div>
+            <div class="meter-row">
+              <span id="micLevelText" data-i18n="meter_mic_label">Mic: —</span>
+              <div class="meter meter-mini"><div class="meter-bar" id="micLevelBar"></div></div>
             </div>
           </div>
-          <div class="field">
-            <label data-i18n="upload_video_label">Видео файл</label>
-            <div class="row">
-              <input id="uploadVideo" type="file" accept="video/*" disabled />
-              <button id="uploadVideoBtn" class="ghost" disabled data-i18n="upload_video_btn">
-                Видео (в разработке)
-              </button>
+          <div class="signal-row">
+            <span id="signalText" data-i18n="signal_waiting">Сигнал: ожидание</span>
+            <button id="checkSignal" class="ghost" data-i18n="signal_check">
+              Проверить захват
+            </button>
+          </div>
+          <div class="monitor-card">
+            <div class="monitor-title-row">
+              <strong data-i18n="monitor_title">Индикатор работы записи</strong>
+              <span class="help-tip" data-help-i18n="help_live_monitor" aria-label="help">?</span>
+            </div>
+            <div class="hint" id="monitorHint" data-i18n="monitor_hint">
+              Простыми словами показывает, слышит ли агент звук и фиксирует ли фразы.
+            </div>
+            <div class="monitor-grid">
+              <div class="monitor-item">
+                <span data-i18n="monitor_system_label">Системный звук</span>
+                <span id="monitorSystemState" class="pill muted" data-i18n="monitor_not_started">не запущено</span>
+              </div>
+              <div class="monitor-item">
+                <span data-i18n="monitor_mic_label">Микрофон</span>
+                <span id="monitorMicState" class="pill muted" data-i18n="monitor_not_started">не запущено</span>
+              </div>
+              <div class="monitor-item">
+                <span data-i18n="monitor_speech_now_label">Речь сейчас</span>
+                <span id="monitorSpeechNow" class="pill muted" data-i18n="monitor_not_started">не запущено</span>
+              </div>
+              <div class="monitor-item">
+                <span data-i18n="monitor_last_phrase_label">Последняя фраза</span>
+                <span id="monitorLastPhrase" class="monitor-value" data-i18n="monitor_last_never"
+                  >еще не зафиксировано</span
+                >
+              </div>
+              <div class="monitor-item">
+                <span data-i18n="monitor_segments_label">Фраз зафиксировано</span>
+                <span id="monitorSegmentsCount" class="monitor-value">0</span>
+              </div>
             </div>
           </div>
-          <div class="hint" data-i18n="upload_hint">
-            Видео‑анализ появится после интеграции мультимодальной LLM.
+          <div class="meta">
+            <div>
+              <span data-i18n="meeting_id_label">Meeting ID:</span>
+              <span id="meetingIdText">—</span>
+            </div>
+            <div>
+              <span data-i18n="chunks_label">Чанки:</span>
+              <span id="chunkCount">0</span>
+            </div>
           </div>
-        </div>
-        <div id="quickRecordBlock" class="mode-block">
-          <div class="hint" data-i18n="quick_record_title">Quick fallback запись</div>
-          <div class="field">
-            <label for="quickRecordUrl" data-i18n="quick_record_url_label">Ссылка встречи</label>
-            <input
-              id="quickRecordUrl"
-              type="url"
-              placeholder="https://..."
-              data-i18n-placeholder="quick_record_url_placeholder"
-            />
+          <div id="recognitionDiagnosis" class="status-hint muted" data-i18n="diag_reason_none">
+            Диагноз: пока данных недостаточно.
           </div>
-          <div class="field">
-            <label for="quickRecordDuration" data-i18n="quick_record_duration_label"
-              >Длительность (сек)</label
-            >
-            <input id="quickRecordDuration" type="number" min="5" step="5" value="900" />
-          </div>
-          <div class="row">
-            <label class="checkbox">
-              <input id="quickRecordTranscribe" type="checkbox" />
-              <span data-i18n="quick_record_transcribe_label">Сделать локальную транскрибацию</span>
-            </label>
-            <label class="checkbox">
-              <input id="quickRecordUpload" type="checkbox" />
-              <span data-i18n="quick_record_upload_label">Отправить запись в пайплайн агента</span>
-            </label>
-          </div>
-          <div class="row">
-            <button id="quickRecordStart" class="ghost" data-i18n="quick_record_start_btn">
-              Quick старт
-            </button>
-            <button
-              id="quickRecordStop"
-              class="ghost"
-              data-i18n="quick_record_stop_btn"
-              disabled
-            >
-              Quick стоп
-            </button>
-            <span id="quickRecordState" class="pill muted" data-i18n="quick_record_state_idle"
-              >Не запущено</span
-            >
-          </div>
-          <div id="quickRecordHint" class="hint" data-i18n="quick_record_hint_ready">
-            Fallback запись готова к запуску.
-          </div>
-        </div>
+        </details>
       </section>
 
       <section class="card card-results">
         <h2 data-i18n="records_title">Результаты</h2>
-        <div class="row">
-          <button id="chooseFolder" class="ghost" data-i18n="choose_folder">
-            Выбрать папку
-          </button>
-          <span id="folderStatus" class="pill muted" data-i18n="folder_not_selected">
-            Папка не выбрана
-          </span>
-        </div>
-        <div class="row">
-          <select id="recordsSelect"></select>
-          <button id="refreshRecords" class="ghost" data-i18n="records_refresh">
-            Обновить
-          </button>
-          <div class="record-menu-wrap">
-            <button id="recordMenuBtn" class="ghost menu-trigger" data-i18n="records_menu_btn">
-              ...
+
+        <div class="results-block">
+          <div class="results-block-head">
+            <strong data-i18n="results_mp3_title">1) MP3 после встречи</strong>
+          </div>
+          <div id="mp3SourceHint" class="hint" data-i18n="results_mp3_hint">
+            Выберите запись, задайте имя MP3 и сохраните файл в нужную папку.
+          </div>
+          <div class="row">
+            <button id="chooseFolder" class="ghost" data-i18n="choose_folder">
+              Выбрать папку
             </button>
-            <div id="recordMenu" class="record-menu hidden">
-              <button id="renameRecordBtn" class="ghost" data-i18n="record_menu_rename">
-                Переименовать запись
+            <span id="folderStatus" class="pill muted" data-i18n="folder_not_selected">
+              Папка не выбрана
+            </span>
+          </div>
+          <div class="row row-wrap">
+            <select id="recordsSelect"></select>
+            <button id="refreshRecords" class="ghost" data-i18n="records_refresh">
+              Обновить
+            </button>
+            <button id="renameRecordBtn" class="ghost" data-i18n="record_menu_rename">
+              Переименовать запись
+            </button>
+            <button id="saveCurrentMp3Btn" class="ghost" data-i18n="results_save_mp3_btn">
+              Сохранить MP3
+            </button>
+            <button id="importMp3Btn" class="ghost" data-i18n="results_import_mp3_btn">
+              Импорт MP3
+            </button>
+            <input id="importMp3Input" type="file" accept="audio/*" class="hidden-file-input" />
+          </div>
+        </div>
+
+        <div class="results-block">
+          <div class="results-block-head">
+            <strong data-i18n="results_report_title">2) TXT отчёт из MP3</strong>
+          </div>
+          <div class="hint" data-i18n="results_report_hint">
+            Выберите тип отчёта (грязный/чистый), задайте имя и сохраните TXT.
+          </div>
+          <div class="results-stt-settings">
+            <div class="file-title" data-i18n="results_stt_title">Настройки STT для отчётов</div>
+            <div class="field language-profile-picker">
+              <label for="languageProfileSelect">
+                <span data-i18n="language_profile_label">Язык интервью</span>
+                <span class="help-tip" data-help-i18n="help_language_profile" aria-label="help">?</span>
+              </label>
+              <select id="languageProfileSelect">
+                <option value="mixed" data-i18n="language_profile_mixed">Mixed (RU + EN)</option>
+                <option value="ru" data-i18n="language_profile_ru">Русский</option>
+                <option value="en" data-i18n="language_profile_en">English</option>
+              </select>
+              <div class="hint" data-i18n="language_profile_hint">
+                Влияет на языковую подсказку STT и точность распознавания терминов.
+              </div>
+            </div>
+            <div class="field quality-picker">
+              <label>
+                <span data-i18n="quality_profile_label">Профиль качества</span>
+                <span class="help-tip" data-help-i18n="help_quality_profile" aria-label="help">?</span>
+              </label>
+              <div class="segmented">
+                <button id="qualityFast" class="ghost" data-quality="fast" data-i18n="quality_fast">
+                  Fast
+                </button>
+                <button
+                  id="qualityBalanced"
+                  class="ghost active"
+                  data-quality="balanced"
+                  data-i18n="quality_balanced"
+                >
+                  Balanced
+                </button>
+                <button
+                  id="qualityAccurate"
+                  class="ghost"
+                  data-quality="accurate"
+                  data-i18n="quality_accurate"
+                >
+                  Accurate
+                </button>
+              </div>
+              <div id="qualityHint" class="hint" data-i18n="quality_balanced_desc">
+                Баланс точности и задержки.
+              </div>
+            </div>
+          </div>
+          <div class="results-source">
+            <span class="label" data-i18n="results_source_label">Источник</span>
+            <div class="segmented">
+              <button id="resultsRaw" class="ghost active" data-source="raw">
+                Raw
               </button>
-              <button id="saveRecordMp3Btn" class="ghost" data-i18n="record_menu_save_mp3">
-                Сохранить MP3
+              <button id="resultsClean" class="ghost" data-source="clean">
+                Clean
               </button>
             </div>
           </div>
-        </div>
-        <div class="results-source">
-          <span class="label" data-i18n="results_source_label">Источник</span>
-          <div class="segmented">
-            <button id="resultsRaw" class="ghost active" data-source="raw">
-              Raw
+          <div class="row">
+            <input
+              id="reportNameInput"
+              type="text"
+              placeholder="report_clean"
+              data-i18n-placeholder="results_report_name_placeholder"
+            />
+            <button id="generateReportBtn" class="ghost" data-i18n="results_generate_report_btn">
+              Сформировать TXT
             </button>
-            <button id="resultsClean" class="ghost" data-source="clean">
-              Clean
+            <button id="downloadReportBtn" class="ghost" data-i18n="results_download_report_btn">
+              Сохранить TXT
             </button>
           </div>
-        </div>
-        <div class="file-row">
           <div class="file-info">
-            <div class="file-title" data-i18n="file_transcript">Файл транскрипта</div>
-            <div id="resultFileName" class="file-name">raw.txt</div>
-          </div>
-          <div class="file-actions">
-            <button
-              id="downloadArtifactBtn"
-              class="ghost"
-              data-action="download"
-              data-i18n="file_action_download"
-            >
-              Скачать
-            </button>
-            <button
-              id="reportArtifactBtn"
-              class="ghost"
-              data-action="report"
-              data-i18n="file_action_report"
-            >
-              Отчёт
-            </button>
-            <button
-              id="structuredArtifactBtn"
-              class="ghost"
-              data-action="structured"
-              data-i18n="file_action_table"
-            >
-              Таблица
-            </button>
-            <button
-              id="audioArtifactBtn"
-              class="ghost"
-              data-action="audio"
-              data-i18n="file_action_mp3"
-            >
-              MP3
-            </button>
+            <div class="file-title" data-i18n="results_current_report_file">Текущий файл отчёта</div>
+            <div id="resultFileName" class="file-name">report_raw.txt</div>
           </div>
         </div>
+
+        <div class="results-block">
+          <div class="results-block-head">
+            <strong data-i18n="results_convert_title">3) Конвертация готовых отчётов</strong>
+          </div>
+          <div class="field">
+            <label for="llmModelSelect">
+              <span data-i18n="llm_model_label">LLM модель</span>
+              <span class="help-tip" data-help-i18n="help_llm" aria-label="help">?</span>
+            </label>
+            <div class="row llm-row">
+              <select id="llmModelSelect"></select>
+              <button id="scanLlmModels" class="ghost" data-i18n="llm_scan_btn">
+                Сканировать
+              </button>
+              <button id="applyLlmModel" class="ghost" data-i18n="llm_apply_btn">
+                Сменить модель
+              </button>
+            </div>
+            <div id="llmStatusText" class="hint llm-status" data-i18n="llm_status_loading">
+              Загружаем настройки LLM...
+            </div>
+          </div>
+          <div class="hint" data-i18n="results_convert_hint">
+            Для каждого типа отчёта выберите запись и формат выгрузки.
+          </div>
+          <div class="report-lane-grid">
+            <div class="report-lane">
+              <div class="file-title" data-i18n="results_raw_lane_title">Грязный отчёт (Raw)</div>
+              <div class="row">
+                <select id="rawReportSelect"></select>
+                <input
+                  id="rawReportNameInput"
+                  type="text"
+                  placeholder="raw_report_export"
+                  data-i18n-placeholder="results_raw_report_name_placeholder"
+                />
+              </div>
+              <div class="file-actions report-actions">
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="report_txt"
+                  data-export-source="raw"
+                  data-i18n="results_export_txt"
+                >
+                  TXT
+                </button>
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="report_json"
+                  data-export-source="raw"
+                  data-i18n="results_export_json"
+                >
+                  JSON
+                </button>
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="structured_csv"
+                  data-export-source="raw"
+                  data-i18n="results_export_csv"
+                >
+                  CSV
+                </button>
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="structured_json"
+                  data-export-source="raw"
+                  data-i18n="results_export_table_json"
+                >
+                  Таблица JSON
+                </button>
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="senior_brief"
+                  data-export-source="raw"
+                  data-i18n="results_export_senior"
+                >
+                  Senior brief
+                </button>
+              </div>
+            </div>
+
+            <div class="report-lane">
+              <div class="file-title" data-i18n="results_clean_lane_title">Чистый отчёт (Clean)</div>
+              <div class="row">
+                <select id="cleanReportSelect"></select>
+                <input
+                  id="cleanReportNameInput"
+                  type="text"
+                  placeholder="clean_report_export"
+                  data-i18n-placeholder="results_clean_report_name_placeholder"
+                />
+              </div>
+              <div class="file-actions report-actions">
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="report_txt"
+                  data-export-source="clean"
+                  data-i18n="results_export_txt"
+                >
+                  TXT
+                </button>
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="report_json"
+                  data-export-source="clean"
+                  data-i18n="results_export_json"
+                >
+                  JSON
+                </button>
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="structured_csv"
+                  data-export-source="clean"
+                  data-i18n="results_export_csv"
+                >
+                  CSV
+                </button>
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="structured_json"
+                  data-export-source="clean"
+                  data-i18n="results_export_table_json"
+                >
+                  Таблица JSON
+                </button>
+                <button
+                  class="ghost report-action-btn"
+                  data-export-kind="senior_brief"
+                  data-export-source="clean"
+                  data-i18n="results_export_senior"
+                >
+                  Senior brief
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="compare-block">
           <div class="row compare-header">
             <strong data-i18n="compare_title">Сравнение интервью</strong>
@@ -574,38 +816,6 @@
         </div>
       </section>
 
-      <section class="card card-transcript">
-        <h2 data-i18n="transcript_title">Транскрипт</h2>
-        <div class="transcript-grid">
-          <div class="transcript-box">
-            <div class="transcript-header">
-              <span data-i18n="raw_label">Raw</span>
-              <span class="delay-note" data-i18n="raw_live">Live</span>
-            </div>
-            <textarea
-              id="transcriptRaw"
-              class="transcript-area"
-              readonly
-              placeholder="..."
-              data-i18n-placeholder="transcript_placeholder_raw"
-            ></textarea>
-          </div>
-          <div class="transcript-box">
-            <div class="transcript-header">
-              <span data-i18n="clean_label">Clean</span>
-              <span class="delay-note" data-i18n="clean_delay">~3–4 сек</span>
-            </div>
-            <textarea
-              id="transcriptClean"
-              class="transcript-area"
-              readonly
-              placeholder="..."
-              data-i18n-placeholder="transcript_placeholder_clean"
-            ></textarea>
-          </div>
-        </div>
-      </section>
-
     </main>
 
     <footer class="footer">
@@ -614,6 +824,6 @@
       </span>
     </footer>
 
-    <script src="/ui/app.js?v=20260213c"></script>
+    <script src="/ui/app.js?v=20260218c"></script>
   </body>
 </html>

@@ -8,6 +8,7 @@ const state = {
   streamDeviceId: "",
   streamKey: "",
   screenAudioMissing: false,
+  screenAudioDriverFallback: false,
   micAdded: false,
   inputStreams: [],
   audioContext: null,
@@ -21,6 +22,14 @@ const state = {
     mic: 0,
   },
   meterMode: "",
+  monitor: {
+    systemHeard: false,
+    micHeard: false,
+    speechNow: false,
+    lastPhraseAt: 0,
+    segmentCount: 0,
+    startedAt: 0,
+  },
   signalSmooth: 0,
   signalState: "signal_waiting",
   mixContext: null,
@@ -52,6 +61,7 @@ const state = {
     raw: new Map(),
     enhanced: new Map(),
   },
+  transcriptUiState: "waiting",
   nonEmptyRawUpdates: 0,
   pendingChunks: [],
   wsReconnectTimer: null,
@@ -83,6 +93,10 @@ const state = {
   quickPollTimer: null,
   compareItems: [],
   recordsMeta: new Map(),
+  reportMeetingSelection: {
+    raw: "",
+    clean: "",
+  },
   captureQuality: "balanced",
   languageProfile: "mixed",
   diagnosticsLast: null,
@@ -98,12 +112,19 @@ const WS_HEARTBEAT_INTERVAL_MS = 12000;
 const WS_PONG_TIMEOUT_MS = 25000;
 const WS_BOOTSTRAP_GRACE_MS = 90000;
 const MEDIA_BUSY_RETRY_DELAYS_MS = [220, 480, 900, 1600];
+const SCREEN_AUDIO_RETRY_DELAYS_MS = [280, 640, 1200, 1900];
 const DIAG_AUDIO_RETRY_DELAYS_MS = [220, 520, 1100];
 const SIGNAL_SMOOTHING_ALPHA = 0.24;
 const SIGNAL_OK_ENTER = 0.08;
 const SIGNAL_OK_EXIT = 0.06;
 const SIGNAL_LOW_ENTER = 0.025;
 const SIGNAL_LOW_EXIT = 0.015;
+const SYSTEM_STREAM_GAIN = 1.9;
+const SYSTEM_STREAM_GAIN_SCREEN = 2.15;
+const MIC_STREAM_GAIN = 1.12;
+const DIAG_SYSTEM_MIN_LEVEL = 0.01;
+const DIAG_SYSTEM_CRITICAL_MIN = 0.006;
+const DIAG_MIC_MIN_LEVEL = 0.008;
 const CAPTURE_LOCK_KEY = "9second_capture_active_lock";
 const CAPTURE_LOCK_TTL_MS = 20000;
 const CAPTURE_LOCK_HEARTBEAT_MS = 4000;
@@ -156,8 +177,8 @@ const WORK_MODE_CONFIGS = {
     labelKey: "work_mode_api",
     descriptionKey: "work_mode_desc_api",
     supportsRealtime: false,
-    supportsUpload: true,
-    supportsQuick: false,
+    supportsUpload: false,
+    supportsQuick: true,
     forceCaptureMode: null,
     useDeviceDriver: false,
     contextMode: "api_upload",
@@ -191,21 +212,38 @@ const i18n = {
     theme_light: "Светлая",
     theme_dark: "Тёмная",
     work_mode_title: "Режим работы",
+    help_work_mode:
+      "Выберите один из 4 способов записи встречи. Активный способ включает только свои настройки.",
+    help_mode_driver:
+      "Запись системного звука через виртуальный драйвер (BlackHole/VB-CABLE/Monitor).",
+    help_mode_browser:
+      "Захват вкладки/экрана браузером. Для системного звука включайте Share audio.",
+    help_mode_api:
+      "Подключение к встрече через API-коннектор. Запись MP3 запускается кнопками Старт/Стоп.",
+    help_mode_quick:
+      "Fallback-запись по ссылке встречи, когда основной захват недоступен.",
     work_mode_hint:
       "Выберите один режим: его настройки будут активны, остальные секции станут неактивными.",
     work_mode_active_label: "Активный режим:",
     work_mode_driver: "Драйвер: системный звук",
     work_mode_browser: "Браузер: экран + звук",
-    work_mode_api: "API/файл: загрузка аудио",
+    work_mode_api: "API: подключение к встрече",
     work_mode_quick: "Ссылка: quick fallback",
     work_mode_desc_driver:
       "Запись встреч в realtime через виртуальный драйвер (BlackHole/VB-CABLE/Monitor).",
     work_mode_desc_browser:
       "Запись через браузерный захват экрана и звука (Share audio в диалоге обязателен).",
     work_mode_desc_api:
-      "Пост-обработка: загрузка готового аудиофайла в пайплайн агента.",
+      "Подключение к видеовстрече через API-коннектор и запись MP3 без локального live-транскрипта.",
     work_mode_desc_quick:
       "Fallback-режим: запись встречи по ссылке через quick recorder и опциональная отправка в агент.",
+    mode_settings_title: "Настройки выбранного режима",
+    mode_settings_browser_hint:
+      "Для браузерного захвата выберите вкладку/экран и включите “Share audio”.",
+    mode_settings_browser_hint_2:
+      "Микрофон настраивается в «Запись», STT-параметры для отчётов — в «Результаты».",
+    mode_settings_api_hint:
+      "Укажите параметры API-подключения. Запуск и остановка записи MP3 выполняются в блоке «Запись».",
     work_mode_recording_disabled:
       "Режим записи выключен для текущего профиля. Переключитесь на «Драйвер» или «Браузер».",
     work_mode_upload_disabled:
@@ -219,21 +257,40 @@ const i18n = {
     err_work_mode_realtime_only:
       "Выбранный режим не поддерживает realtime запись. Переключитесь на «Драйвер» или «Браузер».",
     err_work_mode_upload_only:
-      "Загрузка аудио доступна только в режиме «API/файл: загрузка аудио».",
+      "Прямая загрузка файла отключена в режимах захвата. Используйте «Импорт MP3» в блоке «Результаты».",
     err_work_mode_quick_only:
       "Quick fallback доступен только в режиме «Ссылка: quick fallback».",
-    connection_title: "Подключение",
+    connection_title: "Контекст интервью",
     api_key_label: "API ключ (опционально)",
+    help_api_key: "Нужен только если на локальном API включена авторизация.",
     api_key_placeholder: "X-API-Key",
-    interview_meta_title: "Контекст интервью (обязательно)",
+    api_record_url_label: "Ссылка встречи",
+    help_api_meeting_url:
+      "URL встречи для API-коннектора. После старта агент пишет MP3 и отправляет данные в пайплайн.",
+    api_record_url_placeholder: "https://...",
+    api_record_duration_label: "Длительность (сек)",
+    help_api_duration:
+      "Ограничение времени API-захвата. По достижении лимита запись остановится автоматически.",
+    api_record_upload_label: "Отправить запись в пайплайн агента",
+    api_record_hint:
+      "Нажмите «Старт» в блоке «Запись»: агент подключится к встрече и начнет запись MP3.",
+    api_record_started: "API-захват запущен. Идёт запись MP3.",
+    api_record_stopped: "Останавливаем API-захват...",
+    api_record_completed: "API-запись завершена. MP3 доступен в блоке «Результаты».",
+    api_record_failed: "Ошибка API-записи. Проверьте ссылку встречи и ключ API.",
+    interview_meta_title: "Контекст интервью (опционально)",
+    help_interview_meta:
+      "Рекомендуется заполнить для сравнимой аналитики между интервью. Поля не обязательны.",
     meta_candidate_name: "Имя кандидата",
     meta_candidate_id: "Candidate ID",
     meta_vacancy: "Вакансия",
     meta_level: "Уровень (Junior/Middle/Senior)",
     meta_interviewer: "Интервьюер",
     interview_meta_hint:
-      "Эти поля обязательны для сравнимой аналитики между интервью.",
+      "Поля не обязательны, но помогают делать сравнимую аналитику между интервью.",
     llm_model_label: "LLM модель",
+    help_llm:
+      "LLM участвует после записи: улучшает clean-текст и формирует итоговые отчеты/таблицы.",
     llm_scan_btn: "Сканировать",
     llm_apply_btn: "Сменить модель",
     llm_status_loading: "Загружаем настройки LLM...",
@@ -249,6 +306,8 @@ const i18n = {
     llm_model_placeholder: "Выберите модель",
     llm_model_missing: "Сначала выберите модель.",
     device_label: "Источник аудио",
+    help_device:
+      "Главный источник речи собеседника. Обычно это виртуальный драйвер системного звука.",
     refresh_devices: "Обновить",
     device_hint: "Выберите виртуальный драйвер захвата системного звука.",
     device_status_unknown: "Устройства не проверены.",
@@ -281,37 +340,49 @@ const i18n = {
     start_btn: "Старт",
     stop_btn: "Стоп",
     capture_mode_label: "Режим захвата",
+    help_capture_method:
+      "Показывает текущий способ захвата. Переключается в блоке «Режим работы».",
     capture_mode_system: "Системный звук",
     capture_mode_screen: "Экран + звук",
     capture_mode_hint: "Для экрана со звуком включите “Share audio” в окне браузера.",
     capture_mode_system_note:
       "Важно: в режиме «Системный звук» микрофон добавляется автоматически, чтобы записывать и голос, и системный трек.",
     include_mic_label: "Добавлять микрофон в запись",
+    help_mic:
+      "Добавляет ваш микрофон, чтобы в записи были слышны вопросы интервьюера.",
+    recording_stt_moved_hint:
+      "STT-настройки вынесены в «Результаты»: они используются при формировании отчётов из MP3.",
     mic_input_label: "Микрофон",
     mic_input_auto: "Авто (рекомендуется)",
     language_profile_label: "Язык интервью",
+    help_language_profile:
+      "Подсказка для STT по языку интервью. Улучшает точность терминов и имен.",
     language_profile_mixed: "Mixed (RU + EN)",
     language_profile_ru: "Русский",
     language_profile_en: "English",
     language_profile_hint:
       "Подсказка для STT: выберите язык интервью для лучшей точности терминов.",
     quality_profile_label: "Профиль качества",
+    help_quality_profile:
+      "Fast — быстрее, Accurate — точнее, Balanced — оптимальный профиль по умолчанию.",
     quality_fast: "Fast",
     quality_balanced: "Balanced",
     quality_accurate: "Accurate",
     quality_fast_desc: "Минимальная задержка, ниже точность, меньше нагрузка на CPU.",
     quality_balanced_desc: "Баланс точности и задержки. Рекомендуется по умолчанию.",
     quality_accurate_desc: "Максимальная точность, выше задержка и нагрузка на CPU.",
-    diag_title: "Проверка перед стартом",
+    diag_title: "Проверка MP3-захвата перед стартом",
+    help_diagnostics:
+      "Опциональная проверка перед записью: доступ к аудио, уровни system/mic и готовность MP3-потока.",
     diag_run_btn: "Проверить",
-    diag_hint_idle: "Запустите диагностику перед записью.",
+    diag_hint_idle: "Запустите проверку, если есть проблемы с захватом.",
     diag_hint_running: "Диагностика выполняется...",
     diag_hint_ok: "Диагностика пройдена. Можно запускать запись.",
-    diag_hint_fail: "Диагностика не пройдена. Исправьте пункты со статусом ошибки.",
+    diag_hint_fail: "Диагностика не пройдена. Исправьте источник/микрофон/MP3-поток.",
     diag_audio_access: "Доступ к аудио",
     diag_system_level: "Уровень system",
     diag_mic_level: "Уровень mic",
-    diag_stt_ready: "STT готов",
+    diag_mp3_ready: "MP3 поток готов",
     diag_llm_ready: "LLM доступен",
     diag_skip_not_required: "не обязательно",
     diag_stt_warming: "прогрев модели...",
@@ -321,11 +392,28 @@ const i18n = {
     meter_mic_label: "Mic: {level}",
     structured_insufficient_data: "Недостаточно данных для структурирования.",
     countdown_label: "Отсчёт:",
+    recording_advanced_title: "Расширенная диагностика (опционально)",
     signal_waiting: "Сигнал: ожидание",
     signal_ok: "Сигнал: есть",
     signal_low: "Сигнал: слабый",
     signal_no_audio: "Сигнал: нет аудио",
     signal_check: "Проверить захват",
+    monitor_title: "Индикатор работы записи",
+    monitor_hint:
+      "Показывает, слышит ли агент системный звук/микрофон и фиксирует ли аудио-сегменты в MP3.",
+    monitor_system_label: "Системный звук",
+    monitor_mic_label: "Микрофон",
+    monitor_speech_now_label: "Речь сейчас",
+    monitor_last_phrase_label: "Последний аудио-пик",
+    monitor_segments_label: "Сегментов MP3",
+    monitor_not_started: "не запущено",
+    monitor_state_heard: "слышно",
+    monitor_state_silent: "тишина",
+    monitor_state_speaking: "идет речь",
+    monitor_state_pause: "пауза",
+    monitor_last_never: "еще не зафиксировано",
+    help_live_monitor:
+      "Этот блок не распознаёт текст. Он показывает именно корректность захвата аудио в MP3.",
     signal_check_running: "Проверка захвата...",
     signal_check_blocked_recording: "Проверка захвата доступна только до старта записи.",
     signal_check_ok: "Захват работает: уровень сигнала обнаружен.",
@@ -339,18 +427,53 @@ const i18n = {
     transcript_title: "Транскрипт",
     raw_label: "Raw",
     clean_label: "Clean",
-    raw_live: "Live",
+    raw_post: "После Стоп",
     clean_delay: "~3–4 сек",
-    transcript_placeholder_raw: "Сырой текст будет появляться в реальном времени...",
-    transcript_placeholder_clean: "Чистый текст появится с небольшой задержкой...",
+    transcript_mode_record_first:
+      "Итоговый текст строится после завершения записи для максимальной точности.",
+    transcript_runtime_waiting: "Текст появится после завершения записи.",
+    transcript_runtime_recording: "Идёт запись. Live-транскрипт отключён для снижения нагрузки.",
+    transcript_runtime_loading: "Завершаем обработку MP3 и собираем итоговый текст...",
+    transcript_runtime_ready: "Итоговый текст готов.",
+    transcript_runtime_empty:
+      "Запись завершена, но текста пока нет. Проверьте источник аудио и сохраните MP3 для повторной обработки.",
+    transcript_empty_title: "Live-транскрипт отключен",
+    transcript_empty_hint:
+      "Во время записи показываются только индикаторы захвата. Итоговый текст появится после Стоп.",
+    transcript_placeholder_raw_post:
+      "Сырой текст появится после завершения записи (final pass по MP3).",
+    transcript_placeholder_clean_post:
+      "Чистый текст появится после завершения записи и финальной обработки.",
     records_title: "Результаты",
     records_refresh: "Обновить",
     records_menu_btn: "...",
     record_menu_rename: "Переименовать запись",
     record_menu_save_mp3: "Сохранить MP3",
-    compare_title: "Сравнение интервью",
+    results_mp3_title: "1) MP3 после встречи",
+    results_mp3_hint: "Выберите запись, задайте имя MP3 и сохраните файл в нужную папку.",
+    results_save_mp3_btn: "Сохранить MP3",
+    results_import_mp3_btn: "Импорт MP3",
+    results_report_title: "2) TXT отчёт из MP3",
+    results_report_hint: "Выберите тип отчёта (грязный/чистый), задайте имя и сохраните TXT.",
+    results_stt_title: "Настройки STT для отчётов",
+    results_report_name_placeholder: "report_clean",
+    results_generate_report_btn: "Сформировать TXT",
+    results_download_report_btn: "Сохранить TXT",
+    results_current_report_file: "Текущий файл отчёта",
+    results_convert_title: "3) Конвертация готовых отчётов",
+    results_convert_hint: "Для каждого типа отчёта выберите запись и формат выгрузки.",
+    results_raw_lane_title: "Грязный отчёт (Raw)",
+    results_clean_lane_title: "Чистый отчёт (Clean)",
+    results_raw_report_name_placeholder: "raw_report_export",
+    results_clean_report_name_placeholder: "clean_report_export",
+    results_export_txt: "TXT",
+    results_export_json: "JSON",
+    results_export_csv: "CSV",
+    results_export_table_json: "Таблица JSON",
+    results_export_senior: "Для сеньоров",
+    compare_title: "Сравнение интервью (опционально)",
     compare_refresh: "Обновить",
-    compare_hint_idle: "Сводка покажет сравнение кандидатов после генерации отчётов.",
+    compare_hint_idle: "Этот блок нужен только для сравнения нескольких интервью между собой.",
     compare_hint_loading: "Обновляем сравнительную сводку...",
     compare_hint_empty: "Нет данных для сравнения. Проведите интервью и сгенерируйте отчёты.",
     compare_hint_failed: "Не удалось загрузить сравнение интервью.",
@@ -368,16 +491,24 @@ const i18n = {
     folder_selected: "Папка выбрана",
     folder_not_supported: "Выбор папки недоступен",
     results_source_label: "Источник",
-    file_transcript: "Файл транскрипта",
+    file_transcript: "Файл отчёта",
     file_action_download: "Скачать",
     file_action_report: "Экспорт TXT",
     file_action_table: "Таблица",
     file_action_mp3: "MP3",
     prompt_rename_record: "Введите новое название записи:",
-    prompt_save_mp3_after_stop: "Запись завершена. Сохранить MP3 сейчас?",
+    prompt_save_mp3_after_stop: "Запись завершена. Укажите имя MP3 файла:",
     hint_record_renamed: "Название записи обновлено.",
     hint_mp3_saved: "MP3 сохранен.",
     hint_mp3_not_found: "MP3 пока недоступен для этой записи.",
+    hint_mp3_import_started: "Загружаем MP3 в агент и строим запись...",
+    hint_mp3_import_done: "MP3 импортирован. Можно формировать отчёты.",
+    hint_mp3_import_failed: "Не удалось импортировать MP3 файл.",
+    hint_report_generated: "TXT отчёт сформирован.",
+    hint_report_source_missing: "Сначала выберите запись для отчёта.",
+    hint_report_name_missing: "Укажите имя файла отчёта.",
+    hint_report_missing: "Отчёт пока не найден. Сначала нажмите «Сформировать TXT».",
+    report_picker_empty: "Нет записей",
     download_raw: "Скачать raw",
     download_clean: "Скачать clean",
     gen_report_raw: "Отчёт raw",
@@ -392,14 +523,20 @@ const i18n = {
     download_structured_clean_csv: "CSV clean",
     upload_title: "Загрузка конференции",
     upload_audio_label: "Аудио файл",
+    help_upload_audio:
+      "Загрузите готовый файл встречи. Агент построит MP3, транскрипт, отчеты и таблицы.",
     upload_audio_btn: "Загрузить аудио",
     upload_video_label: "Видео файл",
     upload_video_btn: "Видео (в разработке)",
-    upload_hint: "Видео‑анализ появится после интеграции мультимодальной LLM.",
+    upload_hint: "Импортируйте MP3 в блоке «Результаты», чтобы собрать raw/clean и отчёты.",
     quick_record_title: "Quick fallback запись",
     quick_record_url_label: "Ссылка встречи",
+    help_quick_url:
+      "Ссылка на встречу для quick fallback-рекордера, когда обычный захват недоступен.",
     quick_record_url_placeholder: "https://...",
     quick_record_duration_label: "Длительность (сек)",
+    help_quick_duration:
+      "Ограничение времени quick-записи. По достижении лимита запись остановится.",
     quick_record_transcribe_label: "Сделать локальную транскрибацию",
     quick_record_upload_label: "Отправить запись в пайплайн агента",
     quick_record_start_btn: "Quick старт",
@@ -441,7 +578,7 @@ const i18n = {
     err_no_device_selected:
       "Не выбран источник аудио. Выберите устройство и повторите.",
     err_interview_meta_missing:
-      "Заполните обязательные поля интервью: кандидат, vacancy, level и interviewer.",
+      "Поля интервью опциональны. Можно запускать запись без заполнения.",
     err_system_source_not_virtual:
       "Выбран не виртуальный системный источник. Для встреч выберите BlackHole/VB-CABLE/Monitor.",
     err_screen_audio_missing:
@@ -458,6 +595,8 @@ const i18n = {
       "Микрофон не удалось добавить. Разрешите доступ к микрофону и проверьте выбранный вход.",
     warn_screen_audio_mic_only:
       "Системный звук экрана не передаётся (Share audio выключен). Записывается только микрофон.",
+    warn_screen_audio_driver_fallback:
+      "Share audio не передал системный звук. Используем системный трек через виртуальный драйвер.",
     warn_media_fallback_pcm:
       "MediaRecorder недоступен, переключились на PCM-захват. Нагрузка на CPU может быть выше.",
     warn_capture_stream_interrupted:
@@ -465,7 +604,9 @@ const i18n = {
     warn_backup_upload_failed:
       "Резервный аудиофайл не удалось отправить. Часть хвоста записи может не попасть в финальный текст.",
     err_generic: "Не удалось начать запись. Проверьте права браузера и источник аудио.",
-    hint_recording_ok: "Запись запущена. Транскрипт будет обновляться в реальном времени.",
+    hint_recording_ok: "Запись запущена. Идёт захват аудио.",
+    hint_recording_record_first:
+      "Record-first режим: во время записи показывается только диагностика захвата. Итоговый текст появится после Стоп.",
     hint_stt_warmup:
       "Инициализация распознавания... первые фразы могут появиться с задержкой 5-20 секунд.",
     hint_no_speech_yet:
@@ -487,21 +628,38 @@ const i18n = {
     theme_light: "Light",
     theme_dark: "Dark",
     work_mode_title: "Work mode",
+    help_work_mode:
+      "Pick one of four interview capture modes. Only the active mode settings are applied.",
+    help_mode_driver:
+      "Capture system audio through virtual loopback driver (BlackHole/VB-CABLE/Monitor).",
+    help_mode_browser:
+      "Capture screen/tab via browser. Enable Share audio to include system sound.",
+    help_mode_api:
+      "Connect to meeting through API connector. MP3 recording starts with Start/Stop controls.",
+    help_mode_quick:
+      "Fallback capture by meeting URL when normal capture is not available.",
     work_mode_hint:
       "Choose one mode: only its settings stay active, other sections are dimmed and blocked.",
     work_mode_active_label: "Active mode:",
     work_mode_driver: "Driver: system audio",
     work_mode_browser: "Browser: screen + audio",
-    work_mode_api: "API/file: upload audio",
+    work_mode_api: "API: meeting connector",
     work_mode_quick: "Link: quick fallback",
     work_mode_desc_driver:
       "Realtime interview capture via virtual loopback driver (BlackHole/VB-CABLE/Monitor).",
     work_mode_desc_browser:
       "Browser capture of screen + audio (Share audio must be enabled).",
     work_mode_desc_api:
-      "Post-meeting flow: upload ready audio file to the agent pipeline.",
+      "Meeting API connector flow: record MP3 from meeting source without live transcript.",
     work_mode_desc_quick:
       "Fallback mode: capture meeting by URL via quick recorder and optionally upload to agent.",
+    mode_settings_title: "Selected mode settings",
+    mode_settings_browser_hint:
+      "For browser capture, choose tab/screen and enable “Share audio”.",
+    mode_settings_browser_hint_2:
+      "Microphone is configured in Recording. STT settings for reports are in Results.",
+    mode_settings_api_hint:
+      "Set API connector parameters. Start/Stop in Recording controls MP3 session.",
     work_mode_recording_disabled:
       "Recording controls are disabled for this profile. Switch to Driver or Browser mode.",
     work_mode_upload_disabled:
@@ -515,21 +673,40 @@ const i18n = {
     err_work_mode_realtime_only:
       "Selected mode does not support realtime recording. Switch to Driver or Browser.",
     err_work_mode_upload_only:
-      "Audio upload is available only in API/file mode.",
+      "Direct upload mode is removed from capture panels. Use MP3 import in Results.",
     err_work_mode_quick_only:
       "Quick fallback is available only in Link quick fallback mode.",
-    connection_title: "Connection",
+    connection_title: "Interview context",
     api_key_label: "API key (optional)",
+    help_api_key: "Needed only when authentication is enabled on local API.",
     api_key_placeholder: "X-API-Key",
-    interview_meta_title: "Interview context (required)",
+    api_record_url_label: "Meeting URL",
+    help_api_meeting_url:
+      "Meeting link used by API connector. After start, agent records MP3 and sends it to pipeline.",
+    api_record_url_placeholder: "https://...",
+    api_record_duration_label: "Duration (sec)",
+    help_api_duration:
+      "Maximum API capture duration. Recording auto-stops when limit is reached.",
+    api_record_upload_label: "Upload recording to agent pipeline",
+    api_record_hint:
+      "Press Start in Recording: agent connects by API and starts MP3 recording.",
+    api_record_started: "API capture started. MP3 recording is in progress.",
+    api_record_stopped: "Stopping API capture...",
+    api_record_completed: "API recording completed. MP3 is available in Results.",
+    api_record_failed: "API recording failed. Check meeting URL and API key.",
+    interview_meta_title: "Interview context (optional)",
+    help_interview_meta:
+      "Recommended for comparable analytics across interviews, but not required to start.",
     meta_candidate_name: "Candidate name",
     meta_candidate_id: "Candidate ID",
     meta_vacancy: "Vacancy",
     meta_level: "Level (Junior/Middle/Senior)",
     meta_interviewer: "Interviewer",
     interview_meta_hint:
-      "These fields are required for comparable analytics across interviews.",
+      "Fields are optional, but they improve comparability between interviews.",
     llm_model_label: "LLM model",
+    help_llm:
+      "LLM is used after recording to improve clean transcript and generate reports/tables.",
     llm_scan_btn: "Scan",
     llm_apply_btn: "Switch model",
     llm_status_loading: "Loading LLM settings...",
@@ -545,6 +722,8 @@ const i18n = {
     llm_model_placeholder: "Select model",
     llm_model_missing: "Select a model first.",
     device_label: "Audio source",
+    help_device:
+      "Primary interviewee speech source. Typically this is a virtual system loopback input.",
     refresh_devices: "Refresh",
     device_hint: "Select the virtual driver that captures system audio.",
     device_status_unknown: "Audio devices are not checked yet.",
@@ -577,36 +756,48 @@ const i18n = {
     start_btn: "Start",
     stop_btn: "Stop",
     capture_mode_label: "Capture mode",
+    help_capture_method:
+      "Shows currently active capture method. Switch mode in the Work mode section.",
     capture_mode_system: "System audio",
     capture_mode_screen: "Screen + audio",
     capture_mode_hint: "For screen + audio enable “Share audio” in the browser dialog.",
     capture_mode_system_note:
       "Important: in “System audio” mode microphone is added automatically to capture both voice and system track.",
     include_mic_label: "Include microphone in recording",
+    help_mic:
+      "Adds interviewer microphone so questions/comments are also present in recording.",
+    recording_stt_moved_hint:
+      "STT settings were moved to Results and are used for report generation from MP3.",
     mic_input_label: "Microphone",
     mic_input_auto: "Auto (recommended)",
     language_profile_label: "Interview language",
+    help_language_profile:
+      "STT language hint. Correct choice improves recognition of terms and names.",
     language_profile_mixed: "Mixed (RU + EN)",
     language_profile_ru: "Russian",
     language_profile_en: "English",
     language_profile_hint: "STT hint: choose interview language for better term accuracy.",
     quality_profile_label: "Quality profile",
+    help_quality_profile:
+      "Fast = lighter/faster, Accurate = better quality/higher load, Balanced = default.",
     quality_fast: "Fast",
     quality_balanced: "Balanced",
     quality_accurate: "Accurate",
     quality_fast_desc: "Lowest latency, lower accuracy, minimal CPU usage.",
     quality_balanced_desc: "Balanced accuracy and latency (recommended).",
     quality_accurate_desc: "Highest accuracy with higher latency and CPU load.",
-    diag_title: "Preflight diagnostics",
+    diag_title: "MP3 capture preflight checks",
+    help_diagnostics:
+      "Optional preflight: audio access, system/mic levels, and MP3 stream readiness.",
     diag_run_btn: "Run checks",
-    diag_hint_idle: "Run diagnostics before recording.",
+    diag_hint_idle: "Run this check only if you suspect capture issues.",
     diag_hint_running: "Running diagnostics...",
     diag_hint_ok: "Diagnostics passed. Recording can be started.",
-    diag_hint_fail: "Diagnostics failed. Fix failed checks before recording.",
+    diag_hint_fail: "Diagnostics failed. Fix source/microphone/MP3 stream before recording.",
     diag_audio_access: "Audio access",
     diag_system_level: "System level",
     diag_mic_level: "Mic level",
-    diag_stt_ready: "STT ready",
+    diag_mp3_ready: "MP3 stream ready",
     diag_llm_ready: "LLM ready",
     diag_skip_not_required: "not required",
     diag_stt_warming: "model warmup...",
@@ -616,11 +807,28 @@ const i18n = {
     meter_mic_label: "Mic: {level}",
     structured_insufficient_data: "Insufficient data for structured export.",
     countdown_label: "Countdown:",
+    recording_advanced_title: "Advanced diagnostics (optional)",
     signal_waiting: "Signal: waiting",
     signal_ok: "Signal: ok",
     signal_low: "Signal: low",
     signal_no_audio: "Signal: no audio",
     signal_check: "Check capture",
+    monitor_title: "Recording health monitor",
+    monitor_hint:
+      "Simple status for MP3 recording health: system/mic audibility and audio segment activity.",
+    monitor_system_label: "System audio",
+    monitor_mic_label: "Microphone",
+    monitor_speech_now_label: "Speech now",
+    monitor_last_phrase_label: "Last audio peak",
+    monitor_segments_label: "MP3 segments",
+    monitor_not_started: "not started",
+    monitor_state_heard: "heard",
+    monitor_state_silent: "silent",
+    monitor_state_speaking: "speaking",
+    monitor_state_pause: "pause",
+    monitor_last_never: "not detected yet",
+    help_live_monitor:
+      "This block does not transcribe text. It confirms MP3 capture health only.",
     signal_check_running: "Checking capture...",
     signal_check_blocked_recording: "Capture check is available only before recording starts.",
     signal_check_ok: "Capture is working: audio level detected.",
@@ -634,18 +842,53 @@ const i18n = {
     transcript_title: "Transcript",
     raw_label: "Raw",
     clean_label: "Clean",
-    raw_live: "Live",
+    raw_post: "Post-stop",
     clean_delay: "~3–4s",
-    transcript_placeholder_raw: "Raw text will appear in real time...",
-    transcript_placeholder_clean: "Clean text appears with a small delay...",
+    transcript_mode_record_first:
+      "Final transcript is built after recording ends for maximum accuracy.",
+    transcript_runtime_waiting: "Transcript will appear after recording stops.",
+    transcript_runtime_recording: "Recording in progress. Live transcript is disabled to reduce load.",
+    transcript_runtime_loading: "Finalizing MP3 and building final transcript...",
+    transcript_runtime_ready: "Final transcript is ready.",
+    transcript_runtime_empty:
+      "Recording is finished, but transcript is still empty. Check audio source and save MP3 for reprocessing.",
+    transcript_empty_title: "Live transcript is disabled",
+    transcript_empty_hint:
+      "During recording, only capture health indicators are shown. Final transcript appears after Stop.",
+    transcript_placeholder_raw_post:
+      "Raw text appears after recording stops (final pass from MP3).",
+    transcript_placeholder_clean_post:
+      "Clean text appears after recording stops and final processing is complete.",
     records_title: "Results",
     records_refresh: "Refresh",
     records_menu_btn: "...",
     record_menu_rename: "Rename recording",
     record_menu_save_mp3: "Save MP3",
-    compare_title: "Interview comparison",
+    results_mp3_title: "1) MP3 after meeting",
+    results_mp3_hint: "Pick a record, set MP3 name, and save it to your folder.",
+    results_save_mp3_btn: "Save MP3",
+    results_import_mp3_btn: "Import MP3",
+    results_report_title: "2) TXT report from MP3",
+    results_report_hint: "Choose report type (raw/clean), set file name, and save TXT.",
+    results_stt_title: "STT settings for reports",
+    results_report_name_placeholder: "report_clean",
+    results_generate_report_btn: "Build TXT",
+    results_download_report_btn: "Save TXT",
+    results_current_report_file: "Current report file",
+    results_convert_title: "3) Convert ready reports",
+    results_convert_hint: "For each report type choose a record and export format.",
+    results_raw_lane_title: "Raw report lane",
+    results_clean_lane_title: "Clean report lane",
+    results_raw_report_name_placeholder: "raw_report_export",
+    results_clean_report_name_placeholder: "clean_report_export",
+    results_export_txt: "TXT",
+    results_export_json: "JSON",
+    results_export_csv: "CSV",
+    results_export_table_json: "Table JSON",
+    results_export_senior: "Senior brief",
+    compare_title: "Interview comparison (optional)",
     compare_refresh: "Refresh",
-    compare_hint_idle: "Comparison appears after interview reports are generated.",
+    compare_hint_idle: "Use this block only when comparing multiple interviews.",
     compare_hint_loading: "Loading comparison summary...",
     compare_hint_empty: "No comparable data yet. Run interviews and generate reports.",
     compare_hint_failed: "Failed to load interview comparison.",
@@ -663,16 +906,24 @@ const i18n = {
     folder_selected: "Folder selected",
     folder_not_supported: "Folder chooser not supported",
     results_source_label: "Source",
-    file_transcript: "Transcript file",
+    file_transcript: "Report file",
     file_action_download: "Download",
     file_action_report: "Export TXT",
     file_action_table: "Table",
     file_action_mp3: "MP3",
     prompt_rename_record: "Enter new recording name:",
-    prompt_save_mp3_after_stop: "Recording is finished. Save MP3 now?",
+    prompt_save_mp3_after_stop: "Recording is finished. Enter MP3 file name:",
     hint_record_renamed: "Recording name updated.",
     hint_mp3_saved: "MP3 saved.",
     hint_mp3_not_found: "MP3 is not available for this recording yet.",
+    hint_mp3_import_started: "Importing MP3 and creating record...",
+    hint_mp3_import_done: "MP3 imported. You can build reports now.",
+    hint_mp3_import_failed: "Failed to import MP3 file.",
+    hint_report_generated: "TXT report generated.",
+    hint_report_source_missing: "Select a record for report generation.",
+    hint_report_name_missing: "Set report filename.",
+    hint_report_missing: "Report not found yet. Generate TXT first.",
+    report_picker_empty: "No records",
     download_raw: "Download raw",
     download_clean: "Download clean",
     gen_report_raw: "Report raw",
@@ -686,14 +937,20 @@ const i18n = {
     download_structured_clean_csv: "CSV clean",
     upload_title: "Conference upload",
     upload_audio_label: "Audio file",
+    help_upload_audio:
+      "Upload a ready interview file. Agent will build MP3, transcript, reports, and tables.",
     upload_audio_btn: "Upload audio",
     upload_video_label: "Video file",
     upload_video_btn: "Video (in development)",
-    upload_hint: "Video analysis will arrive with multimodal LLM support.",
+    upload_hint: "Use MP3 import in Results to generate raw/clean and reports.",
     quick_record_title: "Quick fallback capture",
     quick_record_url_label: "Meeting URL",
+    help_quick_url:
+      "Meeting URL for quick fallback recorder when regular capture path is unavailable.",
     quick_record_url_placeholder: "https://...",
     quick_record_duration_label: "Duration (sec)",
+    help_quick_duration:
+      "Maximum quick-record duration. Recording auto-stops when limit is reached.",
     quick_record_transcribe_label: "Run local transcription",
     quick_record_upload_label: "Upload recording to agent pipeline",
     quick_record_start_btn: "Quick start",
@@ -732,7 +989,7 @@ const i18n = {
     err_no_device_selected:
       "Audio source is not selected. Choose a device and retry.",
     err_interview_meta_missing:
-      "Fill required interview fields: candidate, vacancy, level, interviewer.",
+      "Interview fields are optional. Recording can start with empty fields.",
     err_system_source_not_virtual:
       "Selected source is not a virtual system input. Choose BlackHole/VB-CABLE/Monitor for meetings.",
     err_screen_audio_missing:
@@ -749,6 +1006,8 @@ const i18n = {
       "Microphone could not be added. Allow microphone access and verify selected input.",
     warn_screen_audio_mic_only:
       "Screen system audio is not shared (Share audio is off). Recording microphone only.",
+    warn_screen_audio_driver_fallback:
+      "Share audio did not provide system audio. Using virtual driver system-track fallback.",
     warn_media_fallback_pcm:
       "MediaRecorder is unavailable, switched to PCM capture. CPU usage may be higher.",
     warn_capture_stream_interrupted:
@@ -756,7 +1015,9 @@ const i18n = {
     warn_backup_upload_failed:
       "Backup audio upload failed. A tail part of recording may be missing in final transcript.",
     err_generic: "Unable to start recording. Check browser permissions and source.",
-    hint_recording_ok: "Recording started. Transcript updates in real time.",
+    hint_recording_ok: "Recording started. Audio capture is active.",
+    hint_recording_record_first:
+      "Record-first mode: only capture diagnostics are shown during recording. Final transcript appears after Stop.",
     hint_stt_warmup:
       "Speech recognition is initializing... first phrases may appear with a 5-20 second delay.",
     hint_no_speech_yet:
@@ -797,15 +1058,21 @@ const els = {
   checkDriver: document.getElementById("checkDriver"),
   includeMic: document.getElementById("includeMic"),
   micSelect: document.getElementById("micSelect"),
+  realtimeOnlySettings: document.getElementById("realtimeOnlySettings"),
   languageProfileSelect: document.getElementById("languageProfileSelect"),
   qualityFast: document.getElementById("qualityFast"),
   qualityBalanced: document.getElementById("qualityBalanced"),
   qualityAccurate: document.getElementById("qualityAccurate"),
   qualityHint: document.getElementById("qualityHint"),
+  captureMethodChip: document.getElementById("captureMethodChip"),
   recordingModeHint: document.getElementById("recordingModeHint"),
   uploadModeHint: document.getElementById("uploadModeHint"),
   deviceModeBlock: document.getElementById("deviceModeBlock"),
-  uploadAudioBlock: document.getElementById("uploadAudioBlock"),
+  apiConnectBlock: document.getElementById("apiConnectBlock"),
+  apiRecordUrl: document.getElementById("apiRecordUrl"),
+  apiRecordDuration: document.getElementById("apiRecordDuration"),
+  apiRecordUpload: document.getElementById("apiRecordUpload"),
+  apiRecordHint: document.getElementById("apiRecordHint"),
   quickRecordBlock: document.getElementById("quickRecordBlock"),
   runDiagnostics: document.getElementById("runDiagnostics"),
   diagHint: document.getElementById("diagHint"),
@@ -830,23 +1097,43 @@ const els = {
   micLevelText: document.getElementById("micLevelText"),
   signalText: document.getElementById("signalText"),
   checkSignal: document.getElementById("checkSignal"),
+  monitorHint: document.getElementById("monitorHint"),
+  monitorSystemState: document.getElementById("monitorSystemState"),
+  monitorMicState: document.getElementById("monitorMicState"),
+  monitorSpeechNow: document.getElementById("monitorSpeechNow"),
+  monitorLastPhrase: document.getElementById("monitorLastPhrase"),
+  monitorSegmentsCount: document.getElementById("monitorSegmentsCount"),
   meetingIdText: document.getElementById("meetingIdText"),
   chunkCount: document.getElementById("chunkCount"),
   transcriptRaw: document.getElementById("transcriptRaw"),
   transcriptClean: document.getElementById("transcriptClean"),
+  transcriptModeNote: document.getElementById("transcriptModeNote"),
+  transcriptRuntimeState: document.getElementById("transcriptRuntimeState"),
+  transcriptCard: document.getElementById("transcriptCard"),
+  transcriptGrid: document.getElementById("transcriptGrid"),
+  transcriptEmptyState: document.getElementById("transcriptEmptyState"),
+  rawLiveBadge: document.getElementById("rawLiveBadge"),
   recordsSelect: document.getElementById("recordsSelect"),
   refreshRecords: document.getElementById("refreshRecords"),
+  mp3SourceHint: document.getElementById("mp3SourceHint"),
+  saveCurrentMp3Btn: document.getElementById("saveCurrentMp3Btn"),
+  importMp3Btn: document.getElementById("importMp3Btn"),
+  importMp3Input: document.getElementById("importMp3Input"),
   recordMenuBtn: document.getElementById("recordMenuBtn"),
   recordMenu: document.getElementById("recordMenu"),
   renameRecordBtn: document.getElementById("renameRecordBtn"),
   saveRecordMp3Btn: document.getElementById("saveRecordMp3Btn"),
   resultsRaw: document.getElementById("resultsRaw"),
   resultsClean: document.getElementById("resultsClean"),
+  reportNameInput: document.getElementById("reportNameInput"),
+  generateReportBtn: document.getElementById("generateReportBtn"),
+  downloadReportBtn: document.getElementById("downloadReportBtn"),
   resultFileName: document.getElementById("resultFileName"),
-  downloadArtifactBtn: document.getElementById("downloadArtifactBtn"),
-  reportArtifactBtn: document.getElementById("reportArtifactBtn"),
-  structuredArtifactBtn: document.getElementById("structuredArtifactBtn"),
-  audioArtifactBtn: document.getElementById("audioArtifactBtn"),
+  rawReportSelect: document.getElementById("rawReportSelect"),
+  cleanReportSelect: document.getElementById("cleanReportSelect"),
+  rawReportNameInput: document.getElementById("rawReportNameInput"),
+  cleanReportNameInput: document.getElementById("cleanReportNameInput"),
+  reportActionButtons: Array.from(document.querySelectorAll(".report-action-btn")),
   refreshCompare: document.getElementById("refreshCompare"),
   compareHint: document.getElementById("compareHint"),
   compareTableBody: document.getElementById("compareTableBody"),
@@ -854,10 +1141,6 @@ const els = {
   downloadCompareJson: document.getElementById("downloadCompareJson"),
   chooseFolder: document.getElementById("chooseFolder"),
   folderStatus: document.getElementById("folderStatus"),
-  uploadAudio: document.getElementById("uploadAudio"),
-  uploadAudioBtn: document.getElementById("uploadAudioBtn"),
-  uploadVideo: document.getElementById("uploadVideo"),
-  uploadVideoBtn: document.getElementById("uploadVideoBtn"),
   quickRecordUrl: document.getElementById("quickRecordUrl"),
   quickRecordDuration: document.getElementById("quickRecordDuration"),
   quickRecordTranscribe: document.getElementById("quickRecordTranscribe"),
@@ -872,12 +1155,86 @@ const els = {
   cardConnection: document.querySelector(".card-connection"),
   cardRecording: document.querySelector(".card-recording"),
   cardUpload: document.querySelector(".card-upload"),
+  modeSettingsPanels: Array.from(document.querySelectorAll("[data-mode-panel]")),
   workModeButtons: Array.from(document.querySelectorAll("[data-work-mode]")),
   captureModeInputs: Array.from(document.querySelectorAll('input[name="captureMode"]')),
 };
 
 function getQualityConfig() {
   return QUALITY_PROFILES[state.captureQuality] || QUALITY_PROFILES.balanced;
+}
+
+function renderTranscriptModeUi() {
+  const dict = i18n[state.lang] || {};
+  if (els.transcriptModeNote) {
+    els.transcriptModeNote.textContent = dict.transcript_mode_record_first || "";
+  }
+  if (els.rawLiveBadge) {
+    els.rawLiveBadge.textContent = dict.raw_post || "Post-stop";
+  }
+  if (els.transcriptRaw) {
+    els.transcriptRaw.setAttribute(
+      "placeholder",
+      dict.transcript_placeholder_raw_post || ""
+    );
+  }
+  if (els.transcriptClean) {
+    els.transcriptClean.setAttribute(
+      "placeholder",
+      dict.transcript_placeholder_clean_post || ""
+    );
+  }
+}
+
+function hasTranscriptContent() {
+  const hasRaw = Array.from(state.transcript.raw.values()).some((text) => String(text || "").trim());
+  const hasClean = Array.from(state.transcript.enhanced.values()).some((text) =>
+    String(text || "").trim()
+  );
+  const rawArea = String((els.transcriptRaw && els.transcriptRaw.value) || "").trim();
+  const cleanArea = String((els.transcriptClean && els.transcriptClean.value) || "").trim();
+  return Boolean(hasRaw || hasClean || rawArea || cleanArea);
+}
+
+function renderTranscriptVisibility() {
+  const dict = i18n[state.lang] || {};
+  const uiState = String(state.transcriptUiState || "waiting");
+  const hasData = hasTranscriptContent();
+  const showGrid = hasData && uiState !== "recording" && uiState !== "loading";
+
+  if (els.transcriptGrid) {
+    els.transcriptGrid.classList.toggle("hidden", !showGrid);
+  }
+  if (els.transcriptEmptyState) {
+    els.transcriptEmptyState.classList.toggle("hidden", showGrid);
+  }
+  if (els.transcriptCard) {
+    els.transcriptCard.classList.toggle("is-compact", !showGrid);
+  }
+  if (els.transcriptRuntimeState) {
+    let key = "transcript_runtime_waiting";
+    if (uiState === "recording") key = "transcript_runtime_recording";
+    else if (uiState === "loading") key = "transcript_runtime_loading";
+    else if (showGrid) key = "transcript_runtime_ready";
+    else if (uiState === "empty") key = "transcript_runtime_empty";
+    els.transcriptRuntimeState.textContent = dict[key] || key;
+  }
+}
+
+function setTranscriptUiState(nextState = "waiting") {
+  state.transcriptUiState = String(nextState || "waiting");
+  renderTranscriptVisibility();
+}
+
+function renderHelpTips() {
+  const dict = i18n[state.lang] || {};
+  document.querySelectorAll("[data-help-i18n]").forEach((el) => {
+    const key = String(el.getAttribute("data-help-i18n") || "").trim();
+    if (!key) return;
+    const text = String(dict[key] || key).trim();
+    el.setAttribute("title", text);
+    el.setAttribute("aria-label", text);
+  });
 }
 
 function getCaptureTimesliceMs() {
@@ -998,6 +1355,99 @@ function renderDiagnosticsLabels() {
   _renderDiagItem(els.diagLlm);
 }
 
+function formatElapsed(secondsRaw) {
+  const seconds = Math.max(0, Number(secondsRaw) || 0);
+  const mm = Math.floor(seconds / 60)
+    .toString()
+    .padStart(2, "0");
+  const ss = Math.floor(seconds % 60)
+    .toString()
+    .padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function setMonitorPill(el, isGood, goodKey, badKey) {
+  if (!el) return;
+  const dict = i18n[state.lang] || {};
+  const key = isGood ? goodKey : badKey;
+  el.textContent = dict[key] || key;
+  el.className = `pill ${isGood ? "good" : "muted"}`;
+}
+
+function renderLiveMonitor() {
+  const dict = i18n[state.lang] || {};
+  const m = state.monitor;
+  if (els.monitorHint) {
+    els.monitorHint.textContent = dict.monitor_hint || "";
+  }
+  if (!state.captureStopper && !state.isCountingDown) {
+    const idle = dict.monitor_not_started || "not started";
+    [els.monitorSystemState, els.monitorMicState, els.monitorSpeechNow].forEach((el) => {
+      if (!el) return;
+      el.textContent = idle;
+      el.className = "pill muted";
+    });
+    if (els.monitorLastPhrase) {
+      els.monitorLastPhrase.textContent = dict.monitor_last_never || "not detected yet";
+    }
+    if (els.monitorSegmentsCount) {
+      els.monitorSegmentsCount.textContent = String(m.segmentCount || 0);
+    }
+    return;
+  }
+  setMonitorPill(els.monitorSystemState, m.systemHeard, "monitor_state_heard", "monitor_state_silent");
+  setMonitorPill(els.monitorMicState, m.micHeard, "monitor_state_heard", "monitor_state_silent");
+  setMonitorPill(els.monitorSpeechNow, m.speechNow, "monitor_state_speaking", "monitor_state_pause");
+  if (els.monitorLastPhrase) {
+    if (!m.lastPhraseAt || !m.startedAt) {
+      els.monitorLastPhrase.textContent = dict.monitor_last_never || "not detected yet";
+    } else {
+      const elapsed = (m.lastPhraseAt - m.startedAt) / 1000;
+      els.monitorLastPhrase.textContent = formatElapsed(elapsed);
+    }
+  }
+  if (els.monitorSegmentsCount) {
+    els.monitorSegmentsCount.textContent = String(m.segmentCount || 0);
+  }
+}
+
+function resetLiveMonitor() {
+  state.monitor = {
+    systemHeard: false,
+    micHeard: false,
+    speechNow: false,
+    lastPhraseAt: 0,
+    segmentCount: 0,
+    startedAt: 0,
+  };
+  renderLiveMonitor();
+}
+
+function updateLiveMonitorFromLevels(levels) {
+  const now = Date.now();
+  const systemLevel = Number(levels.system || 0);
+  const micLevel = Number(levels.mic || 0);
+  const mixedLevel = Number(levels.mixed || 0);
+  const systemHeard = systemLevel >= 0.01;
+  const micHeard = micLevel >= 0.01;
+  const speechEnter = 0.03;
+  const speechExit = 0.018;
+  const maxLevel = Math.max(systemLevel, micLevel, mixedLevel);
+  const speechNow = state.monitor.speechNow ? maxLevel >= speechExit : maxLevel >= speechEnter;
+  const phraseStarted = speechNow && !state.monitor.speechNow;
+  state.monitor.systemHeard = systemHeard;
+  state.monitor.micHeard = micHeard;
+  state.monitor.speechNow = speechNow;
+  if (phraseStarted) {
+    state.monitor.segmentCount = Number(state.monitor.segmentCount || 0) + 1;
+    state.monitor.lastPhraseAt = now;
+  }
+  if (!state.monitor.startedAt && (state.captureStopper || state.isCountingDown)) {
+    state.monitor.startedAt = now;
+  }
+  renderLiveMonitor();
+}
+
 const updateI18n = () => {
   const dict = i18n[state.lang];
   document.documentElement.lang = state.lang;
@@ -1009,6 +1459,7 @@ const updateI18n = () => {
     const key = el.getAttribute("data-i18n-placeholder");
     if (dict[key]) el.setAttribute("placeholder", dict[key]);
   });
+  renderHelpTips();
   setDriverStatus(state.driverStatusKey, state.driverStatusStyle);
   setFolderStatus(state.folderStatusKey, state.folderStatusStyle);
   renderDeviceStatus();
@@ -1047,6 +1498,9 @@ const updateI18n = () => {
   } else {
     setCompareHint("compare_hint_empty", "muted");
   }
+  renderTranscriptModeUi();
+  renderTranscriptVisibility();
+  renderLiveMonitor();
   refreshRecognitionDiagnosis();
 };
 
@@ -1108,25 +1562,17 @@ const deriveRecognitionDiagnosis = () => {
   ) {
     return { key: "diag_reason_audio_busy", style: "bad" };
   }
-  if (hint === "hint_stt_warmup") {
-    return { key: "diag_reason_stt_warmup", style: "muted" };
-  }
 
   const diag = state.diagnosticsLast || {};
   const systemOk = Boolean(diag.systemOk);
   const micOk = Boolean(diag.micOk);
   const micSkipped = Boolean(diag.micSkipped);
-  const sttWarmupInProgress = Boolean(diag.sttWarmupInProgress);
-
-  if (sttWarmupInProgress) {
-    return { key: "diag_reason_stt_warmup", style: "muted" };
-  }
 
   const systemLevel = Number(state.meterLevels.system || 0);
   const micLevel = Number(state.meterLevels.mic || 0);
   const peak = Math.max(systemLevel, micLevel, Number(state.signalPeak || 0));
 
-  if ((!systemOk && micOk) || (systemLevel < 0.012 && micLevel >= 0.03)) {
+  if ((!systemOk && micOk) || (systemLevel < DIAG_SYSTEM_CRITICAL_MIN && micLevel >= 0.03)) {
     return { key: "diag_reason_mic_only", style: "bad" };
   }
   if ((!systemOk && micSkipped) || state.signalState === "signal_no_audio") {
@@ -1232,11 +1678,7 @@ const getInterviewMetadata = () => {
 };
 
 const validateInterviewMetadata = () => {
-  const meta = getInterviewMetadata();
-  if (!meta.candidate_name || !meta.vacancy || !meta.level || !meta.interviewer) {
-    throw new Error("interview_meta_missing");
-  }
-  return meta;
+  return getInterviewMetadata();
 };
 
 const renderComparisonTable = () => {
@@ -1447,6 +1889,27 @@ const syncCheckSignalButton = () => {
 
 const setRecordingButtons = (isRecording) => {
   const modeAllowsRealtime = Boolean(getWorkModeConfig().supportsRealtime);
+  const modeAllowsQuick = Boolean(getWorkModeConfig().supportsQuick);
+  if (modeAllowsQuick && !modeAllowsRealtime) {
+    const quickBusy = isQuickFlowActive();
+    if (isRecording || quickBusy) {
+      els.startBtn.disabled = true;
+      els.stopBtn.disabled = false;
+      els.startBtn.classList.add("is-inactive");
+      els.startBtn.classList.remove("is-active");
+      els.stopBtn.classList.add("is-active");
+      els.stopBtn.classList.remove("is-inactive");
+    } else {
+      els.startBtn.disabled = false;
+      els.stopBtn.disabled = true;
+      els.startBtn.classList.add("is-active");
+      els.startBtn.classList.remove("is-inactive");
+      els.stopBtn.classList.add("is-inactive");
+      els.stopBtn.classList.remove("is-active");
+    }
+    syncCheckSignalButton();
+    return;
+  }
   if (isRecording) {
     els.startBtn.disabled = true;
     els.stopBtn.disabled = false;
@@ -1813,6 +2276,32 @@ const _setModeHintText = (el, messageKeyOrText = "", style = "muted", isRaw = fa
   el.className = `hint mode-hint ${style || "muted"}`;
 };
 
+const syncModeSettingsPanels = (activeMode = state.workMode) => {
+  const normalized = normalizeWorkMode(activeMode);
+  (els.modeSettingsPanels || []).forEach((panel) => {
+    if (!panel || !panel.dataset) return;
+    const panelMode = normalizeWorkMode(panel.dataset.modePanel || "");
+    panel.classList.toggle("active", panelMode === normalized);
+  });
+};
+
+const getQuickControlSet = (cfg = getWorkModeConfig()) => {
+  if (cfg && cfg.id === "api_upload") {
+    return {
+      url: els.apiRecordUrl,
+      duration: els.apiRecordDuration,
+      transcribe: null,
+      upload: els.apiRecordUpload,
+    };
+  }
+  return {
+    url: els.quickRecordUrl,
+    duration: els.quickRecordDuration,
+    transcribe: els.quickRecordTranscribe,
+    upload: els.quickRecordUpload,
+  };
+};
+
 const applyWorkModeUi = () => {
   const cfg = getWorkModeConfig();
   state.workMode = cfg.id;
@@ -1822,6 +2311,7 @@ const applyWorkModeUi = () => {
     const mode = normalizeWorkMode(btn && btn.dataset ? btn.dataset.workMode : "");
     btn.classList.toggle("active", mode === cfg.id);
   });
+  syncModeSettingsPanels(cfg.id);
 
   if (els.workModeName) {
     const label = dict[cfg.labelKey] || cfg.id;
@@ -1829,7 +2319,8 @@ const applyWorkModeUi = () => {
   }
   _setModeHintText(els.workModeHint, cfg.descriptionKey, "muted");
 
-  const recordingEnabled = Boolean(cfg.supportsRealtime);
+  const recordingEnabled = Boolean(cfg.supportsRealtime || cfg.supportsQuick);
+  const realtimeEnabled = Boolean(cfg.supportsRealtime);
   const uploadEnabled = Boolean(cfg.supportsUpload);
   const quickEnabled = Boolean(cfg.supportsQuick);
   const driverEnabled = Boolean(cfg.useDeviceDriver);
@@ -1843,7 +2334,7 @@ const applyWorkModeUi = () => {
 
   (els.captureModeInputs || []).forEach((input) => {
     if (!input) return;
-    input.disabled = !recordingEnabled || Boolean(cfg.forceCaptureMode);
+    input.disabled = !realtimeEnabled || Boolean(cfg.forceCaptureMode);
   });
 
   if (els.cardRecording) {
@@ -1856,7 +2347,8 @@ const applyWorkModeUi = () => {
     els.cardUpload.classList.toggle("mode-disabled", !uploadCardActive);
   }
   if (els.cardConnection) {
-    els.cardConnection.classList.toggle("mode-active", driverEnabled);
+    els.cardConnection.classList.add("mode-active");
+    els.cardConnection.classList.remove("mode-disabled");
   }
 
   if (els.deviceModeBlock) {
@@ -1876,27 +2368,25 @@ const applyWorkModeUi = () => {
     recordingEnabled ? "muted" : "bad"
   );
 
-  if (els.uploadAudioBlock) {
-    els.uploadAudioBlock.classList.toggle("mode-disabled", !uploadEnabled);
+  if (els.apiConnectBlock) {
+    els.apiConnectBlock.classList.toggle("mode-disabled", cfg.id !== "api_upload");
   }
-  [els.uploadAudio, els.uploadAudioBtn].forEach((el) => {
-    if (!el) return;
-    el.disabled = !uploadEnabled || state.isUploading;
-  });
 
   if (els.quickRecordBlock) {
     els.quickRecordBlock.classList.toggle("mode-disabled", !quickEnabled);
   }
   const quickBusy = isQuickFlowActive();
-  [els.quickRecordUrl, els.quickRecordDuration, els.quickRecordTranscribe, els.quickRecordUpload].forEach(
-    (el) => {
-      if (!el) return;
-      el.disabled = !quickEnabled || quickBusy;
-    }
-  );
+  const quickControls = getQuickControlSet(cfg);
+  [quickControls.url, quickControls.duration, quickControls.transcribe, quickControls.upload].forEach((el) => {
+    if (!el) return;
+    el.disabled = !quickEnabled || quickBusy;
+  });
+  if (els.apiKey) {
+    els.apiKey.disabled = cfg.id === "api_upload" ? quickBusy : false;
+  }
   _setModeHintText(
     els.uploadModeHint,
-    uploadEnabled
+    cfg.id === "api_upload"
       ? "work_mode_desc_api"
       : quickEnabled
       ? "work_mode_desc_quick"
@@ -1909,9 +2399,9 @@ const applyWorkModeUi = () => {
   setQuickButtonsByStatus(state.quickStatusKey || "quick_record_state_idle");
   if (!recordingEnabled) {
     setRecordingButtons(false);
-    if (els.runDiagnostics) {
-      els.runDiagnostics.disabled = true;
-    }
+  }
+  if (els.runDiagnostics && !state.signalCheckInProgress) {
+    els.runDiagnostics.disabled = !realtimeEnabled;
   }
 };
 
@@ -2006,7 +2496,134 @@ const withBusyRetry = async (openFn, delays = MEDIA_BUSY_RETRY_DELAYS_MS) => {
   throw lastErr || new Error("media_open_failed");
 };
 
-const buildMixedAudioStream = async (baseStream, includeMic, selectedMicId = "") => {
+const stopStreamTracksSafe = (stream) => {
+  if (!stream) return;
+  try {
+    stream.getTracks().forEach((track) => track.stop());
+  } catch (err) {
+    void err;
+  }
+};
+
+const openScreenCaptureStream = async () => {
+  let lastErr = null;
+  try {
+    const stream = await withBusyRetry(
+      () =>
+        navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        }),
+      SCREEN_AUDIO_RETRY_DELAYS_MS
+    );
+    if (stream.getAudioTracks().length) {
+      return { stream, audioMissing: false };
+    }
+    stopStreamTracksSafe(stream);
+  } catch (err) {
+    lastErr = err;
+    if (!isDeviceBusyError(err)) {
+      throw err;
+    }
+  }
+
+  // Fallback: если браузер не отдал системный трек, продолжаем с mic-only.
+  await sleepMs(260);
+  try {
+    const fallback = await withBusyRetry(
+      () =>
+        navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: false,
+        }),
+      [260, 520, 1000]
+    );
+    return { stream: fallback, audioMissing: true };
+  } catch (err) {
+    if (lastErr && isDeviceBusyError(lastErr)) {
+      throw lastErr;
+    }
+    throw err;
+  }
+};
+
+const openSystemDriverFallbackStream = async () => {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    return null;
+  }
+  let devices = [];
+  try {
+    devices = await navigator.mediaDevices.enumerateDevices();
+  } catch (_err) {
+    devices = [];
+  }
+
+  const selectedDeviceId = String((els.deviceSelect && els.deviceSelect.value) || "").trim();
+  const inputs = (Array.isArray(devices) ? devices : [])
+    .filter((d) => d && d.kind === "audioinput" && d.deviceId)
+    .sort((left, right) => {
+      const lv = isVirtualAudioDevice(left.label) ? 1 : 0;
+      const rv = isVirtualAudioDevice(right.label) ? 1 : 0;
+      return rv - lv;
+    });
+
+  if (!inputs.length && selectedDeviceId) {
+    try {
+      const stream = await withBusyRetry(
+        () =>
+          navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: { exact: selectedDeviceId } },
+          }),
+        [200, 460, 900]
+      );
+      if (stream.getAudioTracks().length) {
+        return { stream, deviceId: selectedDeviceId, label: "" };
+      }
+      stopStreamTracksSafe(stream);
+    } catch (_err) {
+      return null;
+    }
+    return null;
+  }
+
+  const ordered = [];
+  if (selectedDeviceId) {
+    const preferred = inputs.find((d) => d.deviceId === selectedDeviceId);
+    if (preferred) ordered.push(preferred);
+  }
+  inputs.forEach((d) => {
+    if (!ordered.some((item) => item.deviceId === d.deviceId)) {
+      ordered.push(d);
+    }
+  });
+
+  for (const candidate of ordered) {
+    try {
+      const stream = await withBusyRetry(
+        () =>
+          navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: { exact: candidate.deviceId } },
+          }),
+        [200, 460, 900]
+      );
+      if (!stream.getAudioTracks().length) {
+        stopStreamTracksSafe(stream);
+        continue;
+      }
+      return {
+        stream,
+        deviceId: String(candidate.deviceId || ""),
+        label: String(candidate.label || ""),
+      };
+    } catch (_err) {
+      // try next candidate
+    }
+  }
+  return null;
+};
+
+const buildMixedAudioStream = async (baseStream, includeMic, selectedMicId = "", options = {}) => {
+  const { mode = "system" } = options;
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return { stream: baseStream, micAdded: false, micError: "" };
 
@@ -2017,16 +2634,32 @@ const buildMixedAudioStream = async (baseStream, includeMic, selectedMicId = "")
   let micStream = null;
   let micError = "";
 
-  const connectStream = (stream, gainValue = 1) => {
+  const connectStream = (stream, options = {}) => {
+    const { gainValue = 1, useCompressor = false } = options;
     const source = context.createMediaStreamSource(stream);
     const gain = context.createGain();
     gain.gain.value = gainValue;
     source.connect(gain);
+    if (useCompressor) {
+      const compressor = context.createDynamicsCompressor();
+      compressor.threshold.value = -28;
+      compressor.knee.value = 24;
+      compressor.ratio.value = 3.2;
+      compressor.attack.value = 0.004;
+      compressor.release.value = 0.22;
+      gain.connect(compressor);
+      compressor.connect(destination);
+      nodes.push(source, gain, compressor);
+      return;
+    }
     gain.connect(destination);
     nodes.push(source, gain);
   };
 
-  connectStream(baseStream, 1);
+  connectStream(baseStream, {
+    gainValue: mode === "screen" ? SYSTEM_STREAM_GAIN_SCREEN : SYSTEM_STREAM_GAIN,
+    useCompressor: true,
+  });
 
   if (includeMic) {
     const selectedSystemDeviceId = state.streamDeviceId || (els.deviceSelect && els.deviceSelect.value) || "";
@@ -2054,7 +2687,7 @@ const buildMixedAudioStream = async (baseStream, includeMic, selectedMicId = "")
           audio: preferredMicId ? { deviceId: { exact: preferredMicId } } : true,
         })
       );
-      connectStream(micStream, 1);
+      connectStream(micStream, { gainValue: MIC_STREAM_GAIN });
       micAdded = true;
     } catch (err) {
       micError = err && err.message ? String(err.message) : "mic_add_failed";
@@ -2103,6 +2736,7 @@ const ensureStream = async (mode, options = {}) => {
   state.streamDeviceId = "";
   state.streamKey = "";
   state.screenAudioMissing = false;
+  state.screenAudioDriverFallback = false;
   state.micAdded = false;
   closeMixGraph();
   stopInputStreams();
@@ -2111,35 +2745,22 @@ const ensureStream = async (mode, options = {}) => {
 
   let baseStream;
   if (mode === "screen") {
-    try {
-      baseStream = await withBusyRetry(
-        () =>
-          navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: true,
-          }),
-        [220, 520]
-      );
-    } catch (err) {
-      if (!isDeviceBusyError(err)) {
-        throw err;
-      }
-      // Fallback: если системный звук экрана временно недоступен,
-      // продолжаем с видео+микрофоном (без system audio track).
-      baseStream = await withBusyRetry(
-        () =>
-          navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: false,
-          }),
-        [220]
-      );
-      state.screenAudioMissing = true;
-    }
-    state.screenAudioMissing = state.screenAudioMissing || !baseStream.getAudioTracks().length;
+    const result = await openScreenCaptureStream();
+    baseStream = result.stream;
+    state.screenAudioMissing = Boolean(result.audioMissing) || !baseStream.getAudioTracks().length;
+    state.screenAudioDriverFallback = false;
     if (state.screenAudioMissing) {
-      setSignal("signal_no_audio");
-      console.warn("screen capture started without audio track");
+      const driverFallback = await openSystemDriverFallbackStream();
+      if (driverFallback && driverFallback.stream && driverFallback.stream.getAudioTracks().length) {
+        stopStreamTracksSafe(baseStream);
+        baseStream = driverFallback.stream;
+        state.streamDeviceId = driverFallback.deviceId || "";
+        state.screenAudioMissing = false;
+        state.screenAudioDriverFallback = true;
+      } else {
+        setSignal("signal_no_audio");
+        console.warn("screen capture started without audio track");
+      }
     }
   } else {
     const deviceId = els.deviceSelect.value;
@@ -2188,7 +2809,7 @@ const ensureStream = async (mode, options = {}) => {
   }
 
   if (includeMic) {
-    const mixed = await buildMixedAudioStream(baseStream, true, selectedMicId);
+    const mixed = await buildMixedAudioStream(baseStream, true, selectedMicId, { mode });
     state.stream = mixed.stream;
     state.micAdded = mixed.micAdded;
     if (!mixed.micAdded && mixed.micError === "mic_same_as_system") {
@@ -2244,6 +2865,7 @@ const releasePreparedCapture = () => {
   state.streamDeviceId = "";
   state.streamKey = "";
   state.screenAudioMissing = false;
+  state.screenAudioDriverFallback = false;
   state.micAdded = false;
   closeMixGraph();
   stopInputStreams();
@@ -2324,6 +2946,7 @@ const updateMeter = () => {
 
   const mixedLevel = calcLevel(state.analyser);
   if (mixedLevel <= 0 && !state.analyserSystem && !state.analyserMic) {
+    updateLiveMonitorFromLevels({ mixed: 0, system: 0, mic: 0 });
     return;
   }
   const systemLevel = calcLevel(state.analyserSystem);
@@ -2333,6 +2956,7 @@ const updateMeter = () => {
     system: systemLevel,
     mic: micLevel,
   };
+  updateLiveMonitorFromLevels(state.meterLevels);
   renderMeterDetailLabels();
   if (els.systemLevelBar) {
     els.systemLevelBar.style.transform = `scaleX(${systemLevel})`;
@@ -2386,6 +3010,7 @@ const stopMeter = () => {
   state.meterLevels = { mixed: 0, system: 0, mic: 0 };
   renderMeterDetailLabels();
   state.signalSmooth = 0;
+  updateLiveMonitorFromLevels(state.meterLevels);
 };
 
 const flushPendingChunks = () => {
@@ -2431,7 +3056,7 @@ const markWsServerActivity = () => {
   state.wsHasServerActivity = true;
   state.wsLastServerActivityMs = Date.now();
   if (state.statusHintKey === "err_network") {
-    setStatusHint("hint_recording_ok", "good");
+    setStatusHint("hint_recording_record_first", "good");
   }
 };
 
@@ -2573,7 +3198,7 @@ const scheduleWsReconnect = () => {
       state.wsReconnectAttempts = 0;
       flushPendingChunks();
       if (state.statusHintKey === "err_network") {
-        setStatusHint("hint_recording_ok", "good");
+        setStatusHint("hint_recording_record_first", "good");
       }
     } catch (err) {
       scheduleWsReconnect();
@@ -2636,6 +3261,9 @@ const sendChunk = async (blob, mimeType, sourceTrack = "mixed") => {
     channels: 1,
     source_track: track,
     quality_profile: String(getQualityConfig().wsQualityProfile || "live_balanced"),
+    mixed_level: Number((state.meterLevels.mixed || 0).toFixed(4)),
+    system_level: Number((state.meterLevels.system || 0).toFixed(4)),
+    mic_level: Number((state.meterLevels.mic || 0).toFixed(4)),
     idempotency_key: `${state.meetingId}:${state.seq}:${Date.now()}`,
     content_b64,
   };
@@ -2647,7 +3275,6 @@ const sendChunk = async (blob, mimeType, sourceTrack = "mixed") => {
     setSignal("signal_no_audio");
     const protectedHints = new Set([
       "warn_mic_not_added",
-      "hint_stt_warmup",
       "warn_system_source_fallback",
       "warn_screen_audio_mic_only",
       "err_media_denied",
@@ -2705,7 +3332,10 @@ const openWebSocket = () => {
         return;
       }
       markWsServerActivity();
-      handleTranscriptUpdate(data);
+      if (data && data.event_type === "transcript.update") {
+        // Record-first mode: live transcript is disabled in UI/runtime.
+        return;
+      }
     } catch (err) {
       console.warn("ws message parse failed", err);
     }
@@ -3084,10 +3714,12 @@ const renderTranscript = () => {
   };
   setAreaValue(els.transcriptRaw, orderedRaw);
   setAreaValue(els.transcriptClean, orderedClean);
+  renderTranscriptVisibility();
 };
 
 const handleTranscriptUpdate = (data) => {
   if (!data || data.event_type !== "transcript.update") return;
+  if (state.captureStopper && !state.stopRequested) return;
   if (typeof data.seq !== "number") return;
 
   if (typeof data.raw_text === "string") {
@@ -3097,10 +3729,9 @@ const handleTranscriptUpdate = (data) => {
         setSignal("signal_ok");
       if (
         state.statusHintKey === "hint_no_speech_yet" ||
-        state.statusHintKey === "hint_stt_warmup" ||
         state.statusHintKey === "signal_check_fail"
       ) {
-        setStatusHint("hint_recording_ok", "good");
+        setStatusHint("hint_recording_record_first", "good");
       }
     }
   }
@@ -3145,6 +3776,8 @@ const resetSessionState = () => {
   state.enhancedTimers.clear();
   if (els.transcriptRaw) els.transcriptRaw.value = "";
   if (els.transcriptClean) els.transcriptClean.value = "";
+  setTranscriptUiState("waiting");
+  resetLiveMonitor();
   state.diagnosticsLast = null;
   refreshRecognitionDiagnosis();
 };
@@ -3232,6 +3865,28 @@ const buildCaptureTargets = (captureMode) => {
   return unique;
 };
 
+const loadFinalTranscripts = async (meetingId) => {
+  if (!meetingId) return;
+  setTranscriptUiState("loading");
+  try {
+    const [rawRes, cleanRes] = await Promise.all([
+      fetch(`/v1/meetings/${meetingId}/artifact?kind=raw&fmt=txt`, { headers: buildAuthHeaders() }),
+      fetch(`/v1/meetings/${meetingId}/artifact?kind=clean&fmt=txt`, { headers: buildAuthHeaders() }),
+    ]);
+    const rawText = rawRes.ok ? await rawRes.text() : "";
+    const cleanText = cleanRes.ok ? await cleanRes.text() : "";
+    state.transcript.raw.clear();
+    state.transcript.enhanced.clear();
+    if (rawText.trim()) state.transcript.raw.set(0, rawText);
+    if (cleanText.trim()) state.transcript.enhanced.set(0, cleanText);
+    renderTranscript();
+    setTranscriptUiState(hasTranscriptContent() ? "ready" : "empty");
+  } catch (err) {
+    setTranscriptUiState("empty");
+    console.warn("load final transcripts failed", err);
+  }
+};
+
 const drainPendingChunksHttp = async (meetingId, options = {}) => {
   const { force = false, reschedule = false } = options;
   if (!meetingId || !state.pendingChunks.length) return;
@@ -3254,19 +3909,16 @@ const drainPendingChunksHttp = async (meetingId, options = {}) => {
           channels: payload.channels,
           source_track: payload.source_track || "mixed",
           quality_profile: payload.quality_profile || String(getQualityConfig().wsQualityProfile || "live_balanced"),
+          mixed_level:
+            typeof payload.mixed_level === "number" ? payload.mixed_level : undefined,
+          system_level:
+            typeof payload.system_level === "number" ? payload.system_level : undefined,
+          mic_level: typeof payload.mic_level === "number" ? payload.mic_level : undefined,
           idempotency_key: payload.idempotency_key,
         }),
       });
       if (!res.ok) {
         state.pendingChunks.push(payload);
-      } else {
-        try {
-          const body = await res.json();
-          const updates = Array.isArray(body.inline_updates) ? body.inline_updates : [];
-          updates.forEach((u) => handleTranscriptUpdate(u));
-        } catch (_err) {
-          // ignore parse errors: chunk can be accepted without inline_updates
-        }
       }
     } catch (err) {
       state.pendingChunks.push(payload);
@@ -3359,6 +4011,9 @@ const startRecording = async () => {
 
   setStatus("status_recording", "recording");
   setStatusHint("");
+  setTranscriptUiState("recording");
+  state.monitor.startedAt = Date.now();
+  renderLiveMonitor();
   state.stopRequested = false;
   state.wsHasServerActivity = false;
   state.wsLastServerActivityMs = 0;
@@ -3408,41 +4063,24 @@ const startRecording = async () => {
     writeCaptureLock(state.meetingId);
     els.meetingIdText.textContent = state.meetingId;
 
-    await waitForWsOpen(9000);
     const stream = state.stream;
     if (!stream) {
       throw new Error("stream_missing_after_countdown");
     }
-    const captureTargets = buildCaptureTargets(captureMode);
-    if (!captureTargets.length) {
-      throw new Error("stream_missing_after_countdown");
-    }
-    const captureEngines = captureTargets.map((target) =>
-      createCaptureEngine(target.stream, { sourceTrack: target.sourceTrack })
-    );
-    state.captureEngine = captureEngines.map((item) => `${item.engine}:${item.sourceTrack}`).join(",");
-    state.captureStopper = async () => {
-      for (const item of captureEngines) {
-        try {
-          await item.stop();
-        } catch (err) {
-          console.warn("capture engine stop failed", err);
-        }
-      }
-    };
-    startWsHeartbeat();
-    sendWsResume();
+    void stream;
+    state.captureEngine = "record-first";
+    state.captureStopper = async () => {};
     startBackupRecorder();
-    const hasFallbackPcm = captureEngines.some((item) => item.fallbackToPcm);
-    if (hasFallbackPcm) {
-      setStatusHint("warn_media_fallback_pcm", "bad");
+    if (captureMode === "screen" && state.screenAudioDriverFallback) {
+      setSignal("signal_low");
+      setStatusHint("warn_screen_audio_driver_fallback", "muted");
     } else if (captureMode === "screen" && state.screenAudioMissing && state.micAdded) {
       setSignal("signal_low");
       setStatusHint("warn_screen_audio_mic_only", "bad");
     } else if (els.includeMic && els.includeMic.checked && !state.micAdded) {
       setStatusHint("warn_mic_not_added", "bad");
     } else {
-      setStatusHint("hint_stt_warmup", "muted");
+      setStatusHint("hint_recording_record_first", "good");
     }
   } catch (err) {
     console.error("start recording failed", err);
@@ -3493,14 +4131,17 @@ const stopRecording = async (options = {}) => {
     }
   }
   if (activeMeetingId && (forceFinish || wasRecording || wasCountingDown)) {
+    setTranscriptUiState("loading");
     try {
       await fetch(`/v1/meetings/${activeMeetingId}/finish`, {
         method: "POST",
         headers: buildHeaders(),
       });
+      await loadFinalTranscripts(activeMeetingId);
       await fetchRecords();
       finishedOk = true;
     } catch (err) {
+      setTranscriptUiState("empty");
       // ignore and keep local UI responsive
     }
   }
@@ -3664,6 +4305,7 @@ const checkSignal = async () => {
       state.streamDeviceId = "";
       state.streamKey = "";
       state.screenAudioMissing = false;
+      state.screenAudioDriverFallback = false;
       state.micAdded = false;
       closeMixGraph();
       stopInputStreams();
@@ -3707,32 +4349,6 @@ const _diagMarkAllMuted = () => {
   setDiagItemStatus(els.diagLlm, "muted");
 };
 
-const fetchDiagnosticsPreflight = async () => {
-  const res = await fetch("/v1/diagnostics/preflight", { headers: buildHeaders() });
-  if (!res.ok) {
-    throw new Error(`diagnostics_failed_${res.status}`);
-  }
-  return res.json();
-};
-
-const waitForSttWarmupReady = async (timeoutMs = 12000) => {
-  const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || 12000);
-  let snapshot = await fetchDiagnosticsPreflight();
-  while (Date.now() < deadline) {
-    const stt = snapshot && snapshot.stt ? snapshot.stt : {};
-    const sttWarmupError = String(stt.warmup_error || "").trim();
-    const sttWarmupInProgress = Boolean(
-      stt.warmup_started && !stt.warmup_ready && !stt.provider_initialized && !sttWarmupError
-    );
-    if (!sttWarmupInProgress) {
-      break;
-    }
-    await sleepMs(700);
-    snapshot = await fetchDiagnosticsPreflight();
-  }
-  return snapshot;
-};
-
 const runDiagnostics = async (options = {}) => {
   const { forStart = false } = options;
   if (!getWorkModeConfig().supportsRealtime) {
@@ -3741,7 +4357,7 @@ const runDiagnostics = async (options = {}) => {
     }
     _diagMarkAllMuted();
     setDiagHint("work_mode_recording_disabled", "bad");
-    return { criticalPassed: false, llmOk: false, llmRequired: false };
+    return { criticalPassed: false, mp3Ready: false };
   }
   if (els.runDiagnostics) {
     els.runDiagnostics.disabled = true;
@@ -3751,19 +4367,16 @@ const runDiagnostics = async (options = {}) => {
   setDiagItemStatus(els.diagSystem, "running");
   setDiagItemStatus(els.diagMic, "running");
   setDiagItemStatus(els.diagStt, "running");
-  setDiagItemStatus(els.diagLlm, "running");
   setDiagHint("diag_hint_running", "muted");
 
   let audioOk = false;
   let systemOk = false;
   let micOk = false;
   let micSkipped = false;
-  let sttOk = false;
-  let sttWarmupInProgress = false;
-  let llmOk = false;
-  let llmRequired = false;
+  let mp3Ready = false;
   const notRequiredText =
     (i18n[state.lang] && i18n[state.lang].diag_skip_not_required) || "not required";
+  setDiagItemStatus(els.diagLlm, "muted", notRequiredText);
 
   const mode = getCaptureMode();
   const includeMic =
@@ -3789,14 +4402,14 @@ const runDiagnostics = async (options = {}) => {
       const systemLevel = Number(state.meterLevels.system || state.meterLevels.mixed || 0);
       const micLevel = Number(state.meterLevels.mic || 0);
 
-      systemOk = systemLevel >= 0.01;
+      systemOk = systemLevel >= DIAG_SYSTEM_MIN_LEVEL;
       setDiagItemStatus(els.diagSystem, systemOk ? "good" : "bad");
 
       if (!includeMic) {
         micSkipped = true;
         setDiagItemStatus(els.diagMic, "muted", notRequiredText);
       } else {
-        micOk = micLevel >= 0.008;
+        micOk = micLevel >= DIAG_MIC_MIN_LEVEL;
         setDiagItemStatus(els.diagMic, micOk ? "good" : "bad");
       }
     } catch (err) {
@@ -3821,64 +4434,41 @@ const runDiagnostics = async (options = {}) => {
   }
 
   try {
-    const backend = forStart
-      ? await waitForSttWarmupReady()
-      : await fetchDiagnosticsPreflight();
-    const stt = backend && backend.stt ? backend.stt : {};
-    const llm = backend && backend.llm ? backend.llm : {};
-
-    const sttWarmupError = String(stt.warmup_error || "").trim();
-    sttWarmupInProgress = Boolean(
-      stt.warmup_started && !stt.warmup_ready && !stt.provider_initialized && !sttWarmupError
-    );
-    sttOk = Boolean(
-      stt.warmup_ready || stt.provider_initialized || (!forStart && sttWarmupInProgress)
-    );
-    if (stt.warmup_ready || stt.provider_initialized) {
-      setDiagItemStatus(els.diagStt, "good");
-    } else if (sttWarmupInProgress) {
-      setDiagItemStatus(
-        els.diagStt,
-        "running",
-        (i18n[state.lang] && i18n[state.lang].diag_stt_warming) || "model warmup..."
-      );
-    } else {
-      setDiagItemStatus(els.diagStt, "bad", sttWarmupError || "");
+    mp3Ready = typeof MediaRecorder !== "undefined";
+    if (!mp3Ready && PREFER_PCM_CAPTURE) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      mp3Ready = Boolean(Ctx);
     }
-
-    llmRequired = Boolean(llm && llm.enabled);
-    if (!llmRequired) {
-      setDiagItemStatus(els.diagLlm, "muted", notRequiredText);
-      llmOk = true;
-    } else {
-      llmOk = Boolean(llm.available);
-      setDiagItemStatus(els.diagLlm, llmOk ? "good" : "bad");
-    }
-  } catch (err) {
-    sttOk = false;
-    setDiagItemStatus(els.diagStt, "bad");
-    llmOk = false;
-    setDiagItemStatus(els.diagLlm, "bad");
+    setDiagItemStatus(els.diagStt, mp3Ready ? "good" : "bad");
+    setDiagItemStatus(els.diagLlm, "muted", notRequiredText);
   } finally {
     if (els.runDiagnostics) {
       els.runDiagnostics.disabled = false;
     }
   }
 
-  const criticalPassed = Boolean(audioOk && sttOk);
+  const systemLooksMissingWhileMicPresent = Boolean(
+    mode === "system" &&
+      includeMic &&
+      Number(state.meterLevels.system || 0) < DIAG_SYSTEM_CRITICAL_MIN &&
+      Number(state.meterLevels.mic || 0) >= 0.03
+  );
+  const criticalPassed = Boolean(audioOk && mp3Ready && !systemLooksMissingWhileMicPresent);
   state.diagnosticsLast = {
     criticalPassed,
     systemOk,
     micOk,
     micSkipped,
-    sttWarmupInProgress,
-    llmOk,
-    llmRequired,
+    mp3Ready,
     ts: Date.now(),
   };
   if (!criticalPassed) {
-    setDiagHint("diag_hint_fail", "bad");
-  } else if (systemOk && (micSkipped || micOk) && (!llmRequired || llmOk)) {
+    if (systemLooksMissingWhileMicPresent) {
+      setDiagHint("signal_check_mic_only", "bad");
+    } else {
+      setDiagHint("diag_hint_fail", "bad");
+    }
+  } else if (systemOk && (micSkipped || micOk) && mp3Ready) {
     setDiagHint("diag_hint_ok", "good");
   } else {
     setDiagHint("diag_hint_levels_low", "muted");
@@ -3888,88 +4478,7 @@ const runDiagnostics = async (options = {}) => {
     throw new Error("diagnostics_failed");
   }
   refreshRecognitionDiagnosis();
-  return { criticalPassed, llmOk, llmRequired };
-};
-
-const uploadAudioFile = async () => {
-  if (state.isUploading) return;
-  const workCfg = getWorkModeConfig();
-  if (!workCfg.supportsUpload) {
-    setStatusHint("err_work_mode_upload_only", "bad");
-    return;
-  }
-  const file = els.uploadAudio.files && els.uploadAudio.files[0];
-  if (!file) return;
-  let interviewMeta = null;
-  try {
-    interviewMeta = validateInterviewMetadata();
-  } catch (err) {
-    setStatusHint(mapStartError(err, "system"), "bad");
-    return;
-  }
-  state.isUploading = true;
-  els.startBtn.disabled = true;
-  els.stopBtn.disabled = true;
-  setStatus("status_uploading", "recording");
-  resetSessionState();
-
-  const res = await fetch("/v1/meetings/start", {
-    method: "POST",
-    headers: buildHeaders(),
-    body: JSON.stringify({
-      mode: "postmeeting",
-      context: {
-        source: "upload_audio",
-        work_mode: workCfg.contextMode,
-        source_mode: workCfg.contextMode,
-        locale: state.lang,
-        language_profile: getLanguageProfile(),
-        filename: file.name,
-        ...(interviewMeta || {}),
-        source_track_roles: {
-          system: "candidate",
-          mic: "interviewer",
-        },
-      },
-    }),
-  });
-  if (!res.ok) {
-    setStatus("status_error", "error");
-    state.isUploading = false;
-    setRecordingButtons(false);
-    return;
-  }
-  const data = await res.json();
-  state.meetingId = data.meeting_id;
-  els.meetingIdText.textContent = state.meetingId;
-  openWebSocket();
-
-  const form = new FormData();
-  form.append("file", file, file.name);
-  const uploadRes = await fetch(`/v1/meetings/${state.meetingId}/upload`, {
-    method: "POST",
-    headers: buildAuthHeaders(),
-    body: form,
-  });
-  if (!uploadRes.ok) {
-    setStatus("status_error", "error");
-    state.isUploading = false;
-    setRecordingButtons(false);
-    return;
-  }
-  state.chunkCount = 1;
-  els.chunkCount.textContent = "1";
-
-  await fetch(`/v1/meetings/${state.meetingId}/finish`, {
-    method: "POST",
-    headers: buildHeaders(),
-  });
-  await fetchRecords();
-  await saveMeetingMp3(state.meetingId, { askUser: true });
-
-  state.isUploading = false;
-  setStatus("status_idle", "idle");
-  setRecordingButtons(false);
+  return { criticalPassed, mp3Ready };
 };
 
 const clearQuickPollTimer = () => {
@@ -3979,7 +4488,9 @@ const clearQuickPollTimer = () => {
 };
 
 const setQuickButtonsByStatus = (status) => {
-  const quickEnabled = Boolean(getWorkModeConfig().supportsQuick);
+  const workCfg = getWorkModeConfig();
+  const quickEnabled = Boolean(workCfg.supportsQuick);
+  const quickPrimaryMode = quickEnabled && !Boolean(workCfg.supportsRealtime);
   const running = status === "queued" || status === "running";
   const stopping = status === "stopping";
   const busy = running || stopping;
@@ -3989,19 +4500,40 @@ const setQuickButtonsByStatus = (status) => {
   if (els.quickRecordStop) {
     els.quickRecordStop.disabled = !quickEnabled || !busy;
   }
-  [els.quickRecordUrl, els.quickRecordDuration, els.quickRecordTranscribe, els.quickRecordUpload].forEach(
-    (el) => {
-      if (!el) return;
-      el.disabled = !quickEnabled || busy;
+  const quickControls = getQuickControlSet(workCfg);
+  [quickControls.url, quickControls.duration, quickControls.transcribe, quickControls.upload].forEach((el) => {
+    if (!el) return;
+    el.disabled = !quickEnabled || busy;
+  });
+  if (els.apiKey) {
+    els.apiKey.disabled = workCfg.id === "api_upload" ? busy : false;
+  }
+  if (quickPrimaryMode) {
+    if (els.startBtn) {
+      els.startBtn.disabled = busy;
+      els.startBtn.classList.toggle("is-active", !busy);
+      els.startBtn.classList.toggle("is-inactive", busy);
     }
-  );
+    if (els.stopBtn) {
+      els.stopBtn.disabled = !busy;
+      els.stopBtn.classList.toggle("is-active", busy);
+      els.stopBtn.classList.toggle("is-inactive", !busy);
+    }
+  }
 };
 
 const applyQuickJobStatus = (job) => {
+  const currentMode = getWorkModeConfig();
+  const quickPrimaryMode = Boolean(currentMode.supportsQuick) && !Boolean(currentMode.supportsRealtime);
+  const apiMode = currentMode.id === "api_upload";
   if (!job) {
     state.quickJobId = null;
     setQuickStatus("quick_record_state_idle", "muted");
     setQuickButtonsByStatus("idle");
+    setTranscriptUiState(hasTranscriptContent() ? "ready" : "waiting");
+    if (quickPrimaryMode) {
+      setStatus("status_idle", "idle");
+    }
     clearQuickPollTimer();
     return;
   }
@@ -4011,6 +4543,13 @@ const applyQuickJobStatus = (job) => {
   if (status === "queued" || status === "running") {
     setQuickStatus("quick_record_state_running", "good");
     setQuickButtonsByStatus(status);
+    setTranscriptUiState("recording");
+    if (quickPrimaryMode) {
+      setStatus("status_recording", "recording");
+      if (apiMode) {
+        setStatusHint("api_record_started", "good");
+      }
+    }
     if (!state.quickPollTimer) {
       state.quickPollTimer = setInterval(() => {
         void fetchQuickRecordStatus({ silentErrors: true });
@@ -4022,6 +4561,13 @@ const applyQuickJobStatus = (job) => {
   if (status === "stopping") {
     setQuickStatus("quick_record_state_stopping", "muted");
     setQuickButtonsByStatus(status);
+    setTranscriptUiState("recording");
+    if (quickPrimaryMode) {
+      setStatus("status_recording", "recording");
+      if (apiMode) {
+        setStatusHint("api_record_stopped", "muted");
+      }
+    }
     if (!state.quickPollTimer) {
       state.quickPollTimer = setInterval(() => {
         void fetchQuickRecordStatus({ silentErrors: true });
@@ -4034,6 +4580,13 @@ const applyQuickJobStatus = (job) => {
   if (status === "completed") {
     setQuickStatus("quick_record_state_completed", "good");
     setQuickButtonsByStatus(status);
+    setTranscriptUiState(hasTranscriptContent() ? "ready" : "empty");
+    if (quickPrimaryMode) {
+      setStatus("status_idle", "idle");
+      if (apiMode) {
+        setStatusHint("api_record_completed", "good");
+      }
+    }
     setQuickHint("quick_record_hint_completed", "good", false, {
       path: String(job.mp3_path || "—"),
     });
@@ -4043,6 +4596,13 @@ const applyQuickJobStatus = (job) => {
   if (status === "failed") {
     setQuickStatus("quick_record_state_failed", "bad");
     setQuickButtonsByStatus(status);
+    setTranscriptUiState("empty");
+    if (quickPrimaryMode) {
+      setStatus("status_error", "error");
+      if (apiMode) {
+        setStatusHint("api_record_failed", "bad");
+      }
+    }
     setQuickHint("quick_record_hint_failed", "bad", false, {
       error: String(job.error || "unknown"),
     });
@@ -4051,6 +4611,10 @@ const applyQuickJobStatus = (job) => {
 
   setQuickStatus("quick_record_state_idle", "muted");
   setQuickButtonsByStatus(status);
+  setTranscriptUiState(hasTranscriptContent() ? "ready" : "waiting");
+  if (quickPrimaryMode) {
+    setStatus("status_idle", "idle");
+  }
 };
 
 const fetchQuickRecordStatus = async (options = {}) => {
@@ -4077,19 +4641,29 @@ const startQuickRecord = async () => {
     setQuickHint("err_work_mode_quick_only", "bad");
     return;
   }
-  const meetingUrl = String((els.quickRecordUrl && els.quickRecordUrl.value) || "").trim();
+  const quickControls = getQuickControlSet(workCfg);
+  const apiMode = workCfg.id === "api_upload";
+  const meetingUrl = String((quickControls.url && quickControls.url.value) || "").trim();
   if (!meetingUrl || (!meetingUrl.startsWith("http://") && !meetingUrl.startsWith("https://"))) {
     setQuickHint("quick_record_hint_missing_url", "bad");
     return;
   }
   const duration = Number.parseInt(
-    String((els.quickRecordDuration && els.quickRecordDuration.value) || "0"),
+    String((quickControls.duration && quickControls.duration.value) || "0"),
     10
   );
   if (!Number.isFinite(duration) || duration < 5) {
     setQuickHint("quick_record_hint_missing_duration", "bad");
     return;
   }
+
+  const transcribe = apiMode
+    ? false
+    : Boolean(quickControls.transcribe && quickControls.transcribe.checked);
+  const uploadToAgent = apiMode
+    ? true
+    : Boolean(quickControls.upload && quickControls.upload.checked);
+  const agentApiKey = String((els.apiKey && els.apiKey.value) || "").trim();
 
   if (els.quickRecordStart) {
     els.quickRecordStart.disabled = true;
@@ -4102,8 +4676,9 @@ const startQuickRecord = async () => {
         meeting_url: meetingUrl,
         duration_sec: duration,
         work_mode: workCfg.contextMode,
-        transcribe: Boolean(els.quickRecordTranscribe && els.quickRecordTranscribe.checked),
-        upload_to_agent: Boolean(els.quickRecordUpload && els.quickRecordUpload.checked),
+        transcribe,
+        upload_to_agent: uploadToAgent,
+        agent_api_key: agentApiKey || null,
       }),
     });
     if (res.status === 409) {
@@ -4116,10 +4691,16 @@ const startQuickRecord = async () => {
     }
     const body = await res.json();
     setQuickHint("quick_record_hint_started", "good");
+    if (apiMode) {
+      setStatusHint("api_record_started", "good");
+    }
     applyQuickJobStatus(body.job || null);
   } catch (err) {
     console.warn("quick record start failed", err);
     setQuickHint("quick_record_hint_start_failed", "bad");
+    if (apiMode) {
+      setStatusHint("api_record_failed", "bad");
+    }
     await fetchQuickRecordStatus({ silentErrors: true });
   } finally {
     if (els.quickRecordStart && (!els.quickRecordStop || els.quickRecordStop.disabled)) {
@@ -4129,7 +4710,9 @@ const startQuickRecord = async () => {
 };
 
 const stopQuickRecord = async () => {
-  if (!getWorkModeConfig().supportsQuick) {
+  const currentMode = getWorkModeConfig();
+  const apiMode = currentMode.id === "api_upload";
+  if (!currentMode.supportsQuick) {
     setQuickHint("err_work_mode_quick_only", "bad");
     return;
   }
@@ -4143,10 +4726,16 @@ const stopQuickRecord = async () => {
     }
     const body = await res.json();
     setQuickHint("quick_record_hint_stopped", "muted");
+    if (apiMode) {
+      setStatusHint("api_record_stopped", "muted");
+    }
     applyQuickJobStatus(body.job || null);
   } catch (err) {
     console.warn("quick record stop failed", err);
     setQuickHint("quick_record_hint_stop_failed", "bad");
+    if (apiMode) {
+      setStatusHint("api_record_failed", "bad");
+    }
   }
 };
 
@@ -4154,6 +4743,9 @@ const updateCaptureUi = () => {
   const cfg = getWorkModeConfig();
   const realtimeEnabled = Boolean(cfg.supportsRealtime);
   const mode = getCaptureMode();
+  if (els.realtimeOnlySettings) {
+    els.realtimeOnlySettings.classList.toggle("hidden", !realtimeEnabled);
+  }
   if (els.deviceSelect) {
     els.deviceSelect.disabled = !cfg.useDeviceDriver || mode === "screen";
   }
@@ -4170,17 +4762,29 @@ const updateCaptureUi = () => {
   if (els.micSelect) {
     els.micSelect.disabled = !realtimeEnabled || !els.includeMic || !els.includeMic.checked;
   }
+  const sttControlsLocked = Boolean(state.captureStopper || state.isUploading || isQuickFlowActive());
   if (els.languageProfileSelect) {
-    els.languageProfileSelect.disabled = !realtimeEnabled;
+    els.languageProfileSelect.disabled = sttControlsLocked;
   }
   [els.qualityFast, els.qualityBalanced, els.qualityAccurate].forEach((btn) => {
     if (!btn) return;
-    btn.disabled = !realtimeEnabled;
+    btn.disabled = sttControlsLocked;
   });
   if (els.runDiagnostics && !state.signalCheckInProgress) {
     els.runDiagnostics.disabled = !realtimeEnabled;
   }
+  if (els.captureMethodChip) {
+    const dict = i18n[state.lang] || {};
+    if (!realtimeEnabled) {
+      const workCfg = getWorkModeConfig();
+      els.captureMethodChip.textContent = dict[workCfg.labelKey] || workCfg.id;
+    } else {
+      const modeLabelKey = mode === "screen" ? "capture_mode_screen" : "capture_mode_system";
+      els.captureMethodChip.textContent = dict[modeLabelKey] || modeLabelKey;
+    }
+  }
   setRecordingButtons(Boolean(realtimeEnabled && state.captureStopper));
+  renderTranscriptModeUi();
 };
 
 const toggleDriverHelp = () => {
@@ -4197,28 +4801,82 @@ const setDriverHelpTab = (os) => {
   });
 };
 
+const formatMeetingOptionLabel = (meta) => {
+  if (!meta || typeof meta !== "object") return "—";
+  const display = String(meta.display_name || meta.meeting_id || "").trim() || "record";
+  const createdRaw = String(meta.created_at || "").trim();
+  if (!createdRaw) return display;
+  const dt = new Date(createdRaw);
+  if (!Number.isFinite(dt.valueOf())) return display;
+  return `${display} (${dt.toLocaleString()})`;
+};
+
+const getReportSelectEl = (source = "raw") => {
+  return source === "clean" ? els.cleanReportSelect : els.rawReportSelect;
+};
+
+const getReportNameInputEl = (source = "raw") => {
+  return source === "clean" ? els.cleanReportNameInput : els.rawReportNameInput;
+};
+
+const syncReportSelectors = () => {
+  const dict = i18n[state.lang] || {};
+  const meetingList = Array.from(state.recordsMeta.values());
+  ["raw", "clean"].forEach((source) => {
+    const select = getReportSelectEl(source);
+    if (!select) return;
+    const selectedMain = getSelectedMeeting();
+    const preferred = String(state.reportMeetingSelection[source] || selectedMain || "").trim();
+    select.innerHTML = "";
+    if (!meetingList.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = dict.report_picker_empty || "No records";
+      select.appendChild(opt);
+      state.reportMeetingSelection[source] = "";
+      return;
+    }
+    meetingList.forEach((meta) => {
+      const opt = document.createElement("option");
+      opt.value = String(meta.meeting_id || "");
+      opt.textContent = formatMeetingOptionLabel(meta);
+      select.appendChild(opt);
+    });
+    const fallback = String(meetingList[0].meeting_id || "");
+    const selected = meetingList.some((item) => String(item.meeting_id || "") === preferred)
+      ? preferred
+      : fallback;
+    select.value = selected;
+    state.reportMeetingSelection[source] = selected;
+  });
+};
+
 const syncResultsState = () => {
   if (!els.resultsRaw || !els.resultsClean) return;
-  const source = state.resultsSource;
+  const source = state.resultsSource === "raw" ? "raw" : "clean";
   els.resultsRaw.classList.toggle("active", source === "raw");
   els.resultsClean.classList.toggle("active", source === "clean");
-  const filename = buildFilename({ kind: source, fmt: "txt" });
-  if (els.resultFileName) els.resultFileName.textContent = filename;
-  if (els.downloadArtifactBtn) els.downloadArtifactBtn.dataset.kind = source;
-  if (els.reportArtifactBtn) els.reportArtifactBtn.dataset.source = source;
-  if (els.structuredArtifactBtn) els.structuredArtifactBtn.dataset.source = source;
-  const hasMeeting = Boolean(getSelectedMeeting());
-  [els.downloadArtifactBtn, els.reportArtifactBtn, els.structuredArtifactBtn, els.audioArtifactBtn].forEach(
-    (btn) => {
-      if (btn) btn.disabled = !hasMeeting;
-    }
-  );
-  if (els.recordMenuBtn) {
-    els.recordMenuBtn.disabled = !hasMeeting;
+  const filename = buildFilename({ kind: "report", source, fmt: "txt" });
+  if (els.resultFileName) {
+    els.resultFileName.textContent = filename;
   }
+  const hasMeeting = Boolean(getSelectedMeeting());
+  [
+    els.recordMenuBtn,
+    els.saveCurrentMp3Btn,
+    els.generateReportBtn,
+    els.downloadReportBtn,
+    els.resultsRaw,
+    els.resultsClean,
+  ].forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = !hasMeeting;
+  });
   if (!hasMeeting) {
+    setTranscriptUiState("waiting");
     closeRecordMenu();
   }
+  syncReportSelectors();
 };
 
 const chooseFolder = async () => {
@@ -4255,16 +4913,18 @@ const fetchRecords = async () => {
     items.forEach((item) => {
       const meetingId = String(item.meeting_id || "").trim();
       const displayName = String(item.display_name || "").trim() || meetingId;
+      const artifacts = item && typeof item.artifacts === "object" ? item.artifacts : {};
       state.recordsMeta.set(meetingId, {
         meeting_id: meetingId,
         display_name: displayName,
         record_index: Number(item.record_index || 0),
+        created_at: String(item.created_at || ""),
         audio_mp3: Boolean(item.audio_mp3),
+        artifacts,
       });
       const opt = document.createElement("option");
       opt.value = meetingId;
-      const created = item.created_at ? new Date(item.created_at).toLocaleString() : "";
-      opt.textContent = `${displayName}${created ? ` (${created})` : ""}`;
+      opt.textContent = formatMeetingOptionLabel(state.recordsMeta.get(meetingId));
       if (current && meetingId === current) {
         opt.selected = true;
       }
@@ -4287,6 +4947,13 @@ const getSelectedRecordMeta = () => {
   return state.recordsMeta.get(meetingId) || null;
 };
 
+const getReportMeetingId = (source = "raw") => {
+  const select = getReportSelectEl(source);
+  const selected = String((select && select.value) || state.reportMeetingSelection[source] || "").trim();
+  if (selected) return selected;
+  return String(getSelectedMeeting() || "").trim();
+};
+
 const getSelectedRecordDisplayName = () => {
   const meta = getSelectedRecordMeta();
   if (meta && meta.display_name) return String(meta.display_name);
@@ -4300,6 +4967,20 @@ const sanitizeFilenamePart = (value) => {
     .replace(/\\s+/g, " ")
     .trim();
   return (base || "record").slice(0, 80);
+};
+
+const normalizeMp3Filename = (value, fallbackBase = "record") => {
+  const normalized = String(value || "").trim().replace(/\.mp3$/i, "");
+  const safeBase = sanitizeFilenamePart(normalized || fallbackBase);
+  return `${safeBase}.mp3`;
+};
+
+const normalizeFilenameWithExt = (value, fallbackBase = "record", ext = "txt") => {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/\.[a-z0-9]{1,8}$/i, "");
+  const safeBase = sanitizeFilenamePart(normalized || fallbackBase);
+  return `${safeBase}.${String(ext || "txt").trim().toLowerCase()}`;
 };
 
 const closeRecordMenu = () => {
@@ -4316,6 +4997,8 @@ const toggleRecordMenu = () => {
 };
 
 const buildFilename = ({ kind, source, fmt, meetingId }) => {
+  const sourceSafe = source === "raw" ? "raw" : "clean";
+  const ext = String(fmt || "").trim().toLowerCase();
   if (kind === "raw") return "raw.txt";
   if (kind === "clean") return "clean.txt";
   if (kind === "audio") {
@@ -4325,23 +5008,47 @@ const buildFilename = ({ kind, source, fmt, meetingId }) => {
     return `${sanitizeFilenamePart(label)}.mp3`;
   }
   if (kind === "report") {
-    return source === "raw" ? "report_raw.txt" : "report_clean.txt";
+    if (ext === "json") return sourceSafe === "raw" ? "report_raw.json" : "report_clean.json";
+    return sourceSafe === "raw" ? "report_raw.txt" : "report_clean.txt";
   }
   if (kind === "structured") {
-    return `structured_${source}.${fmt}`;
+    return `structured_${sourceSafe}.${ext || "csv"}`;
+  }
+  if (kind === "senior_brief") {
+    return sourceSafe === "raw" ? "senior_brief_raw.txt" : "senior_brief_clean.txt";
   }
   return "artifact.bin";
 };
 
 const saveBlobViaPicker = async (filename, blob) => {
   if (!window.showSaveFilePicker) return false;
+  const ext = String(filename || "")
+    .split(".")
+    .pop()
+    .trim()
+    .toLowerCase();
+  let description = "File";
+  let mime = "application/octet-stream";
+  if (ext === "mp3") {
+    description = "MP3 audio";
+    mime = "audio/mpeg";
+  } else if (ext === "txt") {
+    description = "Text";
+    mime = "text/plain";
+  } else if (ext === "json") {
+    description = "JSON";
+    mime = "application/json";
+  } else if (ext === "csv") {
+    description = "CSV";
+    mime = "text/csv";
+  }
   try {
     const handle = await window.showSaveFilePicker({
       suggestedName: filename,
       types: [
         {
-          description: "MP3 audio",
-          accept: { "audio/mpeg": [".mp3"] },
+          description,
+          accept: { [mime]: [`.${ext || "txt"}`] },
         },
       ],
     });
@@ -4401,14 +5108,17 @@ const saveMeetingMp3 = async (meetingId, options = {}) => {
   const { askUser = false } = options;
   if (!meetingId) return false;
   const dict = i18n[state.lang] || {};
+  let filename = buildFilename({ kind: "audio", fmt: "mp3", meetingId });
   if (askUser) {
-    const question = dict.prompt_save_mp3_after_stop || "Recording is finished. Save MP3 now?";
-    if (!window.confirm(question)) {
+    const question = dict.prompt_save_mp3_after_stop || "Recording is finished. Enter MP3 file name:";
+    const suggested = normalizeMp3Filename(filename, "record");
+    const entered = window.prompt(question, suggested);
+    if (entered == null) {
       return false;
     }
+    filename = normalizeMp3Filename(entered, suggested.replace(/\.mp3$/i, ""));
   }
   const url = `/v1/meetings/${meetingId}/artifact?kind=audio&fmt=mp3`;
-  const filename = buildFilename({ kind: "audio", fmt: "mp3", meetingId });
   const result = await downloadArtifact(url, filename, { preferPicker: true });
   if (result && result.ok) {
     setStatusHint("hint_mp3_saved", "good");
@@ -4445,92 +5155,263 @@ const renameSelectedRecord = async () => {
   }
 };
 
-const handleRecordAction = async (event) => {
-  const button = event.currentTarget;
-  const action = button.dataset.action;
+const generateReportForMeeting = async (meetingId, source = "raw") => {
+  if (!meetingId) return false;
+  const src = source === "clean" ? "clean" : "raw";
+  const generated = await fetch(`/v1/meetings/${meetingId}/report`, {
+    method: "POST",
+    headers: buildHeaders(),
+    body: JSON.stringify({ source: src }),
+  });
+  if (!generated.ok) return false;
+  return true;
+};
+
+const generateStructuredForMeeting = async (meetingId, source = "raw") => {
+  if (!meetingId) return false;
+  const src = source === "clean" ? "clean" : "raw";
+  const generated = await fetch(`/v1/meetings/${meetingId}/structured`, {
+    method: "POST",
+    headers: buildHeaders(),
+    body: JSON.stringify({ source: src }),
+  });
+  if (!generated.ok) return false;
+  try {
+    const payload = await generated.json();
+    if (String(payload.status || "") === "insufficient_data") {
+      setStatusHint(
+        payload.message ||
+          (i18n[state.lang] && i18n[state.lang].structured_insufficient_data) ||
+          "Insufficient data",
+        "bad",
+        true
+      );
+    }
+  } catch (_err) {
+    // ignore parse failures and continue with download
+  }
+  return true;
+};
+
+const generateSeniorBriefForMeeting = async (meetingId, source = "raw") => {
+  if (!meetingId) return false;
+  const src = source === "clean" ? "clean" : "raw";
+  const generated = await fetch(`/v1/meetings/${meetingId}/senior-brief`, {
+    method: "POST",
+    headers: buildHeaders(),
+    body: JSON.stringify({ source: src }),
+  });
+  return Boolean(generated.ok);
+};
+
+const downloadCurrentReportTxt = async () => {
   const meetingId = getSelectedMeeting();
-  if (!meetingId) return;
-
-  if (action === "view") {
-    const kind = button.dataset.kind;
-    const res = await fetch(
-      `/v1/meetings/${meetingId}/artifact?kind=${kind}&fmt=txt`,
-      { headers: buildHeaders() }
-    );
-    if (!res.ok) return;
-    const text = await res.text();
-    if (els.transcriptClean) els.transcriptClean.value = text;
+  if (!meetingId) {
+    setStatusHint("hint_report_source_missing", "bad");
     return;
   }
-
-  if (action === "download") {
-    const kind = button.dataset.kind;
-    const url = `/v1/meetings/${meetingId}/artifact?kind=${kind}&fmt=txt`;
-    const filename = buildFilename({ kind, fmt: "txt" });
-    await downloadArtifact(url, filename);
+  const source = state.resultsSource === "clean" ? "clean" : "raw";
+  const inputValue = String((els.reportNameInput && els.reportNameInput.value) || "").trim();
+  const fallback = source === "raw" ? "report_raw" : "report_clean";
+  const filename = normalizeFilenameWithExt(inputValue, fallback, "txt");
+  const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
+  let result = await downloadArtifact(url, filename, { preferPicker: true });
+  if (result && result.status === 404) {
+    const generated = await generateReportForMeeting(meetingId, source);
+    if (!generated) {
+      setStatusHint("hint_report_missing", "bad");
+      return;
+    }
+    result = await downloadArtifact(url, filename, { preferPicker: true });
+  }
+  if (!result || !result.ok) {
+    setStatusHint("hint_report_missing", "bad");
     return;
   }
+  await fetchRecords();
+  await fetchComparison();
+  setStatusHint("hint_report_generated", "good");
+};
 
-  if (action === "report") {
-    const source = button.dataset.source || state.resultsSource;
-    const generated = await fetch(`/v1/meetings/${meetingId}/report`, {
+const generateAndSaveCurrentReport = async () => {
+  const meetingId = getSelectedMeeting();
+  if (!meetingId) {
+    setStatusHint("hint_report_source_missing", "bad");
+    return;
+  }
+  const source = state.resultsSource === "clean" ? "clean" : "raw";
+  const inputValue = String((els.reportNameInput && els.reportNameInput.value) || "").trim();
+  if (!inputValue) {
+    setStatusHint("hint_report_name_missing", "bad");
+    return;
+  }
+  const generated = await generateReportForMeeting(meetingId, source);
+  if (!generated) return;
+  const filename = normalizeFilenameWithExt(
+    inputValue,
+    source === "raw" ? "report_raw" : "report_clean",
+    "txt"
+  );
+  const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
+  const result = await downloadArtifact(url, filename, { preferPicker: true });
+  if (!result || !result.ok) {
+    setStatusHint("hint_report_missing", "bad");
+    return;
+  }
+  await fetchRecords();
+  await fetchComparison();
+  setStatusHint("hint_report_generated", "good");
+};
+
+const exportReportLane = async (source = "raw", exportKind = "report_txt") => {
+  const src = source === "clean" ? "clean" : "raw";
+  const meetingId = getReportMeetingId(src);
+  if (!meetingId) {
+    setStatusHint("hint_report_source_missing", "bad");
+    return;
+  }
+  const inputEl = getReportNameInputEl(src);
+  const rawName = String((inputEl && inputEl.value) || "").trim();
+
+  if (exportKind === "report_txt") {
+    const ok = await generateReportForMeeting(meetingId, src);
+    if (!ok) return;
+    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${src}&fmt=txt`;
+    const filename = normalizeFilenameWithExt(rawName, `report_${src}`, "txt");
+    const result = await downloadArtifact(url, filename, { preferPicker: true });
+    if (!result || !result.ok) {
+      setStatusHint("hint_report_missing", "bad");
+      return;
+    }
+  } else if (exportKind === "report_json") {
+    const ok = await generateReportForMeeting(meetingId, src);
+    if (!ok) return;
+    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${src}&fmt=json`;
+    const filename = normalizeFilenameWithExt(rawName, `report_${src}`, "json");
+    const result = await downloadArtifact(url, filename, { preferPicker: true });
+    if (!result || !result.ok) {
+      setStatusHint("hint_report_missing", "bad");
+      return;
+    }
+  } else if (exportKind === "structured_csv") {
+    const ok = await generateStructuredForMeeting(meetingId, src);
+    if (!ok) return;
+    const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${src}&fmt=csv`;
+    const filename = normalizeFilenameWithExt(rawName, `structured_${src}`, "csv");
+    await downloadArtifact(url, filename, { preferPicker: true });
+  } else if (exportKind === "structured_json") {
+    const ok = await generateStructuredForMeeting(meetingId, src);
+    if (!ok) return;
+    const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${src}&fmt=json`;
+    const filename = normalizeFilenameWithExt(rawName, `structured_${src}`, "json");
+    await downloadArtifact(url, filename, { preferPicker: true });
+  } else if (exportKind === "senior_brief") {
+    const ok = await generateSeniorBriefForMeeting(meetingId, src);
+    if (!ok) return;
+    const url = `/v1/meetings/${meetingId}/artifact?kind=senior_brief&source=${src}&fmt=txt`;
+    const filename = normalizeFilenameWithExt(rawName, `senior_brief_${src}`, "txt");
+    await downloadArtifact(url, filename, { preferPicker: true });
+  }
+  await fetchRecords();
+  await fetchComparison();
+};
+
+const uploadAudioToMeetingPipeline = async (file, options = {}) => {
+  const { source = "upload_audio", enforceUploadMode = false } = options;
+  if (!file) return null;
+  if (state.isUploading) return null;
+  const workCfg = getWorkModeConfig();
+  if (enforceUploadMode && !workCfg.supportsUpload) {
+    setStatusHint("err_work_mode_upload_only", "bad");
+    return null;
+  }
+  let interviewMeta = null;
+  try {
+    interviewMeta = validateInterviewMetadata();
+  } catch (err) {
+    setStatusHint(mapStartError(err, "system"), "bad");
+    return null;
+  }
+  state.isUploading = true;
+  els.startBtn.disabled = true;
+  els.stopBtn.disabled = true;
+  setStatus("status_uploading", "recording");
+  resetSessionState();
+  try {
+    const res = await fetch("/v1/meetings/start", {
       method: "POST",
       headers: buildHeaders(),
-      body: JSON.stringify({ source }),
+      body: JSON.stringify({
+        mode: "postmeeting",
+        context: {
+          source,
+          work_mode: "api_upload",
+          source_mode: "api_upload",
+          locale: state.lang,
+          language_profile: getLanguageProfile(),
+          filename: file.name,
+          ...(interviewMeta || {}),
+          source_track_roles: {
+            system: "candidate",
+            mic: "interviewer",
+          },
+        },
+      }),
     });
-    if (!generated.ok) return;
-
-    const view = await fetch(
-      `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`,
-      { headers: buildHeaders() }
-    );
-    if (view.ok) {
-      const text = await view.text();
-      if (els.transcriptClean) {
-        els.transcriptClean.value = text;
-      }
+    if (!res.ok) {
+      throw new Error(`meeting_start_failed_${res.status}`);
     }
-    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
-    const filename = buildFilename({ kind: "report", source, fmt: "txt" });
-    await downloadArtifact(url, filename);
-    await fetchRecords();
-    await fetchComparison();
-    return;
-  }
+    const data = await res.json();
+    const meetingId = String(data.meeting_id || "").trim();
+    state.meetingId = meetingId;
+    if (els.meetingIdText) {
+      els.meetingIdText.textContent = meetingId || "—";
+    }
 
-  if (action === "structured") {
-    const source = button.dataset.source || state.resultsSource;
-    const generated = await fetch(`/v1/meetings/${meetingId}/structured`, {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const uploadRes = await fetch(`/v1/meetings/${meetingId}/upload`, {
+      method: "POST",
+      headers: buildAuthHeaders(),
+      body: form,
+    });
+    if (!uploadRes.ok) {
+      throw new Error(`meeting_upload_failed_${uploadRes.status}`);
+    }
+    state.chunkCount = 1;
+    if (els.chunkCount) {
+      els.chunkCount.textContent = "1";
+    }
+    setTranscriptUiState("loading");
+    const finishRes = await fetch(`/v1/meetings/${meetingId}/finish`, {
       method: "POST",
       headers: buildHeaders(),
-      body: JSON.stringify({ source }),
     });
-    if (!generated.ok) return;
-    try {
-      const payload = await generated.json();
-      if (String(payload.status || "") === "insufficient_data") {
-        setStatusHint(
-          payload.message ||
-            (i18n[state.lang] && i18n[state.lang].structured_insufficient_data) ||
-            "Insufficient data",
-          "bad",
-          true
-        );
-      }
-    } catch (err) {
-      // ignore parse failures and continue with download
+    if (!finishRes.ok) {
+      throw new Error(`meeting_finish_failed_${finishRes.status}`);
     }
-    const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${source}&fmt=csv`;
-    const filename = buildFilename({ kind: "structured", source, fmt: "csv" });
-    await downloadArtifact(url, filename);
+    await loadFinalTranscripts(meetingId);
     await fetchRecords();
-    await fetchComparison();
-    return;
+    if (els.recordsSelect) {
+      els.recordsSelect.value = meetingId;
+    }
+    syncResultsState();
+    return meetingId;
+  } catch (err) {
+    console.warn("postmeeting upload failed", err);
+    setStatus("status_error", "error");
+    return null;
+  } finally {
+    state.isUploading = false;
+    setStatus("status_idle", "idle");
+    setRecordingButtons(false);
   }
+};
 
-  if (action === "audio") {
-    await saveMeetingMp3(meetingId, { askUser: false });
-  }
+const importMp3FromPicker = async () => {
+  if (!els.importMp3Input) return;
+  els.importMp3Input.value = "";
+  els.importMp3Input.click();
 };
 
 document.querySelectorAll(".lang-btn").forEach((btn) => {
@@ -4627,7 +5508,14 @@ els.recordsSelect.addEventListener("change", () => {
   const meetingId = getSelectedMeeting();
   if (meetingId) {
     els.meetingIdText.textContent = meetingId;
+    state.reportMeetingSelection.raw = meetingId;
+    state.reportMeetingSelection.clean = meetingId;
   }
+  state.transcript.raw.clear();
+  state.transcript.enhanced.clear();
+  if (els.transcriptRaw) els.transcriptRaw.value = "";
+  if (els.transcriptClean) els.transcriptClean.value = "";
+  setTranscriptUiState("waiting");
   closeRecordMenu();
   syncResultsState();
 });
@@ -4650,6 +5538,31 @@ if (els.saveRecordMp3Btn) {
     void saveMeetingMp3(meetingId, { askUser: false });
   });
 }
+if (els.saveCurrentMp3Btn) {
+  els.saveCurrentMp3Btn.addEventListener("click", () => {
+    const meetingId = getSelectedMeeting();
+    if (!meetingId) return;
+    void saveMeetingMp3(meetingId, { askUser: true });
+  });
+}
+if (els.importMp3Btn) {
+  els.importMp3Btn.addEventListener("click", () => {
+    void importMp3FromPicker();
+  });
+}
+if (els.importMp3Input) {
+  els.importMp3Input.addEventListener("change", async () => {
+    const file = els.importMp3Input && els.importMp3Input.files ? els.importMp3Input.files[0] : null;
+    if (!file) return;
+    setStatusHint("hint_mp3_import_started", "muted");
+    const meetingId = await uploadAudioToMeetingPipeline(file, { source: "results_mp3_import" });
+    if (!meetingId) {
+      setStatusHint("hint_mp3_import_failed", "bad");
+      return;
+    }
+    setStatusHint("hint_mp3_import_done", "good");
+  });
+}
 if (els.resultsRaw) {
   els.resultsRaw.addEventListener("click", () => {
     state.resultsSource = "raw";
@@ -4664,10 +5577,36 @@ if (els.resultsClean) {
     void fetchComparison();
   });
 }
-els.chooseFolder.addEventListener("click", chooseFolder);
-document.querySelectorAll("[data-action]").forEach((btn) => {
-  btn.addEventListener("click", handleRecordAction);
+if (els.generateReportBtn) {
+  els.generateReportBtn.addEventListener("click", () => {
+    void generateAndSaveCurrentReport();
+  });
+}
+if (els.downloadReportBtn) {
+  els.downloadReportBtn.addEventListener("click", () => {
+    void downloadCurrentReportTxt();
+  });
+}
+if (els.rawReportSelect) {
+  els.rawReportSelect.addEventListener("change", () => {
+    state.reportMeetingSelection.raw = String(els.rawReportSelect.value || "").trim();
+  });
+}
+if (els.cleanReportSelect) {
+  els.cleanReportSelect.addEventListener("change", () => {
+    state.reportMeetingSelection.clean = String(els.cleanReportSelect.value || "").trim();
+  });
+}
+(els.reportActionButtons || []).forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const source = String((btn.dataset && btn.dataset.exportSource) || "raw").trim();
+    const kind = String((btn.dataset && btn.dataset.exportKind) || "report_txt").trim();
+    void exportReportLane(source, kind);
+  });
 });
+if (els.chooseFolder) {
+  els.chooseFolder.addEventListener("click", chooseFolder);
+}
 document.addEventListener("click", (event) => {
   if (!els.recordMenu || !els.recordMenuBtn) return;
   const target = event && event.target ? event.target : null;
@@ -4677,6 +5616,11 @@ document.addEventListener("click", (event) => {
   closeRecordMenu();
 });
 els.startBtn.addEventListener("click", async () => {
+  const modeCfg = getWorkModeConfig();
+  if (modeCfg.supportsQuick && !modeCfg.supportsRealtime) {
+    await startQuickRecord();
+    return;
+  }
   try {
     await startRecording();
   } catch (err) {
@@ -4686,10 +5630,14 @@ els.startBtn.addEventListener("click", async () => {
   }
 });
 els.stopBtn.addEventListener("click", () => {
+  const modeCfg = getWorkModeConfig();
+  if (modeCfg.supportsQuick && !modeCfg.supportsRealtime) {
+    void stopQuickRecord();
+    return;
+  }
   void stopRecording();
 });
 els.checkSignal.addEventListener("click", checkSignal);
-els.uploadAudioBtn.addEventListener("click", uploadAudioFile);
 if (els.quickRecordStart) {
   els.quickRecordStart.addEventListener("click", () => {
     void startQuickRecord();
