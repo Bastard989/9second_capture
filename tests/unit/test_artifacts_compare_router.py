@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import time
 
 import pytest
 from fastapi import FastAPI
@@ -905,3 +906,106 @@ def test_rag_query_endpoint_returns_hits(monkeypatch, auth_none_settings) -> Non
     assert body["ok"] is True
     assert body["query"] == "python sql"
     assert body["hits"][0]["chunk_id"] == "c1"
+
+
+def test_rag_index_job_manager_completes_and_reports_progress(monkeypatch, auth_none_settings) -> None:
+    manager = artifacts_router.RAGIndexJobManager(max_jobs=8)
+
+    def _fake_ensure_rag_index(meeting_id, **kwargs):
+        time.sleep(0.01)
+        return (
+            {
+                "chunk_count": 3 if meeting_id == "m1" else 2,
+                "transcript_chars": 120,
+                "indexed_at": "2026-02-26T12:00:00Z",
+                "chunks": [],
+            },
+            False,
+        )
+
+    monkeypatch.setattr(artifacts_router, "_ensure_rag_index", _fake_ensure_rag_index)
+
+    started = manager.start(
+        artifacts_router.RAGIndexJobRequest(
+            meeting_ids=["m1", "m2"],
+            transcript_variant="clean",
+            force_rebuild=False,
+        )
+    )
+    assert started.job_id.startswith("ragidx-")
+    assert started.total_meetings == 2
+
+    deadline = time.time() + 2.0
+    latest = started
+    while time.time() < deadline:
+        status = manager.get_status(job_id=started.job_id)
+        assert status is not None
+        latest = status
+        if latest.status in {"completed", "failed"}:
+            break
+        time.sleep(0.02)
+
+    assert latest.status == "completed"
+    assert latest.completed_meetings == 2
+    assert latest.ok_meetings == 2
+    assert latest.failed_meetings == 0
+    assert latest.progress == 1.0
+    assert [item.status for item in latest.items] == ["completed", "completed"]
+
+
+def test_rag_index_jobs_endpoints_start_and_status(monkeypatch, auth_none_settings) -> None:
+    class _FakeMgr:
+        def start(self, req):
+            assert req.meeting_ids == ["m1", "m2"]
+            return artifacts_router.RAGIndexJobStatusResponse(
+                job_id="ragidx-test",
+                status="running",
+                transcript_variant=req.transcript_variant,
+                total_meetings=2,
+                completed_meetings=1,
+                ok_meetings=1,
+                failed_meetings=0,
+                progress=0.5,
+                current_meeting_id="m2",
+                items=[
+                    artifacts_router.RAGIndexJobItem(meeting_id="m1", status="completed", chunk_count=3),
+                    artifacts_router.RAGIndexJobItem(meeting_id="m2", status="running"),
+                ],
+            )
+
+        def get_status(self, job_id=None):
+            assert job_id in {None, "ragidx-test"}
+            return artifacts_router.RAGIndexJobStatusResponse(
+                job_id="ragidx-test",
+                status="completed",
+                transcript_variant="clean",
+                total_meetings=2,
+                completed_meetings=2,
+                ok_meetings=2,
+                failed_meetings=0,
+                progress=1.0,
+                items=[
+                    artifacts_router.RAGIndexJobItem(meeting_id="m1", status="completed", chunk_count=3),
+                    artifacts_router.RAGIndexJobItem(meeting_id="m2", status="completed", chunk_count=2),
+                ],
+            )
+
+    monkeypatch.setattr(artifacts_router, "_rag_index_job_manager", lambda: _FakeMgr())
+
+    client = _client()
+    start_resp = client.post(
+        "/v1/rag/index-jobs",
+        json={"meeting_ids": ["m1", "m2"], "transcript_variant": "clean"},
+    )
+    assert start_resp.status_code == 200
+    start_body = start_resp.json()
+    assert start_body["job_id"] == "ragidx-test"
+    assert start_body["status"] == "running"
+    assert start_body["completed_meetings"] == 1
+
+    status_resp = client.get("/v1/rag/index-jobs/ragidx-test")
+    assert status_resp.status_code == 200
+    status_body = status_resp.json()
+    assert status_body["status"] == "completed"
+    assert status_body["completed_meetings"] == 2
+    assert len(status_body["items"]) == 2

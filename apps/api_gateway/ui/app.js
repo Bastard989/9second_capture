@@ -119,6 +119,8 @@ const state = {
     lastResponse: null,
     queryBusy: false,
     indexBusy: false,
+    indexJobId: "",
+    indexJobStatus: null,
     hintKey: "rag_hint_idle",
     hintText: "",
     hintStyle: "muted",
@@ -2772,6 +2774,64 @@ const _ragJsonHeaders = () => ({
   ...buildHeaders(),
 });
 
+const _ragIndexJobTerminal = (status) => {
+  const value = String(status || "").trim().toLowerCase();
+  return value === "completed" || value === "failed";
+};
+
+const _formatRagIndexJobHint = (job) => {
+  const status = String((job && job.status) || "").trim().toLowerCase();
+  const total = Number((job && job.total_meetings) || 0);
+  const done = Number((job && job.completed_meetings) || 0);
+  const ok = Number((job && job.ok_meetings) || 0);
+  const failed = Number((job && job.failed_meetings) || 0);
+  const current = String((job && job.current_meeting_id) || "").trim();
+  const ru = state.lang === "ru";
+  if (status === "completed") {
+    return ru
+      ? `RAG индексация завершена: ${ok}/${total || ok + failed} успешно, ошибок: ${failed}.`
+      : `RAG indexing completed: ${ok}/${total || ok + failed} succeeded, failed: ${failed}.`;
+  }
+  if (status === "failed") {
+    const err = String((job && job.error) || "").trim();
+    return ru
+      ? `RAG индексация завершилась с ошибкой${err ? `: ${err}` : ""}.`
+      : `RAG indexing failed${err ? `: ${err}` : ""}.`;
+  }
+  const progressPct = Math.round(Math.max(0, Math.min(100, Number((job && job.progress) || 0) * 100)));
+  if (ru) {
+    return `Индексация RAG: ${done}/${total || "?"} (${progressPct}%)${current ? ` · сейчас: ${current}` : ""}`;
+  }
+  return `RAG indexing: ${done}/${total || "?"} (${progressPct}%)${current ? ` · current: ${current}` : ""}`;
+};
+
+const _pollRagIndexJobUntilDone = async (jobId) => {
+  const id = String(jobId || "").trim();
+  if (!id) throw new Error("rag_index_job_id_required");
+  let lastBody = null;
+  const startedAt = Date.now();
+  const timeoutMs = 15 * 60 * 1000;
+  while (Date.now() - startedAt < timeoutMs) {
+    const res = await fetch(`/v1/rag/index-jobs/${encodeURIComponent(id)}`, {
+      headers: _ragJsonHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`rag_index_job_status_failed_${res.status}`);
+    }
+    const body = await res.json();
+    lastBody = body;
+    state.rag.indexJobId = id;
+    state.rag.indexJobStatus = body;
+    setRagHint(_formatRagIndexJobHint(body), _ragIndexJobTerminal(body.status) ? (body.status === "completed" ? "good" : "bad") : "muted", true);
+    renderRagWorkspace();
+    if (_ragIndexJobTerminal(body.status)) {
+      return body;
+    }
+    await sleepMs(700);
+  }
+  throw new Error("rag_index_job_timeout");
+};
+
 const indexSelectedRagMeetings = async () => {
   const selectedIds = _ragSelectedMeetingIds();
   if (!selectedIds.length) {
@@ -2780,32 +2840,32 @@ const indexSelectedRagMeetings = async () => {
   }
   _syncRagControlsToState();
   state.rag.indexBusy = true;
+  state.rag.indexJobStatus = null;
   renderRagWorkspace();
   setRagHint("rag_hint_indexing", "muted");
   showBusyOverlay("busy_rag_index_title", "busy_rag_index_text");
   try {
-    let okCount = 0;
-    for (const meetingId of selectedIds) {
-      const res = await fetch(`/v1/meetings/${meetingId}/rag/index`, {
-        method: "POST",
-        headers: _ragJsonHeaders(),
-        body: JSON.stringify({
-          transcript_variant: state.rag.source || "clean",
-          force_rebuild: Boolean(state.rag.forceReindex),
-        }),
-      });
-      if (res.ok) okCount += 1;
+    const startRes = await fetch("/v1/rag/index-jobs", {
+      method: "POST",
+      headers: _ragJsonHeaders(),
+      body: JSON.stringify({
+        meeting_ids: selectedIds,
+        transcript_variant: state.rag.source || "clean",
+        force_rebuild: Boolean(state.rag.forceReindex),
+      }),
+    });
+    if (!startRes.ok) {
+      throw new Error(`rag_index_job_start_failed_${startRes.status}`);
     }
-    if (okCount === 0) {
-      setRagHint("rag_hint_failed", "bad");
-    } else {
-      const ru = state.lang === "ru";
-      setRagHint(
-        ru ? `Индексация завершена: ${okCount}/${selectedIds.length}.` : `Indexing completed: ${okCount}/${selectedIds.length}.`,
-        okCount === selectedIds.length ? "good" : "muted",
-        true
-      );
+    const startBody = await startRes.json();
+    const jobId = String((startBody && startBody.job_id) || "").trim();
+    if (!jobId) {
+      throw new Error("rag_index_job_id_missing");
     }
+    state.rag.indexJobId = jobId;
+    state.rag.indexJobStatus = startBody;
+    renderRagWorkspace();
+    await _pollRagIndexJobUntilDone(jobId);
   } catch (err) {
     console.warn("rag index failed", err);
     setRagHint("rag_hint_failed", "bad");

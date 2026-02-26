@@ -6,7 +6,9 @@ import json
 import math
 import re
 import threading
+import uuid
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -157,6 +159,46 @@ class RAGIndexResponse(BaseModel):
     indexed_at: str = ""
     cached: bool = False
     chunking: dict[str, int] = Field(default_factory=dict)
+
+
+class RAGIndexJobRequest(BaseModel):
+    meeting_ids: list[str] = Field(default_factory=list)
+    transcript_variant: TranscriptVariant = "clean"
+    force_rebuild: bool = False
+    max_lines_per_chunk: int = Field(default=6, ge=1, le=50)
+    overlap_lines: int = Field(default=1, ge=0, le=20)
+    max_chars_per_chunk: int = Field(default=1200, ge=100, le=10000)
+
+
+class RAGIndexJobItem(BaseModel):
+    meeting_id: str
+    status: str = "queued"
+    chunk_count: int = 0
+    transcript_chars: int = 0
+    indexed_at: str = ""
+    cached: bool = False
+    error: str = ""
+
+
+class RAGIndexJobStatusResponse(BaseModel):
+    ok: bool = True
+    job_id: str
+    status: str = "queued"
+    created_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    transcript_variant: TranscriptVariant = "clean"
+    force_rebuild: bool = False
+    chunking: dict[str, int] = Field(default_factory=dict)
+    total_meetings: int = 0
+    completed_meetings: int = 0
+    ok_meetings: int = 0
+    failed_meetings: int = 0
+    progress: float = 0.0
+    current_meeting_id: str = ""
+    reused_active_job: bool = False
+    error: str = ""
+    items: list[RAGIndexJobItem] = Field(default_factory=list)
 
 
 class RAGHit(BaseModel):
@@ -1906,6 +1948,218 @@ def _rag_query(req: RAGQueryRequest) -> RAGQueryResponse:
     )
 
 
+@dataclass
+class _RAGIndexJobRow:
+    meeting_id: str
+    status: str = "queued"
+    chunk_count: int = 0
+    transcript_chars: int = 0
+    indexed_at: str = ""
+    cached: bool = False
+    error: str = ""
+
+
+@dataclass
+class _RAGIndexJob:
+    job_id: str
+    meeting_ids: list[str]
+    transcript_variant: TranscriptVariant
+    force_rebuild: bool
+    max_lines_per_chunk: int
+    overlap_lines: int
+    max_chars_per_chunk: int
+    status: str = "queued"
+    created_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    current_meeting_id: str = ""
+    error: str = ""
+    items: list[_RAGIndexJobRow] = field(default_factory=list)
+
+
+def _rag_index_job_error_text(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        try:
+            return str(exc.detail or f"http_{exc.status_code}")[:240]
+        except Exception:
+            return f"http_{exc.status_code}"
+    return str(exc or "error")[:240]
+
+
+class RAGIndexJobManager:
+    def __init__(self, *, max_jobs: int = 64) -> None:
+        self._lock = threading.RLock()
+        self._jobs: dict[str, _RAGIndexJob] = {}
+        self._active_job_id: str | None = None
+        self._latest_job_id: str | None = None
+        self._max_jobs = max(4, int(max_jobs))
+
+    def _trim_jobs_locked(self) -> None:
+        if len(self._jobs) <= self._max_jobs:
+            return
+        removable = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if job_id != self._active_job_id and job.status in {"completed", "failed"}
+        ]
+        removable.sort(key=lambda job_id: str(self._jobs[job_id].created_at or ""))
+        while len(self._jobs) > self._max_jobs and removable:
+            old_id = removable.pop(0)
+            self._jobs.pop(old_id, None)
+            if self._latest_job_id == old_id:
+                self._latest_job_id = None
+
+    def _status_snapshot(self, job: _RAGIndexJob, *, reused_active_job: bool = False) -> RAGIndexJobStatusResponse:
+        items = [
+            RAGIndexJobItem(
+                meeting_id=row.meeting_id,
+                status=row.status,
+                chunk_count=int(row.chunk_count or 0),
+                transcript_chars=int(row.transcript_chars or 0),
+                indexed_at=str(row.indexed_at or ""),
+                cached=bool(row.cached),
+                error=str(row.error or ""),
+            )
+            for row in job.items
+        ]
+        total = len(items)
+        completed = sum(1 for row in items if row.status in {"completed", "failed"})
+        ok_count = sum(1 for row in items if row.status == "completed")
+        failed_count = sum(1 for row in items if row.status == "failed")
+        progress = 1.0 if total == 0 and job.status in {"completed", "failed"} else (completed / max(1, total))
+        return RAGIndexJobStatusResponse(
+            job_id=job.job_id,
+            status=str(job.status or "queued"),
+            created_at=str(job.created_at or ""),
+            started_at=str(job.started_at or ""),
+            finished_at=str(job.finished_at or ""),
+            transcript_variant=job.transcript_variant,
+            force_rebuild=bool(job.force_rebuild),
+            chunking={
+                "max_lines_per_chunk": int(job.max_lines_per_chunk),
+                "overlap_lines": int(job.overlap_lines),
+                "max_chars_per_chunk": int(job.max_chars_per_chunk),
+            },
+            total_meetings=total,
+            completed_meetings=completed,
+            ok_meetings=ok_count,
+            failed_meetings=failed_count,
+            progress=round(float(progress), 6),
+            current_meeting_id=str(job.current_meeting_id or ""),
+            reused_active_job=bool(reused_active_job),
+            error=str(job.error or ""),
+            items=items,
+        )
+
+    def _run_job(self, job_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return
+            job.status = "running"
+            job.started_at = _utc_now_iso()
+
+        try:
+            for row in list(job.items):
+                with self._lock:
+                    current = self._jobs.get(job_id)
+                    if not current:
+                        return
+                    current.current_meeting_id = row.meeting_id
+                    row.status = "running"
+                try:
+                    payload, cached = _ensure_rag_index(
+                        row.meeting_id,
+                        source=job.transcript_variant,
+                        force_rebuild=bool(job.force_rebuild),
+                        max_lines_per_chunk=int(job.max_lines_per_chunk),
+                        overlap_lines=int(job.overlap_lines),
+                        max_chars_per_chunk=int(job.max_chars_per_chunk),
+                    )
+                    row.status = "completed"
+                    row.cached = bool(cached)
+                    row.chunk_count = int(payload.get("chunk_count") or len(list(payload.get("chunks") or [])))
+                    row.transcript_chars = int(payload.get("transcript_chars") or 0)
+                    row.indexed_at = str(payload.get("indexed_at") or "")
+                    row.error = ""
+                except Exception as exc:
+                    row.status = "failed"
+                    row.error = _rag_index_job_error_text(exc)
+                finally:
+                    with self._lock:
+                        current = self._jobs.get(job_id)
+                        if current:
+                            current.items = list(job.items)
+            with self._lock:
+                current = self._jobs.get(job_id)
+                if current:
+                    all_failed = bool(current.items) and all(r.status == "failed" for r in current.items)
+                    current.status = "failed" if all_failed else "completed"
+                    current.finished_at = _utc_now_iso()
+                    current.current_meeting_id = ""
+        except Exception as exc:
+            with self._lock:
+                current = self._jobs.get(job_id)
+                if current:
+                    current.status = "failed"
+                    current.error = _rag_index_job_error_text(exc)
+                    current.finished_at = _utc_now_iso()
+                    current.current_meeting_id = ""
+        finally:
+            with self._lock:
+                if self._active_job_id == job_id:
+                    self._active_job_id = None
+                self._trim_jobs_locked()
+
+    def start(self, req: RAGIndexJobRequest) -> RAGIndexJobStatusResponse:
+        meeting_ids = _safe_meeting_ids(req.meeting_ids)
+        if not meeting_ids:
+            raise ValueError("meeting_ids_required")
+        with self._lock:
+            if self._active_job_id:
+                active = self._jobs.get(self._active_job_id)
+                if active and active.status in {"queued", "running"}:
+                    return self._status_snapshot(active, reused_active_job=True)
+                self._active_job_id = None
+            job_id = f"ragidx-{uuid.uuid4().hex[:10]}"
+            job = _RAGIndexJob(
+                job_id=job_id,
+                meeting_ids=list(meeting_ids),
+                transcript_variant=req.transcript_variant,
+                force_rebuild=bool(req.force_rebuild),
+                max_lines_per_chunk=int(req.max_lines_per_chunk),
+                overlap_lines=int(req.overlap_lines),
+                max_chars_per_chunk=int(req.max_chars_per_chunk),
+                status="queued",
+                created_at=_utc_now_iso(),
+                items=[_RAGIndexJobRow(meeting_id=mid) for mid in meeting_ids],
+            )
+            self._jobs[job_id] = job
+            self._active_job_id = job_id
+            self._latest_job_id = job_id
+            self._trim_jobs_locked()
+            thread = threading.Thread(target=self._run_job, args=(job_id,), daemon=True)
+            thread.start()
+            return self._status_snapshot(job)
+
+    def get_status(self, job_id: str | None = None) -> RAGIndexJobStatusResponse | None:
+        with self._lock:
+            target_id = str(job_id or self._active_job_id or self._latest_job_id or "").strip()
+            if not target_id:
+                return None
+            job = self._jobs.get(target_id)
+            if not job:
+                return None
+            return self._status_snapshot(job)
+
+
+_RAG_INDEX_JOB_MANAGER = RAGIndexJobManager()
+
+
+def _rag_index_job_manager() -> RAGIndexJobManager:
+    return _RAG_INDEX_JOB_MANAGER
+
+
 def _load_or_build_report(*, meeting_id: str, source: TranscriptVariant) -> dict[str, Any]:
     filename = _report_json_filename(source)
     if records.exists(meeting_id, filename):
@@ -2214,6 +2468,39 @@ def get_rag_index_meta(
         payload = _rag_read_index(meeting_id, source)
         cached = True
     return _rag_index_response_from_payload(payload, meeting_id=meeting_id, source=source, cached=cached)
+
+
+@router.post("/rag/index-jobs", response_model=RAGIndexJobStatusResponse)
+def start_rag_index_job(
+    req: RAGIndexJobRequest,
+    _=Depends(auth_dep),
+) -> RAGIndexJobStatusResponse:
+    try:
+        return _rag_index_job_manager().start(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get("/rag/index-jobs", response_model=RAGIndexJobStatusResponse)
+def get_rag_index_job_status_latest(
+    job_id: str | None = Query(default=None),
+    _=Depends(auth_dep),
+) -> RAGIndexJobStatusResponse:
+    resp = _rag_index_job_manager().get_status(job_id=job_id)
+    if not resp:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="rag_index_job_not_found")
+    return resp
+
+
+@router.get("/rag/index-jobs/{job_id}", response_model=RAGIndexJobStatusResponse)
+def get_rag_index_job_status(
+    job_id: str,
+    _=Depends(auth_dep),
+) -> RAGIndexJobStatusResponse:
+    resp = _rag_index_job_manager().get_status(job_id=job_id)
+    if not resp:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="rag_index_job_not_found")
+    return resp
 
 
 @router.post("/rag/query", response_model=RAGQueryResponse)
