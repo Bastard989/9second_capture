@@ -179,11 +179,11 @@ body[data-theme="dark"] .bg-layer {
 }
 
 .card-connection {
-  grid-column: span 3;
+  grid-column: span 4;
 }
 
 .card-recording {
-  grid-column: span 3;
+  grid-column: span 4;
 }
 
 .card-upload {
@@ -191,7 +191,7 @@ body[data-theme="dark"] .bg-layer {
 }
 
 .card-results {
-  grid-column: span 3;
+  grid-column: span 4;
 }
 
 .card-transcript {
@@ -342,6 +342,57 @@ textarea {
 
 .hidden {
   display: none !important;
+}
+
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: color-mix(in srgb, #0f172a 26%, transparent);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.busy-overlay-card {
+  width: min(520px, 100%);
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border) 82%);
+  background: color-mix(in srgb, var(--card) 94%, white 6%);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.16);
+  padding: 18px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.busy-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 3px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-top-color: var(--accent);
+  animation: busy-spin 0.8s linear infinite;
+}
+
+.busy-overlay-title {
+  font-size: 20px;
+  line-height: 1.15;
+  font-weight: 800;
+  color: var(--ink-1);
+}
+
+.busy-overlay-text {
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+
+@keyframes busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .work-mode-grid {
@@ -893,6 +944,20 @@ button:disabled {
   gap: 10px;
 }
 
+.field-compact {
+  margin-bottom: -2px;
+}
+
+.field-compact label {
+  margin-bottom: 0;
+  font-size: 13px;
+}
+
+.results-report-name-row input {
+  flex: 1 1 220px;
+  min-width: 140px;
+}
+
 .results-block-head {
   display: flex;
   align-items: center;
@@ -972,6 +1037,11 @@ button:disabled {
   gap: 8px;
 }
 
+.lane-title-row {
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .report-actions {
   gap: 8px;
 }
@@ -996,6 +1066,84 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.llm-artifact-workspace {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--card-soft) 90%, var(--card) 10%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.llm-artifact-header-actions {
+  justify-content: flex-end;
+}
+
+.llm-artifact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.llm-artifact-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--card) 93%, var(--card-soft) 7%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-artifact-row-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.llm-artifact-checkbox {
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card-soft) 86%, var(--card) 14%);
+}
+
+.llm-artifact-result {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--card) 93%, var(--card-soft) 7%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-artifact-meta-text {
+  margin: 0;
+  min-height: 72px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+  font-size: 13px;
+  line-height: 1.42;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card-soft) 90%, var(--card) 10%);
+}
+
+.llm-artifact-files {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.llm-artifact-file-btn {
+  width: 100%;
 }
 
 .compare-header {
@@ -1037,6 +1185,213 @@ button:disabled {
 
 .compare-table td.good {
   color: var(--ok-ink);
+}
+
+.rag-workspace {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--card-soft) 90%, var(--card) 10%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rag-header-actions {
+  justify-content: flex-end;
+}
+
+.rag-layout {
+  display: grid;
+  grid-template-columns: 1.05fr 1.3fr;
+  gap: 10px;
+}
+
+.rag-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--card) 93%, var(--card-soft) 7%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rag-picker-actions {
+  gap: 6px;
+}
+
+.rag-meeting-picker {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  min-height: 120px;
+  max-height: 240px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: color-mix(in srgb, var(--card-soft) 88%, var(--card) 12%);
+}
+
+.rag-meeting-picker-empty {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.rag-meeting-option {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--card) 95%, var(--card-soft) 5%);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.rag-meeting-option input[type="checkbox"] {
+  margin-top: 3px;
+}
+
+.rag-meeting-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rag-meeting-sub {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.rag-query-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 140px;
+  gap: 8px;
+}
+
+.rag-query-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.checkbox-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-1);
+}
+
+.checkbox-line input[type="checkbox"] {
+  margin-top: 2px;
+}
+
+.rag-query-options .checkbox-line {
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card-soft) 86%, var(--card) 14%);
+}
+
+.rag-export-actions {
+  justify-content: flex-end;
+}
+
+.rag-output {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.rag-answer-block,
+.rag-hits-block {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--card) 93%, var(--card-soft) 7%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rag-answer-text {
+  margin: 0;
+  min-height: 72px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card-soft) 90%, var(--card) 10%);
+}
+
+.rag-hits-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.rag-hit-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--card-soft) 88%, var(--card) 12%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rag-hit-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+}
+
+.rag-hit-title {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.rag-hit-meta {
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.rag-hit-cite {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rag-hit-cite .pill {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.rag-hit-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.42;
+  color: var(--ink-1);
+}
+
+.rag-hit-empty {
+  color: var(--ink-2);
+  font-size: 13px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--card-soft) 88%, var(--card) 12%);
 }
 
 .transcript-grid {
@@ -1183,6 +1538,22 @@ body[data-theme="dark"] .transcript-area {
   }
 
   .report-lane-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .llm-artifact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .llm-artifact-row-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-query-grid {
     grid-template-columns: 1fr;
   }
 }

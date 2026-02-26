@@ -24,6 +24,101 @@ MULTISPACE_RE = re.compile(r"\s+")
 log = logging.getLogger(__name__)
 
 
+def _apply_deterministic_cleanup(text: str, meta: dict) -> str:
+    """
+    Детерминированная нормализация текста без LLM.
+    Используется как строительный блок для normalized transcript и как fallback в enhance_text.
+    """
+    if not text:
+        return text
+
+    # 1) удаляем слова-паразиты
+    text2 = FILLER_RE.sub("", text)
+    if text2 != text:
+        meta["applied"].append("filler_cleanup")
+        text = text2
+
+    # 2) нормализуем пробелы
+    text2 = MULTISPACE_RE.sub(" ", text).strip()
+    if text2 != text:
+        meta["applied"].append("whitespace_normalize")
+        text = text2
+
+    # 3) простейшая "псевдо-пунктуация" (MVP):
+    # если нет точки в конце — добавим.
+    if text and text[-1] not in ".!?":
+        text += "."
+        meta["applied"].append("final_punct")
+
+    return text
+
+
+def normalize_text_deterministic(raw_text: str) -> tuple[str, dict]:
+    """
+    Детерминированная нормализация фразы/реплики без LLM.
+    """
+    meta: dict = {"applied": []}
+    if not raw_text:
+        return raw_text, meta
+
+    text = _apply_deterministic_cleanup(raw_text, meta)
+
+    settings = get_settings()
+    if settings.pii_masking:
+        masked = mask_pii(text)
+        if masked != text:
+            meta["applied"].append("pii_mask")
+            text = masked
+
+    return text, meta
+
+
+def normalize_transcript_deterministic(transcript: str) -> tuple[str, dict]:
+    """
+    Нормализует транскрипт построчно, сохраняя speaker-префиксы `SPEAKER: text`.
+    """
+    raw = str(transcript or "")
+    if not raw.strip():
+        return raw, {"applied": [], "lines": 0}
+
+    lines_out: list[str] = []
+    total_applied: set[str] = set()
+    changed_lines = 0
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        prefix = ""
+        text_part = stripped
+        if ":" in stripped:
+            maybe_prefix, maybe_text = stripped.split(":", 1)
+            # Treat `SPEAKER: text` as speaker-prefixed transcript line; preserve the prefix.
+            if maybe_prefix.strip() and maybe_text is not None:
+                prefix = maybe_prefix.strip()
+                text_part = maybe_text.strip()
+
+        normalized_text, meta = normalize_text_deterministic(text_part)
+        if normalized_text != text_part:
+            changed_lines += 1
+        for item in list(meta.get("applied") or []):
+            total_applied.add(str(item))
+
+        if prefix:
+            if normalized_text.strip():
+                lines_out.append(f"{prefix}: {normalized_text.strip()}")
+            continue
+        if normalized_text.strip():
+            lines_out.append(normalized_text.strip())
+
+    return "\n".join(lines_out).strip(), {
+        "applied": sorted(total_applied),
+        "lines": len(lines_out),
+        "changed_lines": changed_lines,
+    }
+
+
 def enhance_text(raw_text: str) -> tuple[str, dict]:
     """
     Возвращает:
@@ -68,23 +163,7 @@ def enhance_text(raw_text: str) -> tuple[str, dict]:
             # fallback на эвристики ниже
             pass
 
-    # 1) удаляем слова-паразиты
-    text2 = FILLER_RE.sub("", text)
-    if text2 != text:
-        meta["applied"].append("filler_cleanup")
-        text = text2
-
-    # 2) нормализуем пробелы
-    text2 = MULTISPACE_RE.sub(" ", text).strip()
-    if text2 != text:
-        meta["applied"].append("whitespace_normalize")
-        text = text2
-
-    # 3) простейшая "псевдо-пунктуация" (MVP):
-    # если нет точки в конце — добавим.
-    if text and text[-1] not in ".!?":
-        text += "."
-        meta["applied"].append("final_punct")
+    text = _apply_deterministic_cleanup(text, meta)
 
     # 4) PII маскирование по политике
     if settings.pii_masking:

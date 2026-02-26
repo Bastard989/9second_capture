@@ -65,7 +65,8 @@ def quick_record_start(req: QuickRecordStartRequest, _=AUTH_DEP) -> QuickRecordS
                 "meeting_url_host": req.meeting_url.split("/")[2] if "://" in req.meeting_url else "",
                 "duration_sec": duration,
                 "work_mode": req.work_mode or "",
-                "transcribe": bool(req.transcribe),
+                "transcribe_requested": bool(req.transcribe),
+                "transcribe_forced_off": True,
                 "upload_to_agent": bool(req.upload_to_agent),
             }
         },
@@ -84,7 +85,9 @@ def quick_record_start(req: QuickRecordStartRequest, _=AUTH_DEP) -> QuickRecordS
             else bool(req.auto_open_url)
         ),
         max_duration_sec=duration,
-        transcribe=bool(req.transcribe),
+        # По логике record-first quick fallback пишет только MP3. Текст/отчёты
+        # формируются позже по запросу в Results.
+        transcribe=False,
         transcribe_language=req.transcribe_language,
         upload_to_agent=bool(req.upload_to_agent),
         agent_base_url=str(getattr(s, "quick_record_agent_base_url", "http://127.0.0.1:8010")),
@@ -94,7 +97,9 @@ def quick_record_start(req: QuickRecordStartRequest, _=AUTH_DEP) -> QuickRecordS
         email_to=req.email_to,
     )
 
-    if cfg.upload_to_agent and not cfg.agent_api_key:
+    auth_mode = str(getattr(s, "auth_mode", "api_key") or "").strip().lower()
+    auth_key_required = cfg.upload_to_agent and auth_mode not in {"", "none"}
+    if auth_key_required and not cfg.agent_api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="upload_to_agent=true requires agent_api_key",

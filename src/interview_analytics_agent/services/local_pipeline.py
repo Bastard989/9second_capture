@@ -413,14 +413,23 @@ def retranscribe_meeting_high_quality(*, meeting_id: str) -> int:
 def recover_transcript_from_backup_audio(*, meeting_id: str) -> int:
     """
     Fallback: если live-поток оборвался/потерял часть чанков, добиваем хвост
-    из резервной записи backup_audio.* после завершения встречи.
+    из финального аудио-артефакта (backup_audio.*/meeting_audio.mp3/source_upload.*)
+    после завершения встречи.
     """
     backup_candidates = (
+        "meeting_audio.mp3",
+        "backup_audio.mp3",
         "backup_audio.webm",
         "backup_audio.wav",
         "backup_audio.mp4",
         "backup_audio.ogg",
         "backup_audio.m4a",
+        "source_upload.mp3",
+        "source_upload.wav",
+        "source_upload.webm",
+        "source_upload.ogg",
+        "source_upload.m4a",
+        "source_upload.mp4",
     )
     backup_path = None
     for name in backup_candidates:
@@ -485,15 +494,24 @@ def recover_transcript_from_backup_audio(*, meeting_id: str) -> int:
 
 def final_pass_from_backup_audio(*, meeting_id: str) -> int:
     """
-    Полный финальный проход по единому backup audio.
-    Если backup доступен — он становится primary источником итогового transcript.
+    Полный финальный проход по доступному финальному аудио-артефакту
+    (backup_audio.*/meeting_audio.mp3/source_upload.*).
+    Если артефакт доступен — он становится primary источником итогового transcript.
     """
     backup_candidates = (
+        "meeting_audio.mp3",
+        "backup_audio.mp3",
         "backup_audio.webm",
         "backup_audio.wav",
         "backup_audio.mp4",
         "backup_audio.ogg",
         "backup_audio.m4a",
+        "source_upload.mp3",
+        "source_upload.wav",
+        "source_upload.webm",
+        "source_upload.ogg",
+        "source_upload.m4a",
+        "source_upload.mp4",
     )
     backup_path = None
     for name in backup_candidates:

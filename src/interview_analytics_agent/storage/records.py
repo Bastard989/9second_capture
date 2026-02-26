@@ -191,6 +191,7 @@ def artifact_path(meeting_id: str, filename: str) -> Path:
 def list_artifacts(meeting_id: str) -> dict[str, bool]:
     return {
         "raw": exists(meeting_id, "raw.txt"),
+        "normalized": exists(meeting_id, "normalized.txt"),
         "clean": exists(meeting_id, "clean.txt"),
         "audio_mp3": exists(meeting_id, "meeting_audio.mp3"),
         "report_raw": exists(meeting_id, "report_raw.json"),
