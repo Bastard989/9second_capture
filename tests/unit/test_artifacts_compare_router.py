@@ -515,6 +515,100 @@ def test_rag_index_builds_chunks_with_citations_and_caches(monkeypatch, tmp_path
         settings.records_dir = records_dir_snapshot
 
 
+def test_rag_embed_texts_batches_dedupes_and_caches_provider(monkeypatch, auth_none_settings) -> None:
+    vector_cfg = {
+        "enabled": True,
+        "provider": "openai_compat",
+        "provider_label": "ollama_openai_compat",
+        "model": "nomic-embed-text",
+        "openai_api_base": "http://127.0.0.1:11434/v1",
+        "openai_api_key": "ollama",
+        "openai_timeout_s": 2.0,
+        "dim": 2,
+        "char_ngrams": True,
+    }
+    calls: list[list[str]] = []
+
+    def _fake_embed_texts(texts, **kwargs):
+        calls.append([str(t) for t in list(texts or [])])
+        return [[float(len(str(t))), 1.0] for t in list(texts or [])]
+
+    monkeypatch.setattr(artifacts_router, "_rag_embedding_batch_size", lambda: 2)
+    monkeypatch.setattr(artifacts_router, "_rag_embedding_cache_max_items", lambda: 100)
+    monkeypatch.setattr(artifacts_router, "embed_texts_openai_compat", _fake_embed_texts)
+
+    with artifacts_router._RAG_EMBEDDING_CACHE_LOCK:
+        artifacts_router._RAG_EMBEDDING_CACHE.clear()
+    try:
+        rows1 = artifacts_router._rag_embed_texts(["alpha", "beta", "alpha", "gamma"], vector_cfg=vector_cfg)
+        rows2 = artifacts_router._rag_embed_texts(["gamma", "alpha"], vector_cfg=vector_cfg)
+    finally:
+        with artifacts_router._RAG_EMBEDDING_CACHE_LOCK:
+            artifacts_router._RAG_EMBEDDING_CACHE.clear()
+
+    assert rows1[0] == rows1[2]
+    assert rows2[0] == rows1[3]
+    assert rows2[1] == rows1[0]
+    # Unique texts: alpha, beta, gamma. Batch size=2 -> two provider calls total.
+    assert calls == [["alpha", "beta"], ["gamma"]]
+
+
+def test_ensure_rag_index_uses_batched_embeddings(monkeypatch, tmp_path, auth_none_settings) -> None:
+    settings = get_settings()
+    records_dir_snapshot = settings.records_dir
+    batch_calls: list[list[str]] = []
+    try:
+        settings.records_dir = str(tmp_path)
+        monkeypatch.setattr(
+            artifacts_router,
+            "_transcript_for_source",
+            lambda **kwargs: "\n".join(
+                [
+                    "A: one",
+                    "B: two",
+                    "A: three",
+                    "B: four",
+                ]
+            ),
+        )
+        monkeypatch.setattr(artifacts_router, "_rag_segment_line_metadata", lambda meeting_id: [])
+        monkeypatch.setattr(artifacts_router, "_rag_meeting_meta", lambda meeting_id: {"display_name": "m1"})
+        monkeypatch.setattr(
+            artifacts_router,
+            "_rag_vector_config",
+            lambda: {
+                "enabled": True,
+                "provider": "hashing_local",
+                "provider_label": "hashing_local",
+                "model": "hashing_v1_dim2_char",
+                "dim": 2,
+                "char_ngrams": True,
+            },
+        )
+
+        def _fake_batch_embed(texts, *, vector_cfg):
+            batch_calls.append([str(t) for t in list(texts or [])])
+            return [[1.0, 0.0] for _ in list(texts or [])]
+
+        monkeypatch.setattr(artifacts_router, "_rag_embed_texts", _fake_batch_embed)
+
+        payload, cached = artifacts_router._ensure_rag_index(
+            "m1",
+            source="clean",
+            max_lines_per_chunk=2,
+            overlap_lines=0,
+            max_chars_per_chunk=500,
+        )
+
+        assert cached is False
+        assert payload["chunk_count"] >= 2
+        assert len(batch_calls) == 1
+        assert len(batch_calls[0]) == payload["chunk_count"]
+        assert all(chunk.get("embedding") == [1.0, 0.0] for chunk in payload["chunks"])
+    finally:
+        settings.records_dir = records_dir_snapshot
+
+
 def test_rag_rank_hits_supports_vector_score_without_keyword_overlap(monkeypatch, auth_none_settings) -> None:
     monkeypatch.setattr(
         artifacts_router,

@@ -124,12 +124,32 @@ def embed_text_openai_compat(
     model_id: str,
     timeout_s: float = 8.0,
 ) -> list[float]:
+    return embed_texts_openai_compat(
+        [text],
+        api_base=api_base,
+        api_key=api_key,
+        model_id=model_id,
+        timeout_s=timeout_s,
+    )[0]
+
+
+def embed_texts_openai_compat(
+    texts: list[str] | tuple[str, ...],
+    *,
+    api_base: str,
+    api_key: str,
+    model_id: str,
+    timeout_s: float = 8.0,
+) -> list[list[float]]:
     base = str(api_base or "").strip()
     model = str(model_id or "").strip()
     if not base:
         raise ValueError("api_base is required")
     if not model:
         raise ValueError("model_id is required")
+    items = [str(text or "") for text in list(texts or [])]
+    if not items:
+        return []
 
     url = base.rstrip("/") + "/embeddings"
     headers = {"Content-Type": "application/json"}
@@ -138,7 +158,7 @@ def embed_text_openai_compat(
         headers["Authorization"] = f"Bearer {bearer}"
     payload = {
         "model": model,
-        "input": str(text or ""),
+        "input": items if len(items) > 1 else items[0],
     }
 
     resp = requests.post(url, headers=headers, json=payload, timeout=max(1.0, float(timeout_s or 8.0)))
@@ -151,12 +171,34 @@ def embed_text_openai_compat(
     rows = body.get("data") if isinstance(body, dict) else []
     if not isinstance(rows, list) or not rows:
         raise RuntimeError("embeddings_missing_data")
-    row0 = rows[0] if isinstance(rows[0], dict) else {}
-    emb = row0.get("embedding")
-    if not isinstance(emb, list) or not emb:
-        raise RuntimeError("embeddings_missing_vector")
-    try:
-        values = [float(v or 0.0) for v in emb]
-    except Exception as exc:
-        raise RuntimeError(f"embeddings_invalid_vector:{exc}") from exc
-    return _normalize_dense_embedding(values)
+    ordered_rows = [None] * len(rows)
+    by_append: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        idx_raw = row.get("index")
+        if isinstance(idx_raw, int) and 0 <= idx_raw < len(items):
+            ordered_rows[idx_raw] = row
+        else:
+            by_append.append(row)
+    if any(r is None for r in ordered_rows):
+        # Fallback for providers that omit `index` but preserve order.
+        ordered_rows = []
+        for row in rows:
+            if isinstance(row, dict):
+                ordered_rows.append(row)
+    if len(ordered_rows) != len(items):
+        raise RuntimeError(
+            f"embeddings_count_mismatch:expected={len(items)} got={len(ordered_rows)}"
+        )
+    out: list[list[float]] = []
+    for row in ordered_rows:
+        emb = row.get("embedding") if isinstance(row, dict) else None
+        if not isinstance(emb, list) or not emb:
+            raise RuntimeError("embeddings_missing_vector")
+        try:
+            values = [float(v or 0.0) for v in emb]
+        except Exception as exc:
+            raise RuntimeError(f"embeddings_invalid_vector:{exc}") from exc
+        out.append(_normalize_dense_embedding(values))
+    return out

@@ -5,6 +5,7 @@ import io
 import json
 import math
 import re
+import threading
 from collections import Counter
 from datetime import datetime
 from typing import Any, Literal
@@ -29,7 +30,7 @@ from interview_analytics_agent.processing.enhancer import (
 from interview_analytics_agent.rag.embeddings import (
     cosine_similarity_dense,
     embed_text_hashing,
-    embed_text_openai_compat,
+    embed_texts_openai_compat,
     hashing_embedding_model_id,
     is_local_openai_compat_base,
 )
@@ -846,6 +847,8 @@ def _transcript_for_source(*, meeting_id: str, source: TranscriptVariant) -> str
 
 _RAG_TOKEN_RE = re.compile(r"[0-9A-Za-zА-Яа-я_+\\-]{2,}", flags=re.UNICODE)
 _RAG_SPEAKER_LINE_RE = re.compile(r"^\\s*([^:\\n]{1,80})\\s*:\\s*(.+?)\\s*$")
+_RAG_EMBEDDING_CACHE: dict[str, list[float]] = {}
+_RAG_EMBEDDING_CACHE_LOCK = threading.RLock()
 
 
 def _rag_index_relpath(source: TranscriptVariant) -> str:
@@ -864,6 +867,32 @@ def _format_ms_timestamp(ms: int | None) -> str:
 
 def _rag_tokenize(text: str) -> list[str]:
     return [tok.lower() for tok in _RAG_TOKEN_RE.findall(str(text or ""))]
+
+
+def _rag_embedding_batch_size() -> int:
+    s = get_settings()
+    raw = int(getattr(s, "rag_embedding_batch_size", 24) or 24)
+    return max(1, min(raw, 256))
+
+
+def _rag_embedding_cache_max_items() -> int:
+    s = get_settings()
+    raw = int(getattr(s, "rag_embedding_cache_max_items", 2048) or 2048)
+    return max(0, min(raw, 100_000))
+
+
+def _rag_embedding_cache_key(text: str, *, vector_cfg: dict[str, Any]) -> str:
+    provider = str(vector_cfg.get("provider") or "").strip().lower()
+    base = str(vector_cfg.get("openai_api_base") or "").rstrip("/")
+    payload = {
+        "provider": provider,
+        "model": str(vector_cfg.get("model") or ""),
+        "dim": int(vector_cfg.get("dim") or 0),
+        "char_ngrams": bool(vector_cfg.get("char_ngrams", True)),
+        "api_base": base if provider == "openai_compat" else "",
+        "text_sha256": sha256_hex(str(text or "").encode("utf-8")),
+    }
+    return sha256_hex(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
 
 
 def _rag_vector_config() -> dict[str, Any]:
@@ -945,23 +974,85 @@ def _rag_hybrid_weights(*, vector_enabled: bool) -> tuple[float, float]:
     return kw / total, vec / total
 
 
-def _rag_embed_text(text: str, *, vector_cfg: dict[str, Any]) -> list[float]:
-    if not bool(vector_cfg.get("enabled", False)):
+def _rag_embed_texts(texts: list[str] | tuple[str, ...], *, vector_cfg: dict[str, Any]) -> list[list[float]]:
+    items = [str(text or "") for text in list(texts or [])]
+    if not items:
         return []
+    if not bool(vector_cfg.get("enabled", False)):
+        return [[] for _ in items]
+
     provider = str(vector_cfg.get("provider") or "").strip().lower()
-    if provider == "openai_compat":
-        return embed_text_openai_compat(
-            text,
-            api_base=str(vector_cfg.get("openai_api_base") or ""),
-            api_key=str(vector_cfg.get("openai_api_key") or ""),
-            model_id=str(vector_cfg.get("model") or ""),
-            timeout_s=float(vector_cfg.get("openai_timeout_s") or 8.0),
-        )
-    return embed_text_hashing(
-        text,
-        dim=int(vector_cfg.get("dim") or 96),
-        char_ngrams=bool(vector_cfg.get("char_ngrams", True)),
-    )
+    cache_keys = [_rag_embedding_cache_key(text, vector_cfg=vector_cfg) for text in items]
+    results: list[list[float] | None] = [None] * len(items)
+    missing_keys: list[str] = []
+    missing_by_key: dict[str, str] = {}
+
+    with _RAG_EMBEDDING_CACHE_LOCK:
+        for idx, (text, key) in enumerate(zip(items, cache_keys)):
+            cached = _RAG_EMBEDDING_CACHE.get(key)
+            if cached is not None:
+                results[idx] = list(cached)
+                continue
+            if key not in missing_by_key:
+                missing_by_key[key] = text
+                missing_keys.append(key)
+
+    if missing_keys:
+        missing_texts = [missing_by_key[key] for key in missing_keys]
+        missing_vectors: list[list[float]] = []
+        if provider == "openai_compat":
+            batch_size = _rag_embedding_batch_size()
+            for start in range(0, len(missing_texts), batch_size):
+                batch = missing_texts[start : start + batch_size]
+                missing_vectors.extend(
+                    embed_texts_openai_compat(
+                        batch,
+                        api_base=str(vector_cfg.get("openai_api_base") or ""),
+                        api_key=str(vector_cfg.get("openai_api_key") or ""),
+                        model_id=str(vector_cfg.get("model") or ""),
+                        timeout_s=float(vector_cfg.get("openai_timeout_s") or 8.0),
+                    )
+                )
+        else:
+            missing_vectors = [
+                embed_text_hashing(
+                    text,
+                    dim=int(vector_cfg.get("dim") or 96),
+                    char_ngrams=bool(vector_cfg.get("char_ngrams", True)),
+                )
+                for text in missing_texts
+            ]
+
+        if len(missing_vectors) != len(missing_keys):
+            raise RuntimeError(
+                f"rag_embeddings_count_mismatch:expected={len(missing_keys)} got={len(missing_vectors)}"
+            )
+
+        vector_by_key = {
+            key: [float(v or 0.0) for v in list(vec or [])]
+            for key, vec in zip(missing_keys, missing_vectors)
+        }
+
+        cache_limit = _rag_embedding_cache_max_items()
+        with _RAG_EMBEDDING_CACHE_LOCK:
+            if cache_limit > 0:
+                for key in missing_keys:
+                    _RAG_EMBEDDING_CACHE[key] = list(vector_by_key[key])
+                while len(_RAG_EMBEDDING_CACHE) > cache_limit:
+                    oldest_key = next(iter(_RAG_EMBEDDING_CACHE), None)
+                    if oldest_key is None:
+                        break
+                    _RAG_EMBEDDING_CACHE.pop(oldest_key, None)
+            for idx, key in enumerate(cache_keys):
+                if results[idx] is None and key in vector_by_key:
+                    results[idx] = list(vector_by_key[key])
+
+    return [list(row or []) for row in results]
+
+
+def _rag_embed_text(text: str, *, vector_cfg: dict[str, Any]) -> list[float]:
+    rows = _rag_embed_texts([text], vector_cfg=vector_cfg)
+    return rows[0] if rows else []
 
 
 def _rag_index_has_compatible_vector_config(index_payload: dict[str, Any], vector_cfg: dict[str, Any]) -> bool:
@@ -1244,8 +1335,12 @@ def _ensure_rag_index(
     active_vector_cfg = dict(vector_cfg)
     if bool(active_vector_cfg.get("enabled", False)):
         try:
-            for chunk in chunks:
-                chunk["embedding"] = _rag_embed_text(str(chunk.get("text") or ""), vector_cfg=active_vector_cfg)
+            chunk_embeddings = _rag_embed_texts(
+                [str(chunk.get("text") or "") for chunk in chunks],
+                vector_cfg=active_vector_cfg,
+            )
+            for chunk, emb in zip(chunks, chunk_embeddings):
+                chunk["embedding"] = emb
         except Exception as exc:
             if str(active_vector_cfg.get("provider") or "") == "openai_compat":
                 log.warning(
@@ -1263,8 +1358,12 @@ def _ensure_rag_index(
                 active_vector_cfg = _rag_hashing_fallback_vector_config(
                     active_vector_cfg, reason="index_embed_failed"
                 )
-                for chunk in chunks:
-                    chunk["embedding"] = _rag_embed_text(str(chunk.get("text") or ""), vector_cfg=active_vector_cfg)
+                chunk_embeddings = _rag_embed_texts(
+                    [str(chunk.get("text") or "") for chunk in chunks],
+                    vector_cfg=active_vector_cfg,
+                )
+                for chunk, emb in zip(chunks, chunk_embeddings):
+                    chunk["embedding"] = emb
             else:
                 raise
     payload = {
