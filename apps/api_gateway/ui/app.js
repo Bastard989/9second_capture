@@ -111,6 +111,8 @@ const state = {
   },
   rag: {
     selectedMeetingIds: new Set(),
+    savedSets: {},
+    activeSavedSet: "",
     source: "clean",
     topK: 8,
     autoIndex: true,
@@ -167,6 +169,7 @@ const CAPTURE_LOCK_KEY = "9second_capture_active_lock";
 const CAPTURE_LOCK_TTL_MS = 20000;
 const CAPTURE_LOCK_HEARTBEAT_MS = 4000;
 const WORK_MODE_KEY = "9second_capture_work_mode";
+const RAG_SAVED_SETS_KEY = "9second_capture_rag_saved_sets_v1";
 const UI_EVENT_ENDPOINT = "/v1/diagnostics/ui-event";
 const UI_EVENT_THROTTLE_MS = 3000;
 const MEETING_TIME_ZONE = "Europe/Moscow";
@@ -610,6 +613,16 @@ const i18n = {
     rag_select_current: "Текущая запись",
     rag_select_all: "Выбрать все",
     rag_clear_selection: "Очистить",
+    rag_saved_set_none: "Сохраненные наборы",
+    rag_saved_set_save: "Сохранить набор",
+    rag_saved_set_load: "Загрузить",
+    rag_saved_set_delete: "Удалить",
+    rag_saved_set_prompt_name: "Введите название набора интервью для RAG compare:",
+    rag_saved_set_hint_saved: "Набор сохранен.",
+    rag_saved_set_hint_loaded: "Набор загружен.",
+    rag_saved_set_hint_deleted: "Набор удален.",
+    rag_saved_set_hint_empty_selection: "Сначала выберите хотя бы одну запись.",
+    rag_saved_set_hint_choose: "Выберите сохраненный набор.",
     rag_source_label: "Источник транскрипта",
     rag_source_raw: "Raw",
     rag_source_normalized: "Normalized",
@@ -1169,6 +1182,16 @@ const i18n = {
     rag_select_current: "Current record",
     rag_select_all: "Select all",
     rag_clear_selection: "Clear",
+    rag_saved_set_none: "Saved sets",
+    rag_saved_set_save: "Save set",
+    rag_saved_set_load: "Load",
+    rag_saved_set_delete: "Delete",
+    rag_saved_set_prompt_name: "Enter a name for this RAG compare set:",
+    rag_saved_set_hint_saved: "Set saved.",
+    rag_saved_set_hint_loaded: "Set loaded.",
+    rag_saved_set_hint_deleted: "Set deleted.",
+    rag_saved_set_hint_empty_selection: "Select at least one recording first.",
+    rag_saved_set_hint_choose: "Select a saved set.",
     rag_source_label: "Transcript source",
     rag_source_raw: "Raw",
     rag_source_normalized: "Normalized",
@@ -1495,6 +1518,10 @@ const els = {
   ragSelectCurrentBtn: document.getElementById("ragSelectCurrentBtn"),
   ragSelectAllBtn: document.getElementById("ragSelectAllBtn"),
   ragClearSelectionBtn: document.getElementById("ragClearSelectionBtn"),
+  ragSavedSetSelect: document.getElementById("ragSavedSetSelect"),
+  ragSaveSetBtn: document.getElementById("ragSaveSetBtn"),
+  ragLoadSetBtn: document.getElementById("ragLoadSetBtn"),
+  ragDeleteSetBtn: document.getElementById("ragDeleteSetBtn"),
   ragSourceSelect: document.getElementById("ragSourceSelect"),
   ragTopKInput: document.getElementById("ragTopKInput"),
   ragUseLlmAnswer: document.getElementById("ragUseLlmAnswer"),
@@ -2561,6 +2588,82 @@ const _ragIndexStatusLabel = (statusValue) => {
   return String(dict[key] || dict.rag_index_status_unknown || statusValue || "unknown");
 };
 
+const _normalizeRagSavedSets = (raw) => {
+  const out = {};
+  if (!raw || typeof raw !== "object") return out;
+  Object.entries(raw).forEach(([nameRaw, idsRaw]) => {
+    const name = String(nameRaw || "").trim().slice(0, 80);
+    if (!name) return;
+    const seen = new Set();
+    const ids = [];
+    (Array.isArray(idsRaw) ? idsRaw : []).forEach((value) => {
+      const meetingId = String(value || "").trim();
+      if (!meetingId || seen.has(meetingId)) return;
+      seen.add(meetingId);
+      ids.push(meetingId);
+    });
+    if (ids.length) {
+      out[name] = ids;
+    }
+  });
+  return out;
+};
+
+const _loadRagSavedSetsFromStorage = () => {
+  try {
+    const raw = localStorage.getItem(RAG_SAVED_SETS_KEY);
+    if (!raw) {
+      state.rag.savedSets = {};
+      state.rag.activeSavedSet = "";
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    state.rag.savedSets = _normalizeRagSavedSets(parsed);
+    if (!state.rag.savedSets[String(state.rag.activeSavedSet || "")]) {
+      state.rag.activeSavedSet = "";
+    }
+  } catch (err) {
+    state.rag.savedSets = {};
+    state.rag.activeSavedSet = "";
+  }
+};
+
+const _persistRagSavedSetsToStorage = () => {
+  try {
+    const normalized = _normalizeRagSavedSets(state.rag.savedSets || {});
+    state.rag.savedSets = normalized;
+    localStorage.setItem(RAG_SAVED_SETS_KEY, JSON.stringify(normalized));
+  } catch (err) {
+    console.warn("rag saved sets persist failed", err);
+  }
+};
+
+const _renderRagSavedSetSelect = () => {
+  if (!els.ragSavedSetSelect) return;
+  const dict = i18n[state.lang] || {};
+  const savedSets = _normalizeRagSavedSets(state.rag.savedSets || {});
+  state.rag.savedSets = savedSets;
+  const names = Object.keys(savedSets).sort((a, b) => a.localeCompare(b, state.lang === "ru" ? "ru" : "en"));
+  if (!savedSets[String(state.rag.activeSavedSet || "")]) {
+    state.rag.activeSavedSet = "";
+  }
+  els.ragSavedSetSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = dict.rag_saved_set_none || "Saved sets";
+  els.ragSavedSetSelect.appendChild(placeholder);
+  names.forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    const ids = Array.isArray(savedSets[name]) ? savedSets[name] : [];
+    opt.textContent = `${name} (${ids.length})`;
+    if (name === state.rag.activeSavedSet) opt.selected = true;
+    els.ragSavedSetSelect.appendChild(opt);
+  });
+  if (els.ragLoadSetBtn) els.ragLoadSetBtn.disabled = !state.rag.activeSavedSet;
+  if (els.ragDeleteSetBtn) els.ragDeleteSetBtn.disabled = !state.rag.activeSavedSet;
+};
+
 const _syncRagControlsToState = () => {
   state.rag.source = _ragSourceValue();
   state.rag.topK = _ragTopKValue();
@@ -2578,6 +2681,27 @@ const renderRagMeetingPicker = () => {
 
   if (!(state.rag.selectedMeetingIds instanceof Set)) {
     state.rag.selectedMeetingIds = new Set();
+  }
+  {
+    const nextSaved = {};
+    const currentSaved = _normalizeRagSavedSets(state.rag.savedSets || {});
+    let changed = false;
+    Object.entries(currentSaved).forEach(([name, ids]) => {
+      const filtered = ids.filter((meetingId) => existingIds.has(String(meetingId || "")));
+      if (!filtered.length) {
+        changed = true;
+        if (state.rag.activeSavedSet === name) state.rag.activeSavedSet = "";
+        return;
+      }
+      nextSaved[name] = filtered;
+      if (filtered.length !== ids.length) changed = true;
+    });
+    if (changed) {
+      state.rag.savedSets = nextSaved;
+      _persistRagSavedSetsToStorage();
+    } else {
+      state.rag.savedSets = currentSaved;
+    }
   }
   Array.from(state.rag.selectedMeetingIds).forEach((meetingId) => {
     if (!existingIds.has(String(meetingId || ""))) {
@@ -2603,6 +2727,10 @@ const renderRagMeetingPicker = () => {
   if (els.ragForceReindex) {
     els.ragForceReindex.checked = Boolean(state.rag.forceReindex);
   }
+  if (els.ragSavedSetSelect) {
+    els.ragSavedSetSelect.value = String(state.rag.activeSavedSet || "");
+  }
+  _renderRagSavedSetSelect();
 
   els.ragMeetingPicker.innerHTML = "";
   if (!items.length) {
@@ -2660,6 +2788,70 @@ const renderRagMeetingPicker = () => {
     row.appendChild(body);
     els.ragMeetingPicker.appendChild(row);
   });
+};
+
+const saveRagCompareSet = () => {
+  const selectedIds = _ragSelectedMeetingIds();
+  if (!selectedIds.length) {
+    setRagHint("rag_saved_set_hint_empty_selection", "bad");
+    return;
+  }
+  const dict = i18n[state.lang] || {};
+  const suggested =
+    String(state.rag.activeSavedSet || "").trim() ||
+    String(getSelectedRecordDisplayName ? getSelectedRecordDisplayName() : "").trim() ||
+    "";
+  const rawName = window.prompt(dict.rag_saved_set_prompt_name || "Set name", suggested);
+  if (rawName == null) return;
+  const name = String(rawName || "").trim().slice(0, 80);
+  if (!name) return;
+  state.rag.savedSets = _normalizeRagSavedSets({
+    ...(state.rag.savedSets && typeof state.rag.savedSets === "object" ? state.rag.savedSets : {}),
+    [name]: selectedIds,
+  });
+  state.rag.activeSavedSet = name;
+  _persistRagSavedSetsToStorage();
+  renderRagWorkspace();
+  setRagHint("rag_saved_set_hint_saved", "good");
+};
+
+const loadRagCompareSet = () => {
+  const name = String(
+    (els.ragSavedSetSelect && els.ragSavedSetSelect.value) || state.rag.activeSavedSet || ""
+  ).trim();
+  if (!name) {
+    setRagHint("rag_saved_set_hint_choose", "bad");
+    return;
+  }
+  const savedSets = _normalizeRagSavedSets(state.rag.savedSets || {});
+  const ids = Array.isArray(savedSets[name]) ? savedSets[name] : [];
+  if (!ids.length) {
+    setRagHint("rag_saved_set_hint_choose", "bad");
+    return;
+  }
+  state.rag.activeSavedSet = name;
+  _setRagSelectedMeetingIds(ids);
+  renderRagWorkspace();
+  setRagHint("rag_saved_set_hint_loaded", "good");
+};
+
+const deleteRagCompareSet = () => {
+  const name = String(
+    (els.ragSavedSetSelect && els.ragSavedSetSelect.value) || state.rag.activeSavedSet || ""
+  ).trim();
+  if (!name) {
+    setRagHint("rag_saved_set_hint_choose", "bad");
+    return;
+  }
+  const next = { ...(state.rag.savedSets && typeof state.rag.savedSets === "object" ? state.rag.savedSets : {}) };
+  delete next[name];
+  state.rag.savedSets = _normalizeRagSavedSets(next);
+  if (state.rag.activeSavedSet === name) {
+    state.rag.activeSavedSet = "";
+  }
+  _persistRagSavedSetsToStorage();
+  renderRagWorkspace();
+  setRagHint("rag_saved_set_hint_deleted", "good");
 };
 
 const _ragHitPill = (text, style = "muted") => {
@@ -7809,6 +8001,27 @@ if (els.ragClearSelectionBtn) {
     renderRagWorkspace();
   });
 }
+if (els.ragSavedSetSelect) {
+  els.ragSavedSetSelect.addEventListener("change", () => {
+    state.rag.activeSavedSet = String(els.ragSavedSetSelect.value || "").trim();
+    renderRagWorkspace();
+  });
+}
+if (els.ragSaveSetBtn) {
+  els.ragSaveSetBtn.addEventListener("click", () => {
+    saveRagCompareSet();
+  });
+}
+if (els.ragLoadSetBtn) {
+  els.ragLoadSetBtn.addEventListener("click", () => {
+    loadRagCompareSet();
+  });
+}
+if (els.ragDeleteSetBtn) {
+  els.ragDeleteSetBtn.addEventListener("click", () => {
+    deleteRagCompareSet();
+  });
+}
 if (els.ragSourceSelect) {
   els.ragSourceSelect.addEventListener("change", () => {
     state.rag.source = _ragSourceValue();
@@ -7880,6 +8093,7 @@ applyTheme(savedTheme || "light");
 setWorkMode(savedWorkMode || state.workMode, { persist: false, force: true });
 setCaptureQuality(state.captureQuality || "balanced");
 updateI18n();
+_loadRagSavedSetsFromStorage();
 _diagMarkAllMuted();
 setDiagHint("diag_hint_idle", "muted");
 pruneStaleCaptureLock();

@@ -1254,6 +1254,13 @@ button:disabled {
   margin-top: 3px;
 }
 
+.rag-saved-set-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+  gap: 8px;
+  align-items: center;
+}
+
 .rag-meeting-title {
   font-size: 13px;
   font-weight: 600;
@@ -1562,6 +1569,10 @@ body[data-theme="dark"] .transcript-area {
   }
 
   .rag-query-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-saved-set-row {
     grid-template-columns: 1fr;
   }
 }

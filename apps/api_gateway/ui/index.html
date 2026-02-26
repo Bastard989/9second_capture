@@ -916,6 +916,14 @@
                   Очистить
                 </button>
               </div>
+              <div class="rag-saved-set-row">
+                <select id="ragSavedSetSelect">
+                  <option value="" data-i18n="rag_saved_set_none">Сохраненные наборы</option>
+                </select>
+                <button id="ragSaveSetBtn" class="ghost" data-i18n="rag_saved_set_save">Сохранить набор</button>
+                <button id="ragLoadSetBtn" class="ghost" data-i18n="rag_saved_set_load">Загрузить</button>
+                <button id="ragDeleteSetBtn" class="ghost" data-i18n="rag_saved_set_delete">Удалить</button>
+              </div>
               <div class="hint" data-i18n="rag_meeting_picker_hint">
                 Если ничего не выбрано, поиск пойдет по последним записям.
               </div>
@@ -1025,6 +1033,6 @@
       </span>
     </footer>
 
-    <script src="/ui/app.js?v=20260226_phase4f_rag_index_statuses"></script>
+    <script src="/ui/app.js?v=20260226_phase4g_rag_saved_sets"></script>
   </body>
 </html>
