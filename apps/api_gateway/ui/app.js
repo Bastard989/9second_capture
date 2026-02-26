@@ -2832,6 +2832,39 @@ const _pollRagIndexJobUntilDone = async (jobId) => {
   throw new Error("rag_index_job_timeout");
 };
 
+const _startRagIndexJobForMeetings = async (meetingIds) => {
+  const ids = Array.isArray(meetingIds) ? meetingIds.map((v) => String(v || "").trim()).filter(Boolean) : [];
+  if (!ids.length) {
+    throw new Error("rag_index_job_meeting_ids_required");
+  }
+  const startRes = await fetch("/v1/rag/index-jobs", {
+    method: "POST",
+    headers: _ragJsonHeaders(),
+    body: JSON.stringify({
+      meeting_ids: ids,
+      transcript_variant: state.rag.source || "clean",
+      force_rebuild: Boolean(state.rag.forceReindex),
+    }),
+  });
+  if (!startRes.ok) {
+    throw new Error(`rag_index_job_start_failed_${startRes.status}`);
+  }
+  const startBody = await startRes.json();
+  const jobId = String((startBody && startBody.job_id) || "").trim();
+  if (!jobId) {
+    throw new Error("rag_index_job_id_missing");
+  }
+  state.rag.indexJobId = jobId;
+  state.rag.indexJobStatus = startBody;
+  renderRagWorkspace();
+  return { jobId, startBody };
+};
+
+const _runRagIndexJobForMeetings = async (meetingIds) => {
+  const started = await _startRagIndexJobForMeetings(meetingIds);
+  return _pollRagIndexJobUntilDone(started.jobId);
+};
+
 const indexSelectedRagMeetings = async () => {
   const selectedIds = _ragSelectedMeetingIds();
   if (!selectedIds.length) {
@@ -2845,27 +2878,7 @@ const indexSelectedRagMeetings = async () => {
   setRagHint("rag_hint_indexing", "muted");
   showBusyOverlay("busy_rag_index_title", "busy_rag_index_text");
   try {
-    const startRes = await fetch("/v1/rag/index-jobs", {
-      method: "POST",
-      headers: _ragJsonHeaders(),
-      body: JSON.stringify({
-        meeting_ids: selectedIds,
-        transcript_variant: state.rag.source || "clean",
-        force_rebuild: Boolean(state.rag.forceReindex),
-      }),
-    });
-    if (!startRes.ok) {
-      throw new Error(`rag_index_job_start_failed_${startRes.status}`);
-    }
-    const startBody = await startRes.json();
-    const jobId = String((startBody && startBody.job_id) || "").trim();
-    if (!jobId) {
-      throw new Error("rag_index_job_id_missing");
-    }
-    state.rag.indexJobId = jobId;
-    state.rag.indexJobStatus = startBody;
-    renderRagWorkspace();
-    await _pollRagIndexJobUntilDone(jobId);
+    await _runRagIndexJobForMeetings(selectedIds);
   } catch (err) {
     console.warn("rag index failed", err);
     setRagHint("rag_hint_failed", "bad");
@@ -2897,9 +2910,24 @@ const runRagQuery = async () => {
 
   state.rag.queryBusy = true;
   renderRagWorkspace();
-  setRagHint("rag_hint_querying", "muted");
+  if (selectedIds.length && state.rag.autoIndex) {
+    state.rag.indexBusy = true;
+  }
+  renderRagWorkspace();
+  setRagHint(selectedIds.length && state.rag.autoIndex ? "rag_hint_indexing" : "rag_hint_querying", "muted");
   showBusyOverlay("busy_rag_query_title", "busy_rag_query_text");
   try {
+    if (selectedIds.length && state.rag.autoIndex) {
+      const indexJob = await _runRagIndexJobForMeetings(selectedIds);
+      const okMeetings = Number((indexJob && indexJob.ok_meetings) || 0);
+      const totalMeetings = Number((indexJob && indexJob.total_meetings) || selectedIds.length || 0);
+      if (okMeetings <= 0 && totalMeetings > 0) {
+        throw new Error("rag_query_preindex_failed_all");
+      }
+      // Avoid duplicate synchronous indexing on query request when selection was pre-indexed asynchronously.
+      payload.auto_index = false;
+      setRagHint("rag_hint_querying", "muted");
+    }
     const res = await fetch("/v1/rag/query", {
       method: "POST",
       headers: _ragJsonHeaders(),
@@ -2924,6 +2952,7 @@ const runRagQuery = async () => {
     setRagHint("rag_hint_failed", "bad");
   } finally {
     hideBusyOverlay();
+    state.rag.indexBusy = false;
     state.rag.queryBusy = false;
     renderRagWorkspace();
   }
