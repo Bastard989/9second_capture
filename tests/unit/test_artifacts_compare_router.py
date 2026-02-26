@@ -655,6 +655,76 @@ def test_rag_rank_hits_supports_vector_score_without_keyword_overlap(monkeypatch
     assert hits[0].score > 0.0
 
 
+def test_rag_rank_hits_keyword_score_respects_query_term_repetition(monkeypatch, auth_none_settings) -> None:
+    monkeypatch.setattr(artifacts_router, "_rag_vector_config", lambda: {"enabled": False})
+
+    indexes = [
+        {
+            "chunks": [
+                {
+                    "meeting_id": "m1",
+                    "chunk_id": "c1",
+                    "text": "CANDIDATE: python sql production backend",
+                    "line_start": 1,
+                    "line_end": 1,
+                }
+            ]
+        }
+    ]
+
+    hits1, _, _ = artifacts_router._rag_rank_hits(
+        query="backend python sql",
+        indexes=indexes,
+        transcript_variant="clean",
+        top_k=5,
+    )
+    hits2, _, _ = artifacts_router._rag_rank_hits(
+        query="backend python python sql",
+        indexes=indexes,
+        transcript_variant="clean",
+        top_k=5,
+    )
+
+    assert hits1 and hits2
+    assert hits2[0].keyword_score > hits1[0].keyword_score
+
+
+def test_rag_rank_hits_prefers_query_order_when_keyword_overlap_is_same(monkeypatch, auth_none_settings) -> None:
+    monkeypatch.setattr(artifacts_router, "_rag_vector_config", lambda: {"enabled": False})
+
+    hits, total_chunks, retrieval_mode = artifacts_router._rag_rank_hits(
+        query="python sql kafka",
+        indexes=[
+            {
+                "chunks": [
+                    {
+                        "meeting_id": "m1",
+                        "chunk_id": "c_rev",
+                        "text": "CANDIDATE: kafka sql python опыт продакшн",
+                        "line_start": 1,
+                        "line_end": 1,
+                    },
+                    {
+                        "meeting_id": "m2",
+                        "chunk_id": "c_ord",
+                        "text": "CANDIDATE: python sql kafka опыт продакшн",
+                        "line_start": 1,
+                        "line_end": 1,
+                    },
+                ]
+            }
+        ],
+        transcript_variant="clean",
+        top_k=5,
+    )
+
+    assert total_chunks == 2
+    assert retrieval_mode == "keyword_only"
+    assert len(hits) == 2
+    assert hits[0].chunk_id == "c_ord"
+    assert hits[0].keyword_score >= hits[1].keyword_score
+
+
 def test_rag_query_ranks_across_selected_meetings(monkeypatch, auth_none_settings) -> None:
     index_map = {
         "m1": {

@@ -869,6 +869,54 @@ def _rag_tokenize(text: str) -> list[str]:
     return [tok.lower() for tok in _RAG_TOKEN_RE.findall(str(text or ""))]
 
 
+def _rag_ordered_match_ratio(chunk_tokens: list[str], query_terms: list[str]) -> float:
+    if not chunk_tokens or not query_terms:
+        return 0.0
+    q_idx = 0
+    matched = 0
+    for tok in chunk_tokens:
+        if q_idx >= len(query_terms):
+            break
+        if tok == query_terms[q_idx]:
+            matched += 1
+            q_idx += 1
+    return float(matched / max(1, len(query_terms)))
+
+
+def _rag_min_cover_span_ratio(chunk_tokens: list[str], query_terms: list[str]) -> float:
+    if not chunk_tokens or not query_terms:
+        return 0.0
+    needed = set(query_terms)
+    if not needed:
+        return 0.0
+    have: dict[str, int] = {}
+    missing = len(needed)
+    left = 0
+    best_span: int | None = None
+    for right, tok in enumerate(chunk_tokens):
+        if tok in needed:
+            count = int(have.get(tok, 0)) + 1
+            have[tok] = count
+            if count == 1:
+                missing -= 1
+        while missing == 0 and left <= right:
+            span = right - left + 1
+            if best_span is None or span < best_span:
+                best_span = span
+            lt = chunk_tokens[left]
+            if lt in needed:
+                count = int(have.get(lt, 0)) - 1
+                if count <= 0:
+                    have.pop(lt, None)
+                    missing += 1
+                else:
+                    have[lt] = count
+            left += 1
+    if best_span is None:
+        return 0.0
+    return float(len(query_terms) / max(len(query_terms), best_span))
+
+
 def _rag_embedding_batch_size() -> int:
     s = get_settings()
     raw = int(getattr(s, "rag_embedding_batch_size", 24) or 24)
@@ -1420,7 +1468,8 @@ def _rag_rank_hits(
     q_terms_all = _rag_tokenize(q_text)
     if not q_terms_all:
         return [], 0, "keyword_only"
-    q_terms = list(dict.fromkeys(q_terms_all))
+    q_terms_unique = list(dict.fromkeys(q_terms_all))
+    q_term_qtf = Counter(q_terms_all)
 
     all_chunks: list[dict[str, Any]] = []
     for idx in indexes:
@@ -1492,15 +1541,18 @@ def _rag_rank_hits(
                     query_embedding = []
 
     # BM25-lite IDF over selected candidate chunks.
-    df: dict[str, int] = {t: 0 for t in q_terms}
+    df: dict[str, int] = {t: 0 for t in q_terms_unique}
     chunk_term_counters: list[Counter[str]] = []
+    chunk_tokens_all: list[list[str]] = []
     avg_len = 0.0
     for chunk in all_chunks:
-        counter = Counter(_rag_tokenize(str(chunk.get("text") or "")))
+        chunk_tokens_list = _rag_tokenize(str(chunk.get("text") or ""))
+        chunk_tokens_all.append(chunk_tokens_list)
+        counter = Counter(chunk_tokens_list)
         chunk_term_counters.append(counter)
         avg_len += sum(counter.values())
         present = set(counter.keys())
-        for t in q_terms:
+        for t in q_terms_unique:
             if t in present:
                 df[t] = int(df.get(t, 0)) + 1
     avg_len = avg_len / max(1, len(all_chunks))
@@ -1509,7 +1561,7 @@ def _rag_rank_hits(
     candidates: list[dict[str, Any]] = []
     max_keyword = 0.0
     max_semantic = 0.0
-    for chunk, counter in zip(all_chunks, chunk_term_counters):
+    for chunk, counter, chunk_tokens_list in zip(all_chunks, chunk_term_counters, chunk_tokens_all):
         chunk_tokens = sum(counter.values())
         chunk_text = str(chunk.get("text") or "")
         chunk_lower = chunk_text.lower()
@@ -1526,24 +1578,40 @@ def _rag_rank_hits(
         keyword_score = 0.0
         k1 = 1.2
         b = 0.75
-        for t in q_terms:
+        k3 = 8.0  # query term frequency saturation (small, but non-zero effect)
+        for t in q_terms_unique:
             tf = int(counter.get(t, 0))
             if tf <= 0:
                 continue
             dfi = max(0, int(df.get(t, 0)))
             idf = math.log(1.0 + ((total_chunks - dfi + 0.5) / (dfi + 0.5)))
             denom = tf + k1 * (1 - b + b * (chunk_tokens / max(1.0, avg_len)))
-            keyword_score += idf * ((tf * (k1 + 1)) / max(0.0001, denom))
+            qtf = max(1, int(q_term_qtf.get(t, 1)))
+            qtf_weight = ((k3 + 1.0) * qtf) / (k3 + qtf)
+            base = (tf * (k1 + 1.0)) / max(0.0001, denom)
+            # BM25+ style delta protects longer chunks from being overly penalized.
+            keyword_score += idf * ((base + 0.25) * qtf_weight)
 
         # simple phrase/subsequence boosts
         if q_lower and q_lower in chunk_lower:
             keyword_score += 1.25
-        overlap = sum(1 for t in q_terms if t in chunk_lower)
+        overlap = sum(1 for t in q_terms_unique if t in chunk_lower)
         if overlap:
             keyword_score += min(0.5, overlap * 0.08)
-        meta_overlap = sum(1 for t in q_terms if t in meta_text)
+        meta_overlap = sum(1 for t in q_terms_unique if t in meta_text)
         if meta_overlap:
             keyword_score += min(0.4, meta_overlap * 0.06)
+        coverage = float(sum(1 for t in q_terms_unique if counter.get(t, 0) > 0) / max(1, len(q_terms_unique)))
+        if coverage > 0:
+            keyword_score += min(0.55, coverage * 0.28)
+        if len(q_terms_unique) >= 2 and chunk_tokens_list:
+            ordered_ratio = _rag_ordered_match_ratio(chunk_tokens_list, q_terms_unique)
+            if ordered_ratio > 0:
+                keyword_score += min(0.35, ordered_ratio * 0.18)
+            if coverage >= 0.999:
+                span_ratio = _rag_min_cover_span_ratio(chunk_tokens_list, q_terms_unique)
+                if span_ratio > 0:
+                    keyword_score += min(0.45, span_ratio * 0.22)
 
         semantic_score = 0.0
         if query_embedding and bool(vector_cfg.get("enabled", False)):
