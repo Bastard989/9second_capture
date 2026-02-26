@@ -8,6 +8,7 @@ import re
 import threading
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -929,6 +930,79 @@ def _rag_embedding_cache_max_items() -> int:
     return max(0, min(raw, 100_000))
 
 
+def _rag_embedding_disk_cache_enabled() -> bool:
+    s = get_settings()
+    return bool(getattr(s, "rag_embedding_disk_cache_enabled", True))
+
+
+def _rag_embedding_disk_cache_dir() -> Path:
+    s = get_settings()
+    root = Path((getattr(s, "records_dir", None) or "./data/records").strip()).resolve()
+    return root / "_global" / "rag_embeddings_cache"
+
+
+def _rag_embedding_disk_cache_path(cache_key: str) -> Path:
+    key = str(cache_key or "").strip().lower()
+    if not key or "/" in key or "\\" in key or ".." in key:
+        raise ValueError("invalid_cache_key")
+    return _rag_embedding_disk_cache_dir() / key[:2] / f"{key}.json"
+
+
+def _rag_embedding_disk_cache_read(cache_key: str) -> list[float] | None:
+    if not _rag_embedding_disk_cache_enabled():
+        return None
+    try:
+        path = _rag_embedding_disk_cache_path(cache_key)
+        if not path.exists():
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        payload = raw if isinstance(raw, dict) else {}
+        vec = payload.get("vector")
+        if not isinstance(vec, list) or not vec:
+            return None
+        return [float(v or 0.0) for v in vec]
+    except Exception:
+        return None
+
+
+def _rag_embedding_disk_cache_write_many(
+    *,
+    vectors_by_key: dict[str, list[float]],
+    vector_cfg: dict[str, Any],
+) -> None:
+    if not _rag_embedding_disk_cache_enabled() or not vectors_by_key:
+        return
+    provider = str(vector_cfg.get("provider") or "").strip().lower()
+    provider_label = str(vector_cfg.get("provider_label") or provider or "")
+    model = str(vector_cfg.get("model") or "")
+    try:
+        base_dir = _rag_embedding_disk_cache_dir()
+        base_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    for key, vec in vectors_by_key.items():
+        try:
+            path = _rag_embedding_disk_cache_path(key)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "rag_embedding_cache_v1",
+                        "cached_at": _utc_now_iso(),
+                        "provider": provider,
+                        "provider_label": provider_label,
+                        "model": model,
+                        "vector": [float(v or 0.0) for v in list(vec or [])],
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            continue
+
+
 def _rag_embedding_cache_key(text: str, *, vector_cfg: dict[str, Any]) -> str:
     provider = str(vector_cfg.get("provider") or "").strip().lower()
     base = str(vector_cfg.get("openai_api_base") or "").rstrip("/")
@@ -1045,6 +1119,32 @@ def _rag_embed_texts(texts: list[str] | tuple[str, ...], *, vector_cfg: dict[str
                 missing_by_key[key] = text
                 missing_keys.append(key)
 
+    # Disk-backed cache for warm restarts / repeated indexing between process restarts.
+    if missing_keys and _rag_embedding_disk_cache_enabled():
+        disk_hits_by_key: dict[str, list[float]] = {}
+        still_missing: list[str] = []
+        for key in missing_keys:
+            cached_vec = _rag_embedding_disk_cache_read(key)
+            if cached_vec is None:
+                still_missing.append(key)
+                continue
+            disk_hits_by_key[key] = cached_vec
+        if disk_hits_by_key:
+            cache_limit = _rag_embedding_cache_max_items()
+            with _RAG_EMBEDDING_CACHE_LOCK:
+                if cache_limit > 0:
+                    for key, vec in disk_hits_by_key.items():
+                        _RAG_EMBEDDING_CACHE[key] = list(vec)
+                    while len(_RAG_EMBEDDING_CACHE) > cache_limit:
+                        oldest_key = next(iter(_RAG_EMBEDDING_CACHE), None)
+                        if oldest_key is None:
+                            break
+                        _RAG_EMBEDDING_CACHE.pop(oldest_key, None)
+                for idx, key in enumerate(cache_keys):
+                    if results[idx] is None and key in disk_hits_by_key:
+                        results[idx] = list(disk_hits_by_key[key])
+        missing_keys = still_missing
+
     if missing_keys:
         missing_texts = [missing_by_key[key] for key in missing_keys]
         missing_vectors: list[list[float]] = []
@@ -1094,6 +1194,7 @@ def _rag_embed_texts(texts: list[str] | tuple[str, ...], *, vector_cfg: dict[str
             for idx, key in enumerate(cache_keys):
                 if results[idx] is None and key in vector_by_key:
                     results[idx] = list(vector_by_key[key])
+        _rag_embedding_disk_cache_write_many(vectors_by_key=vector_by_key, vector_cfg=vector_cfg)
 
     return [list(row or []) for row in results]
 

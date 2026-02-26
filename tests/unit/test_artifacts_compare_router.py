@@ -535,6 +535,7 @@ def test_rag_embed_texts_batches_dedupes_and_caches_provider(monkeypatch, auth_n
 
     monkeypatch.setattr(artifacts_router, "_rag_embedding_batch_size", lambda: 2)
     monkeypatch.setattr(artifacts_router, "_rag_embedding_cache_max_items", lambda: 100)
+    monkeypatch.setattr(artifacts_router, "_rag_embedding_disk_cache_enabled", lambda: False)
     monkeypatch.setattr(artifacts_router, "embed_texts_openai_compat", _fake_embed_texts)
 
     with artifacts_router._RAG_EMBEDDING_CACHE_LOCK:
@@ -551,6 +552,54 @@ def test_rag_embed_texts_batches_dedupes_and_caches_provider(monkeypatch, auth_n
     assert rows2[1] == rows1[0]
     # Unique texts: alpha, beta, gamma. Batch size=2 -> two provider calls total.
     assert calls == [["alpha", "beta"], ["gamma"]]
+
+
+def test_rag_embed_texts_uses_disk_cache_after_ram_clear(monkeypatch, tmp_path, auth_none_settings) -> None:
+    settings = get_settings()
+    records_dir_snapshot = settings.records_dir
+    vector_cfg = {
+        "enabled": True,
+        "provider": "openai_compat",
+        "provider_label": "ollama_openai_compat",
+        "model": "nomic-embed-text",
+        "openai_api_base": "http://127.0.0.1:11434/v1",
+        "openai_api_key": "ollama",
+        "openai_timeout_s": 2.0,
+        "dim": 2,
+        "char_ngrams": True,
+    }
+    calls: list[list[str]] = []
+
+    def _fake_embed_texts(texts, **kwargs):
+        calls.append([str(t) for t in list(texts or [])])
+        return [[0.25, 0.75] for _ in list(texts or [])]
+
+    monkeypatch.setattr(artifacts_router, "embed_texts_openai_compat", _fake_embed_texts)
+    monkeypatch.setattr(artifacts_router, "_rag_embedding_cache_max_items", lambda: 100)
+    monkeypatch.setattr(artifacts_router, "_rag_embedding_disk_cache_enabled", lambda: True)
+
+    try:
+        settings.records_dir = str(tmp_path)
+        with artifacts_router._RAG_EMBEDDING_CACHE_LOCK:
+            artifacts_router._RAG_EMBEDDING_CACHE.clear()
+
+        rows1 = artifacts_router._rag_embed_texts(["alpha"], vector_cfg=vector_cfg)
+        key = artifacts_router._rag_embedding_cache_key("alpha", vector_cfg=vector_cfg)
+        cache_path = artifacts_router._rag_embedding_disk_cache_path(key)
+        assert cache_path.exists()
+
+        with artifacts_router._RAG_EMBEDDING_CACHE_LOCK:
+            artifacts_router._RAG_EMBEDDING_CACHE.clear()
+
+        rows2 = artifacts_router._rag_embed_texts(["alpha"], vector_cfg=vector_cfg)
+
+        assert rows1 == [[0.25, 0.75]]
+        assert rows2 == rows1
+        assert calls == [["alpha"]]
+    finally:
+        with artifacts_router._RAG_EMBEDDING_CACHE_LOCK:
+            artifacts_router._RAG_EMBEDDING_CACHE.clear()
+        settings.records_dir = records_dir_snapshot
 
 
 def test_ensure_rag_index_uses_batched_embeddings(monkeypatch, tmp_path, auth_none_settings) -> None:
