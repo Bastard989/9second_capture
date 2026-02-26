@@ -659,6 +659,29 @@ def test_ensure_rag_index_uses_batched_embeddings(monkeypatch, tmp_path, auth_no
         settings.records_dir = records_dir_snapshot
 
 
+def test_rag_index_status_for_meeting_detects_indexed_missing_outdated(tmp_path, auth_none_settings) -> None:
+    settings = get_settings()
+    records_dir_snapshot = settings.records_dir
+    try:
+        settings.records_dir = str(tmp_path)
+        records = artifacts_router.records
+
+        records.write_text("m_status", "raw.txt", "RAW transcript text")
+        raw_sha = artifacts_router.sha256_hex("RAW transcript text".encode("utf-8"))
+        artifacts_router._rag_write_index("m_status", "raw", {"transcript_sha256": raw_sha})
+
+        records.write_text("m_status", "clean.txt", "CLEAN transcript text")
+        artifacts_router._rag_write_index("m_status", "clean", {"transcript_sha256": "not_actual_sha"})
+
+        status_map = artifacts_router._rag_index_status_for_meeting("m_status")
+
+        assert status_map["raw"] == "indexed"
+        assert status_map["normalized"] == "missing"
+        assert status_map["clean"] == "outdated"
+    finally:
+        settings.records_dir = records_dir_snapshot
+
+
 def test_rag_rank_hits_supports_vector_score_without_keyword_overlap(monkeypatch, auth_none_settings) -> None:
     monkeypatch.setattr(
         artifacts_router,

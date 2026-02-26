@@ -1264,6 +1264,14 @@ button:disabled {
   color: var(--ink-2);
 }
 
+.rag-meeting-sub.good {
+  color: var(--ok-ink);
+}
+
+.rag-meeting-sub.bad {
+  color: var(--bad-ink);
+}
+
 .rag-query-grid {
   display: grid;
   grid-template-columns: minmax(160px, 1fr) 140px;

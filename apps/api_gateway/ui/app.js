@@ -614,6 +614,13 @@ const i18n = {
     rag_source_raw: "Raw",
     rag_source_normalized: "Normalized",
     rag_source_clean: "Clean",
+    rag_index_status_prefix: "RAG индекс",
+    rag_index_status_indexed: "готов",
+    rag_index_status_outdated: "устарел",
+    rag_index_status_missing: "нет",
+    rag_index_status_invalid: "битый",
+    rag_index_status_orphaned: "без транскрипта",
+    rag_index_status_unknown: "неизвестно",
     rag_topk_label: "Top-K цитат",
     rag_query_title: "RAG запрос / чат",
     rag_use_llm_answer: "Сгенерировать ответ LLM по найденным цитатам",
@@ -1166,6 +1173,13 @@ const i18n = {
     rag_source_raw: "Raw",
     rag_source_normalized: "Normalized",
     rag_source_clean: "Clean",
+    rag_index_status_prefix: "RAG index",
+    rag_index_status_indexed: "ready",
+    rag_index_status_outdated: "outdated",
+    rag_index_status_missing: "missing",
+    rag_index_status_invalid: "invalid",
+    rag_index_status_orphaned: "orphaned",
+    rag_index_status_unknown: "unknown",
     rag_topk_label: "Top-K citations",
     rag_query_title: "RAG query / chat",
     rag_use_llm_answer: "Generate an LLM answer from retrieved citations",
@@ -2534,6 +2548,19 @@ const _ragTopKValue = () => {
   return bounded;
 };
 
+const _ragIndexStatusValue = (meta, source = "clean") => {
+  const src = String(source || "clean").trim().toLowerCase();
+  const map = meta && typeof meta.rag_index_status === "object" ? meta.rag_index_status : null;
+  const value = map ? String(map[src] || "") : "";
+  return value || "missing";
+};
+
+const _ragIndexStatusLabel = (statusValue) => {
+  const dict = i18n[state.lang] || {};
+  const key = `rag_index_status_${String(statusValue || "").trim().toLowerCase() || "missing"}`;
+  return String(dict[key] || dict.rag_index_status_unknown || statusValue || "unknown");
+};
+
 const _syncRagControlsToState = () => {
   state.rag.source = _ragSourceValue();
   state.rag.topK = _ragTopKValue();
@@ -2615,8 +2642,20 @@ const renderRagMeetingPicker = () => {
     if (meta && meta.artifacts && meta.artifacts.raw) parts.push("raw");
     sub.textContent = parts.length ? parts.join(" • ") : "—";
 
+    const ragSub = document.createElement("div");
+    ragSub.className = "rag-meeting-sub";
+    const ragSource = _ragSourceValue();
+    const ragStatus = _ragIndexStatusValue(meta, ragSource);
+    const srcLabel = String(((i18n[state.lang] || {})[`rag_source_${ragSource}`] || ragSource) || ragSource);
+    const statusLabel = _ragIndexStatusLabel(ragStatus);
+    ragSub.textContent = `${(i18n[state.lang] || {}).rag_index_status_prefix || "RAG index"} (${srcLabel}): ${statusLabel}`;
+    if (ragStatus === "indexed") ragSub.classList.add("good");
+    else if (ragStatus === "outdated" || ragStatus === "invalid" || ragStatus === "orphaned") ragSub.classList.add("bad");
+    else ragSub.classList.add("muted");
+
     body.appendChild(title);
     body.appendChild(sub);
+    body.appendChild(ragSub);
     row.appendChild(cb);
     row.appendChild(body);
     els.ragMeetingPicker.appendChild(row);
@@ -2805,6 +2844,24 @@ const _formatRagIndexJobHint = (job) => {
   return `RAG indexing: ${done}/${total || "?"} (${progressPct}%)${current ? ` · current: ${current}` : ""}`;
 };
 
+const _applyRagIndexJobStatusToRecords = (job) => {
+  if (!job || typeof job !== "object") return;
+  const source = String(job.transcript_variant || state.rag.source || "clean").trim().toLowerCase();
+  if (!["raw", "normalized", "clean"].includes(source)) return;
+  const items = Array.isArray(job.items) ? job.items : [];
+  items.forEach((row) => {
+    const meetingId = String((row && row.meeting_id) || "").trim();
+    if (!meetingId || !state.recordsMeta.has(meetingId)) return;
+    const meta = state.recordsMeta.get(meetingId) || { meeting_id: meetingId };
+    const currentMap = meta && typeof meta.rag_index_status === "object" ? meta.rag_index_status : {};
+    const nextMap = { ...currentMap };
+    const rowStatus = String((row && row.status) || "").trim().toLowerCase();
+    if (rowStatus === "completed") nextMap[source] = "indexed";
+    else if (rowStatus === "failed") nextMap[source] = "outdated";
+    state.recordsMeta.set(meetingId, { ...meta, rag_index_status: nextMap });
+  });
+};
+
 const _pollRagIndexJobUntilDone = async (jobId) => {
   const id = String(jobId || "").trim();
   if (!id) throw new Error("rag_index_job_id_required");
@@ -2822,6 +2879,7 @@ const _pollRagIndexJobUntilDone = async (jobId) => {
     lastBody = body;
     state.rag.indexJobId = id;
     state.rag.indexJobStatus = body;
+    _applyRagIndexJobStatusToRecords(body);
     setRagHint(_formatRagIndexJobHint(body), _ragIndexJobTerminal(body.status) ? (body.status === "completed" ? "good" : "bad") : "muted", true);
     renderRagWorkspace();
     if (_ragIndexJobTerminal(body.status)) {
@@ -6747,6 +6805,7 @@ const fetchRecords = async () => {
       const meetingId = String(item.meeting_id || "").trim();
       const displayName = String(item.display_name || "").trim() || meetingId;
       const artifacts = item && typeof item.artifacts === "object" ? item.artifacts : {};
+      const ragIndexStatus = item && typeof item.rag_index_status === "object" ? item.rag_index_status : {};
       state.recordsMeta.set(meetingId, {
         meeting_id: meetingId,
         display_name: displayName,
@@ -6754,6 +6813,7 @@ const fetchRecords = async () => {
         created_at: String(item.created_at || ""),
         audio_mp3: Boolean(item.audio_mp3),
         artifacts,
+        rag_index_status: ragIndexStatus,
       });
       const opt = document.createElement("option");
       opt.value = meetingId;

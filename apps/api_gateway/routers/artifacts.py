@@ -64,6 +64,7 @@ class MeetingListItem(BaseModel):
     finished_at: datetime | None
     audio_mp3: bool = False
     artifacts: dict[str, bool] = Field(default_factory=dict)
+    rag_index_status: dict[str, str] = Field(default_factory=dict)
 
 
 class MeetingListResponse(BaseModel):
@@ -1321,6 +1322,39 @@ def _rag_read_index(meeting_id: str, source: TranscriptVariant) -> dict[str, Any
     return payload
 
 
+def _rag_index_status_for_meeting(meeting_id: str) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for source in ("raw", "normalized", "clean"):
+        transcript_filename = _transcript_filename(source)  # type: ignore[arg-type]
+        try:
+            transcript_path = records.artifact_path(meeting_id, transcript_filename)
+            index_path = records.artifact_path(meeting_id, _rag_index_relpath(source))  # type: ignore[arg-type]
+        except ValueError:
+            statuses[source] = "invalid_meeting_id"
+            continue
+
+        transcript_exists = transcript_path.exists()
+        index_exists = index_path.exists()
+        if not index_exists:
+            statuses[source] = "missing"
+            continue
+        if not transcript_exists:
+            statuses[source] = "orphaned"
+            continue
+        try:
+            raw = json.loads(index_path.read_text(encoding="utf-8"))
+            payload = raw if isinstance(raw, dict) else {}
+            index_sha = str(payload.get("transcript_sha256") or "").strip()
+            if not index_sha:
+                statuses[source] = "invalid"
+                continue
+            transcript_sha = sha256_hex(transcript_path.read_bytes())
+            statuses[source] = "indexed" if transcript_sha == index_sha else "outdated"
+        except Exception:
+            statuses[source] = "invalid"
+    return statuses
+
+
 def _rag_write_index(meeting_id: str, source: TranscriptVariant, payload: dict[str, Any]) -> None:
     path = records.artifact_path(meeting_id, _rag_index_relpath(source))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2314,6 +2348,7 @@ def list_meetings(
                     finished_at=m.finished_at,
                     audio_mp3=records.exists(m.id, CANONICAL_AUDIO_FILENAME),
                     artifacts=records.list_artifacts(m.id),
+                    rag_index_status=_rag_index_status_for_meeting(m.id),
                 )
             )
     log.info(
