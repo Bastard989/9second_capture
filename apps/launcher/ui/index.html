@@ -134,10 +134,16 @@
         <div class="grid" id="checksGrid"></div>
         <div class="toolbar" style="margin-top: 14px">
           <input id="modelInput" value="llama3.1:8b" placeholder="LLM модель (например llama3.1:8b)" />
+          <input
+            id="embeddingModelInput"
+            value="nomic-embed-text"
+            placeholder="Embeddings модель (например nomic-embed-text)"
+          />
           <button id="fixAll" class="primary">Исправить в 1 клик</button>
           <button id="installFull">Полная установка STT</button>
           <button id="openOllama">Запустить Ollama</button>
-          <button id="pullModel">Скачать модель</button>
+          <button id="pullModel">Скачать LLM модель</button>
+          <button id="pullEmbeddingModel">Скачать embeddings</button>
         </div>
         <div class="toolbar">
           <button id="checkBrowser">Проверить доступ к микрофону/устройствам</button>
@@ -159,18 +165,20 @@
       const logView = document.getElementById("logView");
       const uiLink = document.getElementById("uiLink");
       const modelInput = document.getElementById("modelInput");
+      const embeddingModelInput = document.getElementById("embeddingModelInput");
       const actionButtons = [
         "fixAll",
         "installFull",
         "openOllama",
         "pullModel",
+        "pullEmbeddingModel",
         "checkBrowser",
         "checkScreen",
         "openUi",
       ]
         .map((id) => document.getElementById(id))
         .filter(Boolean);
-      const controls = [...actionButtons, modelInput].filter(Boolean);
+      const controls = [...actionButtons, modelInput, embeddingModelInput].filter(Boolean);
       let uiBusy = false;
       let uiBusyError = "";
 
@@ -261,6 +269,17 @@
                 ? "Установлена"
                 : checks.ollama_model_matched
                   ? `Найдена совместимая: ${checks.ollama_model_matched}`
+                  : "Установлена"
+              : "Не найдена",
+          },
+          {
+            title: `Embeddings ${checks.ollama_embedding_model_default || "nomic-embed-text"}`,
+            state: normalizeState(Boolean(checks.ollama_embedding_model_present)),
+            value: checks.ollama_embedding_model_present
+              ? checks.ollama_embedding_model_exact
+                ? "Установлена"
+                : checks.ollama_embedding_model_matched
+                  ? `Найдена совместимая: ${checks.ollama_embedding_model_matched}`
                   : "Установлена"
               : "Не найдена",
           },
@@ -430,7 +449,10 @@
           "Исправление окружения...",
           async () => {
             const model = String(modelInput.value || "").trim() || "llama3.1:8b";
-            await postJson("/api/fix-all", { model_id: model });
+            const embeddingModel =
+              String((embeddingModelInput && embeddingModelInput.value) || "").trim() ||
+              "nomic-embed-text";
+            await postJson("/api/fix-all", { model_id: model, embedding_model_id: embeddingModel });
           },
           { waitForIdle: true }
         );
@@ -448,8 +470,22 @@
           "Скачивание модели...",
           async () => {
             const model = String(modelInput.value || "").trim() || "llama3.1:8b";
-            await postJson("/api/action", { action: "pull_model", model_id: model });
-            await postJson("/api/action", { action: "set_model", model_id: model });
+            await postJson("/api/action", { action: "pull_model", kind: "llm", model_id: model });
+            await postJson("/api/action", { action: "set_model", kind: "llm", model_id: model });
+          },
+          { waitForIdle: true }
+        );
+      };
+
+      document.getElementById("pullEmbeddingModel").onclick = async () => {
+        await runBusyAction(
+          "Скачивание embeddings модели...",
+          async () => {
+            const model =
+              String((embeddingModelInput && embeddingModelInput.value) || "").trim() ||
+              "nomic-embed-text";
+            await postJson("/api/action", { action: "pull_model", kind: "embedding", model_id: model });
+            await postJson("/api/action", { action: "set_model", kind: "embedding", model_id: model });
           },
           { waitForIdle: true }
         );

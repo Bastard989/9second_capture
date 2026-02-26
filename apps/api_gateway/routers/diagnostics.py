@@ -35,6 +35,16 @@ class DiagnosticsLLMStatus(BaseModel):
     message: str = ""
 
 
+class DiagnosticsEmbeddingsStatus(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    enabled: bool
+    provider: str
+    model_id: str
+    available: bool
+    message: str = ""
+
+
 class DiagnosticsQualityProfile(BaseModel):
     id: str
     ws_quality_profile: str
@@ -46,6 +56,7 @@ class DiagnosticsPreflightResponse(BaseModel):
     server_time: str
     stt: DiagnosticsSTTStatus
     llm: DiagnosticsLLMStatus
+    embeddings: DiagnosticsEmbeddingsStatus
     quality_profiles: list[DiagnosticsQualityProfile] = Field(default_factory=list)
 
 
@@ -125,6 +136,92 @@ def _llm_status() -> DiagnosticsLLMStatus:
     )
 
 
+def _embeddings_status() -> DiagnosticsEmbeddingsStatus:
+    s = get_settings()
+    enabled = bool(getattr(s, "rag_vector_enabled", True))
+    requested = str(getattr(s, "rag_embedding_provider", "auto") or "auto").strip().lower()
+    model_id = str(getattr(s, "embedding_model_id", "") or "").strip()
+    api_base = str(getattr(s, "embedding_api_base", "") or getattr(s, "openai_api_base", "") or "").strip()
+    api_key = str(getattr(s, "embedding_api_key", "") or getattr(s, "openai_api_key", "") or "").strip()
+    if not enabled:
+        return DiagnosticsEmbeddingsStatus(
+            enabled=False,
+            available=False,
+            provider="disabled",
+            model_id=model_id,
+            message="RAG vector retrieval disabled",
+        )
+    if requested == "hashing":
+        return DiagnosticsEmbeddingsStatus(
+            enabled=True,
+            available=True,
+            provider="hashing_local",
+            model_id=model_id or "hashing_local",
+            message="Local hashing embeddings fallback",
+        )
+    if not api_base or not model_id:
+        return DiagnosticsEmbeddingsStatus(
+            enabled=True,
+            available=True,
+            provider="hashing_local",
+            model_id=model_id or "nomic-embed-text",
+            message="Embeddings config incomplete, hashing fallback will be used",
+        )
+
+    bearer = api_key or ("ollama" if _is_local_base(api_base) else "")
+    headers = {"Content-Type": "application/json"}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    url = api_base.rstrip("/") + "/models"
+    provider_name = "ollama_openai_compat" if _is_local_base(api_base) else "openai_compat"
+    try:
+        resp = requests.get(url, headers=headers, timeout=3.5)
+    except requests.RequestException as err:
+        return DiagnosticsEmbeddingsStatus(
+            enabled=True,
+            available=False,
+            provider=provider_name,
+            model_id=model_id,
+            message=f"Embeddings provider unavailable: {err}; hashing fallback",
+        )
+    if resp.status_code >= 400:
+        text = (resp.text or "").strip()[:180]
+        return DiagnosticsEmbeddingsStatus(
+            enabled=True,
+            available=False,
+            provider=provider_name,
+            model_id=model_id,
+            message=f"Embeddings HTTP {resp.status_code}: {text}; hashing fallback",
+        )
+    try:
+        body = resp.json()
+    except Exception:
+        body = {}
+    rows = body.get("data") if isinstance(body, dict) else []
+    models: list[str] = []
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict):
+                model = str(row.get("id") or "").strip()
+                if model:
+                    models.append(model)
+    if model_id and model_id not in models:
+        return DiagnosticsEmbeddingsStatus(
+            enabled=True,
+            available=False,
+            provider=provider_name,
+            model_id=model_id,
+            message=f"Embeddings model '{model_id}' is not installed; hashing fallback",
+        )
+    return DiagnosticsEmbeddingsStatus(
+        enabled=True,
+        available=True,
+        provider=provider_name,
+        model_id=model_id,
+        message="Embeddings provider ready",
+    )
+
+
 def _normalize_log_level(raw: str) -> str:
     value = (raw or "").strip().lower()
     if value in {"debug", "info", "warning", "error"}:
@@ -163,6 +260,7 @@ def diagnostics_preflight(_=Depends(auth_dep)) -> DiagnosticsPreflightResponse:
         server_time=datetime.now(timezone.utc).isoformat(),
         stt=DiagnosticsSTTStatus(**stt_status),
         llm=_llm_status(),
+        embeddings=_embeddings_status(),
         quality_profiles=[
             DiagnosticsQualityProfile(
                 id="fast",

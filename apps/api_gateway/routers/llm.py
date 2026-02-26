@@ -46,6 +46,40 @@ class LLMModelUpdateResponse(BaseModel):
     model_id: str
 
 
+class EmbeddingStatusResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    vector_enabled: bool
+    provider_requested: str
+    provider: str
+    api_base: str
+    model_id: str
+    available: bool
+    fallback_provider: str = "hashing_local"
+    message: str = ""
+
+
+class EmbeddingModelsResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    ok: bool = True
+    models: list[str] = Field(default_factory=list)
+    current_model: str
+
+
+class EmbeddingModelUpdateRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: str = Field(min_length=1, max_length=200)
+
+
+class EmbeddingModelUpdateResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    ok: bool = True
+    model_id: str
+
+
 def _is_local_base(api_base: str) -> bool:
     value = (api_base or "").strip()
     if not value:
@@ -129,6 +163,22 @@ def _runtime_override_file() -> Path:
     return Path(root).resolve() / "runtime_overrides.json"
 
 
+def _embedding_api_base() -> str:
+    s = get_settings()
+    return str(getattr(s, "embedding_api_base", "") or getattr(s, "openai_api_base", "") or "").strip()
+
+
+def _embedding_api_key() -> str:
+    s = get_settings()
+    return str(getattr(s, "embedding_api_key", "") or getattr(s, "openai_api_key", "") or "").strip()
+
+
+def _embedding_provider_requested() -> str:
+    s = get_settings()
+    value = str(getattr(s, "rag_embedding_provider", "auto") or "auto").strip().lower()
+    return value or "auto"
+
+
 def _save_runtime_override(key: str, value: str) -> None:
     try:
         path = _runtime_override_file()
@@ -183,3 +233,109 @@ def llm_update_model(req: LLMModelUpdateRequest, _=Depends(auth_dep)) -> LLMMode
     os.environ["LLM_MODEL_ID"] = next_model
     _save_runtime_override("LLM_MODEL_ID", next_model)
     return LLMModelUpdateResponse(model_id=next_model)
+
+
+@router.get("/llm/embeddings/status", response_model=EmbeddingStatusResponse)
+def embedding_status(_=Depends(auth_dep)) -> EmbeddingStatusResponse:
+    s = get_settings()
+    vector_enabled = bool(getattr(s, "rag_vector_enabled", True))
+    provider_requested = _embedding_provider_requested()
+    api_base = _embedding_api_base()
+    model_id = str(getattr(s, "embedding_model_id", "") or "").strip()
+    can_use_openai = bool(api_base and model_id)
+    if not vector_enabled:
+        return EmbeddingStatusResponse(
+            vector_enabled=False,
+            provider_requested=provider_requested,
+            provider="disabled",
+            api_base=api_base,
+            model_id=model_id,
+            available=False,
+            message="RAG vector retrieval disabled (RAG_VECTOR_ENABLED=false)",
+        )
+    if provider_requested == "hashing":
+        return EmbeddingStatusResponse(
+            vector_enabled=True,
+            provider_requested=provider_requested,
+            provider="hashing_local",
+            api_base="",
+            model_id=model_id or "hashing_local",
+            available=True,
+            message="Local hashing embeddings fallback (offline)",
+        )
+    if not can_use_openai:
+        return EmbeddingStatusResponse(
+            vector_enabled=True,
+            provider_requested=provider_requested,
+            provider="hashing_local",
+            api_base=api_base,
+            model_id=model_id or "nomic-embed-text",
+            available=True,
+            message="Embedding provider config is incomplete; using hashing fallback",
+        )
+
+    try:
+        models = _fetch_openai_compat_models(
+            api_base=api_base,
+            api_key=_embedding_api_key(),
+            timeout_s=max(3, int(getattr(s, "rag_embedding_request_timeout_sec", 8.0) or 8)),
+        )
+    except HTTPException as exc:
+        detail = str(exc.detail or "provider unavailable")
+        provider_name = "ollama_openai_compat" if _is_local_base(api_base) else "openai_compat"
+        return EmbeddingStatusResponse(
+            vector_enabled=True,
+            provider_requested=provider_requested,
+            provider=provider_name,
+            api_base=api_base,
+            model_id=model_id,
+            available=False,
+            message=f"{detail}; RAG will fall back to hashing",
+        )
+
+    provider_name = "ollama_openai_compat" if _is_local_base(api_base) else "openai_compat"
+    if model_id and model_id in models:
+        msg = "Embeddings provider ready"
+    elif model_id:
+        msg = f"Embeddings API ready, model '{model_id}' not found (hashing fallback will be used)"
+    else:
+        msg = "Embeddings API ready, model is not selected"
+    return EmbeddingStatusResponse(
+        vector_enabled=True,
+        provider_requested=provider_requested,
+        provider=provider_name,
+        api_base=api_base,
+        model_id=model_id,
+        available=True,
+        message=msg,
+    )
+
+
+@router.get("/llm/embeddings/models", response_model=EmbeddingModelsResponse)
+def embedding_models(_=Depends(auth_dep)) -> EmbeddingModelsResponse:
+    s = get_settings()
+    api_base = _embedding_api_base()
+    api_key = _embedding_api_key()
+    models = _fetch_openai_compat_models(
+        api_base=api_base,
+        api_key=api_key,
+        timeout_s=max(3, int(getattr(s, "rag_embedding_request_timeout_sec", 8.0) or 8)),
+    )
+    current = str(getattr(s, "embedding_model_id", "") or "").strip()
+    if current and current not in models:
+        models.append(current)
+    return EmbeddingModelsResponse(models=models, current_model=current)
+
+
+@router.post("/llm/embeddings/model", response_model=EmbeddingModelUpdateResponse)
+def embedding_update_model(
+    req: EmbeddingModelUpdateRequest, _=Depends(auth_dep)
+) -> EmbeddingModelUpdateResponse:
+    next_model = req.model_id.strip()
+    if not next_model:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_id is required")
+    s = get_settings()
+    s.embedding_model_id = next_model
+    os.environ["EMBEDDING_MODEL_ID"] = next_model
+    _save_runtime_override("EMBEDDING_MODEL_ID", next_model)
+    return EmbeddingModelUpdateResponse(model_id=next_model)

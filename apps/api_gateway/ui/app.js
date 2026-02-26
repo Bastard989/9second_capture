@@ -84,6 +84,11 @@ const state = {
   llmStatusStyle: "muted",
   llmStatusText: "",
   llmStatusParams: {},
+  embeddingModels: [],
+  embeddingStatusKey: "embedding_status_loading",
+  embeddingStatusStyle: "muted",
+  embeddingStatusText: "",
+  embeddingStatusParams: {},
   quickJobId: null,
   quickStatusKey: "quick_record_state_idle",
   quickStatusStyle: "muted",
@@ -92,6 +97,32 @@ const state = {
   quickHintStyle: "muted",
   quickPollTimer: null,
   compareItems: [],
+  llmArtifact: {
+    meetingId: "",
+    transcriptSource: "clean",
+    mode: "template",
+    templateId: "analysis",
+    forceRebuild: false,
+    lastResponse: null,
+    busy: false,
+    hintKey: "llm_artifact_hint_idle",
+    hintText: "",
+    hintStyle: "muted",
+  },
+  rag: {
+    selectedMeetingIds: new Set(),
+    source: "clean",
+    topK: 8,
+    autoIndex: true,
+    forceReindex: false,
+    useLlmAnswer: true,
+    lastResponse: null,
+    queryBusy: false,
+    indexBusy: false,
+    hintKey: "rag_hint_idle",
+    hintText: "",
+    hintStyle: "muted",
+  },
   recordsMeta: new Map(),
   reportMeetingSelection: {
     raw: "",
@@ -107,6 +138,7 @@ const state = {
   captureClaimInProgress: false,
   uiLogLastByKey: new Map(),
   warnedSystemLowAt: 0,
+  busyOverlayCount: 0,
 };
 
 const PREFER_PCM_CAPTURE = true;
@@ -297,9 +329,22 @@ const i18n = {
       "Поля не обязательны, но помогают делать сравнимую аналитику между интервью.",
     llm_model_label: "LLM модель",
     help_llm:
-      "LLM участвует после записи: улучшает clean-текст и формирует итоговые отчеты/таблицы.",
+      "LLM используется только при формировании clean-текста и итоговых отчётов/таблиц в блоке «Результаты».",
+    embedding_model_label: "Embeddings модель",
+    help_embeddings_model:
+      "Отдельная модель для RAG-поиска по смыслу (эмбеддинги). Используется для поиска/сравнения интервью. Если недоступна, включается локальный hashing fallback.",
+    help_llm_schema:
+      "Опционально. Если указать JSON-схему, LLM должен вернуть валидный JSON по этой структуре. Оставьте пустым для обычного текста.",
+    help_transcript_raw:
+      "Raw (грязный): прямой STT-транскрипт как есть, с паузами, междометиями и шумовыми вставками.",
+    help_transcript_clean:
+      "Clean (чистый): очищенный текст для чтения и отчетов. Обычно строится из raw через нормализацию и (опционально) LLM-очистку.",
+    help_transcript_sources:
+      "Raw — исходный STT текст. Normalized — служебная нормализация без LLM (убирает мусор/повторы, сохраняет смысл). Clean — пользовательский чистый текст после normalizer + опциональной LLM-очистки.",
     llm_scan_btn: "Сканировать",
     llm_apply_btn: "Сменить модель",
+    embedding_scan_btn: "Сканировать",
+    embedding_apply_btn: "Сменить модель",
     llm_status_loading: "Загружаем настройки LLM...",
     llm_status_ready: "LLM включен. Текущая модель: {model}.",
     llm_status_disabled: "LLM выключен (LLM_ENABLED=false).",
@@ -312,6 +357,17 @@ const i18n = {
       "LLM API недоступен. Проверьте Ollama/OPENAI_API_BASE.",
     llm_model_placeholder: "Выберите модель",
     llm_model_missing: "Сначала выберите модель.",
+    embedding_status_loading: "Загружаем настройки embeddings...",
+    embedding_status_ready: "Embeddings готовы. Текущая модель: {model}.",
+    embedding_status_scanning: "Сканируем embeddings модели...",
+    embedding_status_scan_done: "Найдено embeddings моделей: {count}. Текущая: {model}.",
+    embedding_status_scan_empty: "Embeddings модели не найдены. Текущая: {model}.",
+    embedding_status_applied: "Embeddings модель переключена: {model}.",
+    embedding_status_apply_failed: "Не удалось переключить embeddings модель.",
+    embedding_status_unavailable:
+      "Embeddings API недоступен. RAG будет использовать hashing fallback.",
+    embedding_model_placeholder: "Выберите embeddings модель",
+    embedding_model_missing: "Сначала выберите embeddings модель.",
     device_label: "Источник аудио",
     help_device:
       "Главный источник речи собеседника. Обычно это виртуальный драйвер системного звука.",
@@ -430,7 +486,7 @@ const i18n = {
     signal_check_system_only:
       "Системный источник слышен, но микрофон не добавлен. Проверьте доступ к микрофону.",
     meeting_id_label: "Meeting ID:",
-    chunks_label: "Чанки:",
+    chunks_label: "Чанки realtime:",
     transcript_title: "Транскрипт",
     raw_label: "Raw",
     clean_label: "Clean",
@@ -463,12 +519,14 @@ const i18n = {
     results_report_title: "2) TXT отчёт из MP3",
     results_report_hint: "Выберите тип отчёта (грязный/чистый), задайте имя и сохраните TXT.",
     results_stt_title: "Настройки STT для отчётов",
+    results_report_name_label: "Имя файла отчёта (обязательно)",
     results_report_name_placeholder: "report_clean",
     results_generate_report_btn: "Сформировать TXT",
     results_download_report_btn: "Сохранить TXT",
     results_current_report_file: "Текущий файл отчёта",
-    results_convert_title: "3) Конвертация готовых отчётов",
-    results_convert_hint: "Для каждого типа отчёта выберите запись и формат выгрузки.",
+    results_convert_title: "2) Конвертация готовых отчётов",
+    results_convert_hint:
+      "Единый блок: сначала при необходимости строим TXT (Raw/Clean), затем экспортируем в JSON/CSV/Таблица JSON.",
     results_raw_lane_title: "Грязный отчёт (Raw)",
     results_clean_lane_title: "Чистый отчёт (Clean)",
     results_raw_report_name_placeholder: "raw_report_export",
@@ -493,6 +551,98 @@ const i18n = {
     compare_col_decision: "Решение",
     compare_col_quality: "Качество",
     compare_row_candidate_fallback: "Кандидат не указан",
+    llm_artifact_title: "LLM-экспорт / кастомные форматы",
+    llm_artifact_generate_btn: "Сформировать",
+    llm_artifact_hint_idle:
+      "Выберите запись и формат, затем сформируйте LLM-артефакт из транскрипта.",
+    llm_artifact_hint_running: "LLM-артефакт формируется...",
+    llm_artifact_hint_done: "LLM-артефакт сформирован.",
+    llm_artifact_hint_failed: "Не удалось сформировать LLM-артефакт.",
+    llm_artifact_hint_no_meeting: "Выберите запись для генерации LLM-артефакта.",
+    llm_artifact_hint_prompt_required: "Для режимов Custom/Table укажите prompt.",
+    llm_artifact_hint_schema_invalid: "Schema JSON некорректен. Проверьте формат JSON.",
+    llm_artifact_hint_no_result: "Сначала сформируйте LLM-артефакт.",
+    llm_artifact_source_panel_title: "Источник и режим",
+    llm_artifact_meeting_label: "Запись",
+    llm_artifact_transcript_source_label: "Источник транскрипта",
+    llm_artifact_mode_label: "Режим",
+    llm_artifact_mode_template: "Шаблон",
+    llm_artifact_mode_custom: "Custom prompt",
+    llm_artifact_mode_table: "Таблица (JSON+CSV)",
+    llm_artifact_template_label: "Шаблон",
+    llm_artifact_template_analysis: "Analysis",
+    llm_artifact_template_summary: "Summary",
+    llm_artifact_template_structured: "Structured table",
+    llm_artifact_template_senior: "Senior brief",
+    llm_artifact_force_rebuild: "Принудительно пересобрать (игнорировать cache)",
+    llm_artifact_prompt_panel_title: "Prompt / Schema",
+    llm_artifact_prompt_label: "Prompt (для custom/table)",
+    llm_artifact_prompt_placeholder:
+      "Сделай таблицу для Google Sheets: навыки, опыт, риски, рекомендации.",
+    llm_artifact_schema_label: "Schema JSON (опционально)",
+    llm_artifact_schema_placeholder: '{"type":"object","properties":{"rows":{"type":"array"}}}',
+    llm_artifact_result_title: "Результат LLM-артефакта",
+    llm_artifact_result_none: "Результата пока нет",
+    llm_artifact_meta_template:
+      "artifact_id={artifact_id}\nmode={mode}\ntemplate={template}\nsource={source}\nkind={kind}\nstatus={status}\ncreated_at={created_at}\ntranscript_chars={chars}\ncached={cached}",
+    llm_artifact_file_download: "Скачать {fmt}",
+    llm_artifact_busy_title: "LLM-артефакт",
+    llm_artifact_busy_text:
+      "Генерируем артефакт из выбранного транскрипта. Для custom/table и LLM может потребоваться больше времени.",
+    rag_title: "RAG чат / compare workspace",
+    rag_refresh_meetings: "Обновить список",
+    rag_index_selected: "Индексировать выбранные",
+    rag_run_btn: "Выполнить запрос",
+    rag_hint_idle: "Выберите интервью, задайте запрос и получите ответ с цитатами из транскриптов.",
+    rag_hint_indexing: "Строим RAG индекс для выбранных интервью...",
+    rag_hint_querying: "Ищем релевантные фрагменты и собираем ответ...",
+    rag_hint_done: "RAG запрос выполнен.",
+    rag_hint_query_empty: "Введите вопрос или задачу для RAG.",
+    rag_hint_index_no_selection: "Выберите хотя бы одну запись для индексации.",
+    rag_hint_failed: "RAG запрос завершился с ошибкой.",
+    rag_hint_no_results: "По запросу не найдено релевантных фрагментов.",
+    rag_hint_export_empty: "Сначала выполните RAG запрос.",
+    rag_meeting_picker_title: "Интервью для сравнения",
+    rag_meeting_picker_hint: "Если ничего не выбрано, поиск пойдет по последним записям.",
+    rag_picker_empty: "Список записей пуст. Сначала создайте или импортируйте запись.",
+    rag_select_current: "Текущая запись",
+    rag_select_all: "Выбрать все",
+    rag_clear_selection: "Очистить",
+    rag_source_label: "Источник транскрипта",
+    rag_source_raw: "Raw",
+    rag_source_normalized: "Normalized",
+    rag_source_clean: "Clean",
+    rag_topk_label: "Top-K цитат",
+    rag_query_title: "RAG запрос / чат",
+    rag_use_llm_answer: "Сгенерировать ответ LLM по найденным цитатам",
+    rag_auto_index: "Автоиндексация выбранных интервью перед запросом",
+    rag_force_reindex: "Принудительно пересобрать индекс",
+    rag_query_input_label: "Вопрос / задача",
+    rag_query_input_placeholder:
+      "Сравни кандидатов по backend/system design и собери таблицу с сильными и слабыми сторонами.",
+    rag_answer_prompt_label: "Доп. инструкция для ответа (опционально)",
+    rag_answer_prompt_placeholder: "Ответь кратко, затем перечисли доказательства с ссылками [n].",
+    rag_export_json: "Экспорт JSON",
+    rag_export_csv: "Экспорт CSV цитат",
+    rag_export_txt: "Экспорт TXT ответа",
+    rag_answer_title: "Ответ (LLM/RAG)",
+    rag_hits_title: "Цитаты / найденные фрагменты",
+    rag_result_meta_none: "Нет результатов",
+    rag_result_meta_template:
+      "Встреч: {meetings}, индексов: {indexed}, чанков: {chunks}, top hits: {hits}, режим: {mode}",
+    rag_hit_meta_score: "Score",
+    rag_hit_meta_meeting: "Запись",
+    rag_hit_meta_candidate: "Кандидат",
+    rag_hit_meta_vacancy: "Вакансия",
+    rag_hit_meta_level: "Уровень",
+    rag_hit_meta_lines: "Строки",
+    rag_hit_meta_time: "Время",
+    rag_hit_meta_speakers: "Спикеры",
+    rag_hits_empty: "Здесь появятся найденные фрагменты с цитатами.",
+    busy_rag_query_title: "RAG запрос",
+    busy_rag_query_text: "Ищем фрагменты по выбранным интервью и готовим ответ с цитатами.",
+    busy_rag_index_title: "Индексация RAG",
+    busy_rag_index_text: "Собираем чанки и citations по выбранным транскриптам.",
     choose_folder: "Выбрать папку",
     folder_not_selected: "Папка не выбрана",
     folder_selected: "Папка выбрана",
@@ -505,10 +655,13 @@ const i18n = {
     file_action_mp3: "MP3",
     prompt_rename_record: "Введите новое название записи:",
     prompt_save_mp3_after_stop: "Запись завершена. Укажите имя MP3 файла:",
+    prompt_report_name: "Укажите имя файла отчёта:",
     hint_record_renamed: "Название записи обновлено.",
     hint_record_rename_failed: "Не удалось переименовать запись. Проверьте лог локального API.",
     hint_mp3_saved: "MP3 сохранен.",
     hint_mp3_not_found: "MP3 пока недоступен для этой записи.",
+    hint_mp3_not_found_ffmpeg:
+      "MP3 недоступен. Скорее всего не установлен ffmpeg (нужен для конвертации backup_audio.webm в MP3).",
     hint_mp3_import_started: "Загружаем MP3 в агент и строим запись...",
     hint_mp3_import_done: "MP3 импортирован. Можно формировать отчёты.",
     hint_mp3_import_failed: "Не удалось импортировать MP3 файл.",
@@ -516,6 +669,15 @@ const i18n = {
     hint_report_source_missing: "Сначала выберите запись для отчёта.",
     hint_report_name_missing: "Укажите имя файла отчёта.",
     hint_report_missing: "Отчёт пока не найден. Сначала нажмите «Сформировать TXT».",
+    busy_overlay_title: "Подождите...",
+    busy_finish_title: "Завершаем запись",
+    busy_finish_text:
+      "Сохраняем аудио и готовим MP3. Текст и отчёты формируются позже по запросу в блоке «Результаты».",
+    busy_mp3_title: "Готовим MP3",
+    busy_mp3_text: "Конвертируем запись в MP3 и открываем сохранение файла.",
+    busy_report_title: "Формируем отчёт",
+    busy_report_text:
+      "Строим TXT-отчёт из выбранной записи. При первом запуске для записи могут выполняться STT/LLM, на CPU это может занять минуты.",
     report_picker_empty: "Нет записей",
     download_raw: "Скачать raw",
     download_clean: "Скачать clean",
@@ -545,7 +707,7 @@ const i18n = {
     quick_record_duration_label: "Длительность (сек)",
     help_quick_duration:
       "Ограничение времени quick-записи. По достижении лимита запись остановится.",
-    quick_record_transcribe_label: "Сделать локальную транскрибацию",
+    quick_record_transcribe_label: "Локальная транскрибация (отключено)",
     quick_record_upload_label: "Отправить запись в пайплайн агента",
     quick_record_start_btn: "Quick старт",
     quick_record_stop_btn: "Quick стоп",
@@ -721,9 +883,22 @@ const i18n = {
       "Fields are optional, but they improve comparability between interviews.",
     llm_model_label: "LLM model",
     help_llm:
-      "LLM is used after recording to improve clean transcript and generate reports/tables.",
+      "LLM is used only when generating clean text and reports/tables in Results.",
+    embedding_model_label: "Embeddings model",
+    help_embeddings_model:
+      "Separate model for semantic RAG retrieval (embeddings). Used for search/compare across interviews. If unavailable, local hashing fallback is used.",
+    help_llm_schema:
+      "Optional. If provided, LLM should return valid JSON that follows this schema guide. Leave empty for plain text output.",
+    help_transcript_raw:
+      "Raw: direct STT transcript as-is, including fillers, pauses, and noisy fragments.",
+    help_transcript_clean:
+      "Clean: user-facing cleaned transcript for reading and reports. Usually built from raw via normalization and optional LLM cleanup.",
+    help_transcript_sources:
+      "Raw = original STT text. Normalized = internal deterministic cleanup without LLM (removes noise/repeats, preserves meaning). Clean = user-facing text after normalizer + optional LLM cleanup.",
     llm_scan_btn: "Scan",
     llm_apply_btn: "Switch model",
+    embedding_scan_btn: "Scan",
+    embedding_apply_btn: "Switch model",
     llm_status_loading: "Loading LLM settings...",
     llm_status_ready: "LLM enabled. Current model: {model}.",
     llm_status_disabled: "LLM is disabled (LLM_ENABLED=false).",
@@ -736,6 +911,17 @@ const i18n = {
       "LLM API is unavailable. Check Ollama/OPENAI_API_BASE.",
     llm_model_placeholder: "Select model",
     llm_model_missing: "Select a model first.",
+    embedding_status_loading: "Loading embeddings settings...",
+    embedding_status_ready: "Embeddings ready. Current model: {model}.",
+    embedding_status_scanning: "Scanning embeddings models...",
+    embedding_status_scan_done: "Embedding models found: {count}. Current: {model}.",
+    embedding_status_scan_empty: "No embedding models found. Current: {model}.",
+    embedding_status_applied: "Embedding model switched: {model}.",
+    embedding_status_apply_failed: "Failed to switch embedding model.",
+    embedding_status_unavailable:
+      "Embeddings API unavailable. RAG will use hashing fallback.",
+    embedding_model_placeholder: "Select embedding model",
+    embedding_model_missing: "Select an embedding model first.",
     device_label: "Audio source",
     help_device:
       "Primary interviewee speech source. Typically this is a virtual system loopback input.",
@@ -853,7 +1039,7 @@ const i18n = {
     signal_check_system_only:
       "System source is audible, but microphone is missing. Check microphone permission.",
     meeting_id_label: "Meeting ID:",
-    chunks_label: "Chunks:",
+    chunks_label: "Realtime chunks:",
     transcript_title: "Transcript",
     raw_label: "Raw",
     clean_label: "Clean",
@@ -886,12 +1072,14 @@ const i18n = {
     results_report_title: "2) TXT report from MP3",
     results_report_hint: "Choose report type (raw/clean), set file name, and save TXT.",
     results_stt_title: "STT settings for reports",
+    results_report_name_label: "Report filename (required)",
     results_report_name_placeholder: "report_clean",
     results_generate_report_btn: "Build TXT",
     results_download_report_btn: "Save TXT",
     results_current_report_file: "Current report file",
-    results_convert_title: "3) Convert ready reports",
-    results_convert_hint: "For each report type choose a record and export format.",
+    results_convert_title: "2) Report conversion",
+    results_convert_hint:
+      "Single block: build TXT (raw/clean) when needed, then export JSON/CSV/Table JSON.",
     results_raw_lane_title: "Raw report lane",
     results_clean_lane_title: "Clean report lane",
     results_raw_report_name_placeholder: "raw_report_export",
@@ -916,6 +1104,97 @@ const i18n = {
     compare_col_decision: "Decision",
     compare_col_quality: "Quality",
     compare_row_candidate_fallback: "Candidate not set",
+    llm_artifact_title: "LLM export / custom formats",
+    llm_artifact_generate_btn: "Generate",
+    llm_artifact_hint_idle: "Select a recording and format, then generate an LLM artifact from transcript.",
+    llm_artifact_hint_running: "Generating LLM artifact...",
+    llm_artifact_hint_done: "LLM artifact generated.",
+    llm_artifact_hint_failed: "Failed to generate LLM artifact.",
+    llm_artifact_hint_no_meeting: "Select a recording for LLM artifact generation.",
+    llm_artifact_hint_prompt_required: "Prompt is required for Custom/Table modes.",
+    llm_artifact_hint_schema_invalid: "Schema JSON is invalid. Check JSON syntax.",
+    llm_artifact_hint_no_result: "Generate an LLM artifact first.",
+    llm_artifact_source_panel_title: "Source and mode",
+    llm_artifact_meeting_label: "Recording",
+    llm_artifact_transcript_source_label: "Transcript source",
+    llm_artifact_mode_label: "Mode",
+    llm_artifact_mode_template: "Template",
+    llm_artifact_mode_custom: "Custom prompt",
+    llm_artifact_mode_table: "Table (JSON+CSV)",
+    llm_artifact_template_label: "Template",
+    llm_artifact_template_analysis: "Analysis",
+    llm_artifact_template_summary: "Summary",
+    llm_artifact_template_structured: "Structured table",
+    llm_artifact_template_senior: "Senior brief",
+    llm_artifact_force_rebuild: "Force rebuild (ignore cache)",
+    llm_artifact_prompt_panel_title: "Prompt / Schema",
+    llm_artifact_prompt_label: "Prompt (for custom/table)",
+    llm_artifact_prompt_placeholder:
+      "Build a Google Sheets table with skills, experience, risks, and recommendations.",
+    llm_artifact_schema_label: "Schema JSON (optional)",
+    llm_artifact_schema_placeholder: '{"type":"object","properties":{"rows":{"type":"array"}}}',
+    llm_artifact_result_title: "LLM artifact result",
+    llm_artifact_result_none: "No artifact yet",
+    llm_artifact_meta_template:
+      "artifact_id={artifact_id}\nmode={mode}\ntemplate={template}\nsource={source}\nkind={kind}\nstatus={status}\ncreated_at={created_at}\ntranscript_chars={chars}\ncached={cached}",
+    llm_artifact_file_download: "Download {fmt}",
+    llm_artifact_busy_title: "LLM artifact",
+    llm_artifact_busy_text:
+      "Generating artifact from the selected transcript. Custom/table modes may take longer with LLM.",
+    rag_title: "RAG chat / compare workspace",
+    rag_refresh_meetings: "Refresh list",
+    rag_index_selected: "Index selected",
+    rag_run_btn: "Run query",
+    rag_hint_idle: "Select interviews, enter a query, and get an answer with transcript citations.",
+    rag_hint_indexing: "Building RAG index for selected interviews...",
+    rag_hint_querying: "Searching relevant chunks and composing the answer...",
+    rag_hint_done: "RAG query completed.",
+    rag_hint_query_empty: "Enter a RAG question or task.",
+    rag_hint_index_no_selection: "Select at least one recording to build an index.",
+    rag_hint_failed: "RAG query failed.",
+    rag_hint_no_results: "No relevant transcript chunks were found.",
+    rag_hint_export_empty: "Run a RAG query first.",
+    rag_meeting_picker_title: "Interviews for comparison",
+    rag_meeting_picker_hint: "If nothing is selected, search runs on recent recordings.",
+    rag_picker_empty: "No recordings yet. Create or import a recording first.",
+    rag_select_current: "Current record",
+    rag_select_all: "Select all",
+    rag_clear_selection: "Clear",
+    rag_source_label: "Transcript source",
+    rag_source_raw: "Raw",
+    rag_source_normalized: "Normalized",
+    rag_source_clean: "Clean",
+    rag_topk_label: "Top-K citations",
+    rag_query_title: "RAG query / chat",
+    rag_use_llm_answer: "Generate an LLM answer from retrieved citations",
+    rag_auto_index: "Auto-index selected interviews before query",
+    rag_force_reindex: "Force rebuild index",
+    rag_query_input_label: "Question / task",
+    rag_query_input_placeholder:
+      "Compare candidates on backend/system design and build a table of strengths and weaknesses.",
+    rag_answer_prompt_label: "Extra answer instruction (optional)",
+    rag_answer_prompt_placeholder: "Answer briefly, then list evidence with [n] citations.",
+    rag_export_json: "Export JSON",
+    rag_export_csv: "Export citations CSV",
+    rag_export_txt: "Export answer TXT",
+    rag_answer_title: "Answer (LLM/RAG)",
+    rag_hits_title: "Citations / retrieved chunks",
+    rag_result_meta_none: "No results",
+    rag_result_meta_template:
+      "Meetings: {meetings}, indexed: {indexed}, chunks: {chunks}, top hits: {hits}, mode: {mode}",
+    rag_hit_meta_score: "Score",
+    rag_hit_meta_meeting: "Record",
+    rag_hit_meta_candidate: "Candidate",
+    rag_hit_meta_vacancy: "Vacancy",
+    rag_hit_meta_level: "Level",
+    rag_hit_meta_lines: "Lines",
+    rag_hit_meta_time: "Time",
+    rag_hit_meta_speakers: "Speakers",
+    rag_hits_empty: "Retrieved chunks with citations will appear here.",
+    busy_rag_query_title: "RAG query",
+    busy_rag_query_text: "Searching selected interviews and preparing an answer with citations.",
+    busy_rag_index_title: "RAG indexing",
+    busy_rag_index_text: "Building chunks and citations for selected transcripts.",
     choose_folder: "Choose folder",
     folder_not_selected: "Folder not selected",
     folder_selected: "Folder selected",
@@ -928,10 +1207,13 @@ const i18n = {
     file_action_mp3: "MP3",
     prompt_rename_record: "Enter new recording name:",
     prompt_save_mp3_after_stop: "Recording is finished. Enter MP3 file name:",
+    prompt_report_name: "Enter report filename:",
     hint_record_renamed: "Recording name updated.",
     hint_record_rename_failed: "Failed to rename recording. Check local API logs.",
     hint_mp3_saved: "MP3 saved.",
     hint_mp3_not_found: "MP3 is not available for this recording yet.",
+    hint_mp3_not_found_ffmpeg:
+      "MP3 is unavailable. ffmpeg is likely missing (required to convert backup_audio.webm to MP3).",
     hint_mp3_import_started: "Importing MP3 and creating record...",
     hint_mp3_import_done: "MP3 imported. You can build reports now.",
     hint_mp3_import_failed: "Failed to import MP3 file.",
@@ -939,6 +1221,15 @@ const i18n = {
     hint_report_source_missing: "Select a record for report generation.",
     hint_report_name_missing: "Set report filename.",
     hint_report_missing: "Report not found yet. Generate TXT first.",
+    busy_overlay_title: "Please wait...",
+    busy_finish_title: "Finalizing recording",
+    busy_finish_text:
+      "Saving audio and preparing MP3. Text and reports are generated later on demand in Results.",
+    busy_mp3_title: "Preparing MP3",
+    busy_mp3_text: "Converting recording to MP3 and opening the save dialog.",
+    busy_report_title: "Building report",
+    busy_report_text:
+      "Generating TXT report from the selected recording. First run may perform STT/LLM and can take minutes on CPU.",
     report_picker_empty: "No records",
     download_raw: "Download raw",
     download_clean: "Download clean",
@@ -967,7 +1258,7 @@ const i18n = {
     quick_record_duration_label: "Duration (sec)",
     help_quick_duration:
       "Maximum quick-record duration. Recording auto-stops when limit is reached.",
-    quick_record_transcribe_label: "Run local transcription",
+    quick_record_transcribe_label: "Local transcription (disabled)",
     quick_record_upload_label: "Upload recording to agent pipeline",
     quick_record_start_btn: "Quick start",
     quick_record_stop_btn: "Quick stop",
@@ -1075,6 +1366,10 @@ const els = {
   scanLlmModels: document.getElementById("scanLlmModels"),
   applyLlmModel: document.getElementById("applyLlmModel"),
   llmStatusText: document.getElementById("llmStatusText"),
+  embeddingModelSelect: document.getElementById("embeddingModelSelect"),
+  scanEmbeddingModels: document.getElementById("scanEmbeddingModels"),
+  applyEmbeddingModel: document.getElementById("applyEmbeddingModel"),
+  embeddingStatusText: document.getElementById("embeddingStatusText"),
   deviceSelect: document.getElementById("deviceSelect"),
   deviceStatusText: document.getElementById("deviceStatusText"),
   refreshDevices: document.getElementById("refreshDevices"),
@@ -1163,8 +1458,45 @@ const els = {
   compareTableBody: document.getElementById("compareTableBody"),
   downloadCompareCsv: document.getElementById("downloadCompareCsv"),
   downloadCompareJson: document.getElementById("downloadCompareJson"),
+  llmArtifactGenerateBtn: document.getElementById("llmArtifactGenerateBtn"),
+  llmArtifactHint: document.getElementById("llmArtifactHint"),
+  llmArtifactMeetingSelect: document.getElementById("llmArtifactMeetingSelect"),
+  llmArtifactSourceSelect: document.getElementById("llmArtifactSourceSelect"),
+  llmArtifactModeSelect: document.getElementById("llmArtifactModeSelect"),
+  llmArtifactTemplateField: document.getElementById("llmArtifactTemplateField"),
+  llmArtifactTemplateSelect: document.getElementById("llmArtifactTemplateSelect"),
+  llmArtifactPromptInput: document.getElementById("llmArtifactPromptInput"),
+  llmArtifactSchemaInput: document.getElementById("llmArtifactSchemaInput"),
+  llmArtifactForceRebuild: document.getElementById("llmArtifactForceRebuild"),
+  llmArtifactMetaBadge: document.getElementById("llmArtifactMetaBadge"),
+  llmArtifactMetaText: document.getElementById("llmArtifactMetaText"),
+  llmArtifactFiles: document.getElementById("llmArtifactFiles"),
+  ragRefreshMeetingsBtn: document.getElementById("ragRefreshMeetingsBtn"),
+  ragIndexSelectedBtn: document.getElementById("ragIndexSelectedBtn"),
+  ragRunBtn: document.getElementById("ragRunBtn"),
+  ragHint: document.getElementById("ragHint"),
+  ragMeetingPicker: document.getElementById("ragMeetingPicker"),
+  ragSelectCurrentBtn: document.getElementById("ragSelectCurrentBtn"),
+  ragSelectAllBtn: document.getElementById("ragSelectAllBtn"),
+  ragClearSelectionBtn: document.getElementById("ragClearSelectionBtn"),
+  ragSourceSelect: document.getElementById("ragSourceSelect"),
+  ragTopKInput: document.getElementById("ragTopKInput"),
+  ragUseLlmAnswer: document.getElementById("ragUseLlmAnswer"),
+  ragAutoIndex: document.getElementById("ragAutoIndex"),
+  ragForceReindex: document.getElementById("ragForceReindex"),
+  ragQueryInput: document.getElementById("ragQueryInput"),
+  ragAnswerPromptInput: document.getElementById("ragAnswerPromptInput"),
+  ragExportJsonBtn: document.getElementById("ragExportJsonBtn"),
+  ragExportCsvBtn: document.getElementById("ragExportCsvBtn"),
+  ragExportTxtBtn: document.getElementById("ragExportTxtBtn"),
+  ragResultMeta: document.getElementById("ragResultMeta"),
+  ragAnswerText: document.getElementById("ragAnswerText"),
+  ragHitsList: document.getElementById("ragHitsList"),
   chooseFolder: document.getElementById("chooseFolder"),
   folderStatus: document.getElementById("folderStatus"),
+  busyOverlay: document.getElementById("busyOverlay"),
+  busyOverlayTitle: document.getElementById("busyOverlayTitle"),
+  busyOverlayText: document.getElementById("busyOverlayText"),
   quickRecordUrl: document.getElementById("quickRecordUrl"),
   quickRecordDuration: document.getElementById("quickRecordDuration"),
   quickRecordTranscribe: document.getElementById("quickRecordTranscribe"),
@@ -1488,6 +1820,7 @@ const updateI18n = () => {
   setFolderStatus(state.folderStatusKey, state.folderStatusStyle);
   renderDeviceStatus();
   renderLlmStatus();
+  renderEmbeddingStatus();
   if (state.statusHintKey) {
     setStatusHint(state.statusHintKey, state.statusHintStyle);
   } else if (state.statusHintText) {
@@ -1509,6 +1842,9 @@ const updateI18n = () => {
   if (els.llmModelSelect && !state.llmModels.length) {
     setLlmModelOptions([], "");
   }
+  if (els.embeddingModelSelect && !state.embeddingModels.length) {
+    setEmbeddingModelOptions([], "");
+  }
   setQuickStatus(state.quickStatusKey || "quick_record_state_idle", state.quickStatusStyle || "muted");
   if (state.quickHintKey) {
     setQuickHint(state.quickHintKey, state.quickHintStyle || "muted", false);
@@ -1522,6 +1858,8 @@ const updateI18n = () => {
   } else {
     setCompareHint("compare_hint_empty", "muted");
   }
+  renderLlmArtifactWorkspace();
+  renderRagWorkspace();
   renderTranscriptModeUi();
   renderTranscriptVisibility();
   renderLiveMonitor();
@@ -1575,6 +1913,37 @@ const setStatusHint = (messageKeyOrText = "", style = "muted", isRaw = false) =>
     );
   }
   refreshRecognitionDiagnosis();
+};
+
+const resolveUiText = (keyOrText = "", isRaw = false) => {
+  if (!keyOrText) return "";
+  const dict = i18n[state.lang] || {};
+  if (!isRaw && dict[keyOrText]) return String(dict[keyOrText]);
+  return String(keyOrText || "");
+};
+
+const showBusyOverlay = (titleKeyOrText = "busy_overlay_title", textKeyOrText = "", options = {}) => {
+  if (!els.busyOverlay) return;
+  const { rawTitle = false, rawText = false } = options || {};
+  state.busyOverlayCount = Number(state.busyOverlayCount || 0) + 1;
+  const title = resolveUiText(titleKeyOrText, rawTitle) || resolveUiText("busy_overlay_title");
+  const text = resolveUiText(textKeyOrText, rawText);
+  if (els.busyOverlayTitle) {
+    els.busyOverlayTitle.textContent = title;
+  }
+  if (els.busyOverlayText) {
+    els.busyOverlayText.textContent = text || title;
+  }
+  els.busyOverlay.classList.remove("hidden");
+  els.busyOverlay.setAttribute("aria-hidden", "false");
+};
+
+const hideBusyOverlay = () => {
+  if (!els.busyOverlay) return;
+  state.busyOverlayCount = Math.max(0, Number(state.busyOverlayCount || 0) - 1);
+  if (state.busyOverlayCount > 0) return;
+  els.busyOverlay.classList.add("hidden");
+  els.busyOverlay.setAttribute("aria-hidden", "true");
 };
 
 const setRecognitionDiagnosis = (messageKeyOrText = "", style = "muted", isRaw = false) => {
@@ -1802,6 +2171,820 @@ const formatText = (template, params = {}) => {
     text = text.replaceAll(`{${key}}`, String(value));
   });
   return text;
+};
+
+const setLlmArtifactHint = (hintKeyOrText = "", style = "muted", isRaw = false, params = {}) => {
+  if (!els.llmArtifactHint) return;
+  const dict = i18n[state.lang] || {};
+  let text = "";
+  if (!hintKeyOrText) {
+    text = "";
+    state.llmArtifact.hintKey = "";
+    state.llmArtifact.hintText = "";
+    state.llmArtifact.hintStyle = "muted";
+  } else if (!isRaw && dict[hintKeyOrText]) {
+    text = formatText(dict[hintKeyOrText], params || {});
+    state.llmArtifact.hintKey = hintKeyOrText;
+    state.llmArtifact.hintText = "";
+    state.llmArtifact.hintStyle = style || "muted";
+  } else {
+    text = String(hintKeyOrText || "");
+    state.llmArtifact.hintKey = "";
+    state.llmArtifact.hintText = text;
+    state.llmArtifact.hintStyle = style || "muted";
+  }
+  els.llmArtifactHint.textContent = text;
+  els.llmArtifactHint.className = `hint ${style || "muted"}`;
+};
+
+const _llmArtifactMeetingId = () => {
+  const fromSelect = String((els.llmArtifactMeetingSelect && els.llmArtifactMeetingSelect.value) || "").trim();
+  if (fromSelect) return fromSelect;
+  const current = String(getSelectedMeeting() || "").trim();
+  return current;
+};
+
+const _llmArtifactSource = () => {
+  const raw = String(
+    (els.llmArtifactSourceSelect && els.llmArtifactSourceSelect.value) || state.llmArtifact.transcriptSource || "clean"
+  )
+    .trim()
+    .toLowerCase();
+  if (raw === "raw" || raw === "normalized") return raw;
+  return "clean";
+};
+
+const _llmArtifactMode = () => {
+  const raw = String((els.llmArtifactModeSelect && els.llmArtifactModeSelect.value) || state.llmArtifact.mode || "template")
+    .trim()
+    .toLowerCase();
+  if (raw === "custom" || raw === "table") return raw;
+  return "template";
+};
+
+const _syncLlmArtifactControlsToState = () => {
+  state.llmArtifact.meetingId = _llmArtifactMeetingId();
+  state.llmArtifact.transcriptSource = _llmArtifactSource();
+  state.llmArtifact.mode = _llmArtifactMode();
+  state.llmArtifact.templateId = String(
+    (els.llmArtifactTemplateSelect && els.llmArtifactTemplateSelect.value) || state.llmArtifact.templateId || "analysis"
+  ).trim() || "analysis";
+  state.llmArtifact.forceRebuild = Boolean(els.llmArtifactForceRebuild && els.llmArtifactForceRebuild.checked);
+};
+
+const _parseLlmArtifactSchema = () => {
+  const raw = String((els.llmArtifactSchemaInput && els.llmArtifactSchemaInput.value) || "").trim();
+  if (!raw) return { ok: true, value: null };
+  try {
+    return { ok: true, value: JSON.parse(raw) };
+  } catch (err) {
+    return { ok: false, value: null, error: err };
+  }
+};
+
+const _formatBytes = (value) => {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const _llmArtifactSuggestedFilename = ({ meetingId, fmt, response, fileRef }) => {
+  const meta = state.recordsMeta.get(String(meetingId || "").trim()) || {};
+  const label = sanitizeFilenamePart(meta.display_name || meetingId || "record");
+  const ext = String(fmt || "").trim().toLowerCase() || "txt";
+  const source = String((response && response.transcript_variant) || state.llmArtifact.transcriptSource || "clean");
+  const mode = String((response && response.mode) || state.llmArtifact.mode || "template");
+  const template = String((response && response.template_id) || "").trim() || String((response && response.result_kind) || mode);
+  const artifactId = String((response && response.artifact_id) || "").trim().slice(0, 10);
+  const base = `${label}__${template || mode}_${source}${artifactId ? `_${artifactId}` : ""}`;
+  if (fileRef && String(fileRef.filename || "").trim()) {
+    const original = String(fileRef.filename).trim();
+    if (original.includes(".")) {
+      return normalizeFilenameWithExt(base, base, original.split(".").pop() || ext);
+    }
+  }
+  return normalizeFilenameWithExt(base, base, ext);
+};
+
+const renderLlmArtifactWorkspace = () => {
+  if (!els.llmArtifactMeetingSelect) return;
+  _syncLlmArtifactControlsToState();
+  const dict = i18n[state.lang] || {};
+  const items = Array.from(state.recordsMeta.values());
+  const current = String(getSelectedMeeting() || "").trim();
+
+  const prevMeeting = String(state.llmArtifact.meetingId || "").trim();
+  els.llmArtifactMeetingSelect.innerHTML = "";
+  if (!items.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = dict.report_picker_empty || "No records";
+    els.llmArtifactMeetingSelect.appendChild(opt);
+    state.llmArtifact.meetingId = "";
+  } else {
+    items.forEach((meta) => {
+      const meetingId = String(meta.meeting_id || "").trim();
+      const opt = document.createElement("option");
+      opt.value = meetingId;
+      opt.textContent = formatMeetingOptionLabel(meta);
+      els.llmArtifactMeetingSelect.appendChild(opt);
+    });
+    const preferred = [prevMeeting, current, String(items[0].meeting_id || "").trim()].find(
+      (id) => id && items.some((item) => String(item.meeting_id || "") === id)
+    );
+    els.llmArtifactMeetingSelect.value = String(preferred || "");
+    state.llmArtifact.meetingId = String(els.llmArtifactMeetingSelect.value || "");
+  }
+
+  if (els.llmArtifactSourceSelect) {
+    els.llmArtifactSourceSelect.value = state.llmArtifact.transcriptSource || "clean";
+  }
+  if (els.llmArtifactModeSelect) {
+    els.llmArtifactModeSelect.value = state.llmArtifact.mode || "template";
+  }
+  if (els.llmArtifactTemplateSelect) {
+    const tpl = String(state.llmArtifact.templateId || "analysis");
+    if (Array.from(els.llmArtifactTemplateSelect.options || []).some((o) => String(o.value || "") === tpl)) {
+      els.llmArtifactTemplateSelect.value = tpl;
+    }
+  }
+  if (els.llmArtifactForceRebuild) {
+    els.llmArtifactForceRebuild.checked = Boolean(state.llmArtifact.forceRebuild);
+  }
+  const mode = _llmArtifactMode();
+  if (els.llmArtifactTemplateField) {
+    els.llmArtifactTemplateField.classList.toggle("hidden", mode !== "template");
+  }
+
+  const resp = state.llmArtifact.lastResponse && typeof state.llmArtifact.lastResponse === "object"
+    ? state.llmArtifact.lastResponse
+    : null;
+
+  if (els.llmArtifactMetaBadge) {
+    if (!resp) {
+      els.llmArtifactMetaBadge.textContent = dict.llm_artifact_result_none || "No artifact";
+      els.llmArtifactMetaBadge.className = "pill muted";
+    } else {
+      const rid = String(resp.artifact_id || "").trim();
+      const shortId = rid ? rid.slice(0, 10) : "artifact";
+      const filesCount = Array.isArray(resp.files) ? resp.files.length : 0;
+      els.llmArtifactMetaBadge.textContent = `${shortId} • files=${filesCount}`;
+      els.llmArtifactMetaBadge.className = `pill ${resp.cached ? "muted" : "good"}`;
+    }
+  }
+
+  if (els.llmArtifactMetaText) {
+    if (!resp) {
+      els.llmArtifactMetaText.textContent = "";
+    } else {
+      const template = formatText(dict.llm_artifact_meta_template || "", {
+        artifact_id: String(resp.artifact_id || ""),
+        mode: String(resp.mode || ""),
+        template: String(resp.template_id || "—"),
+        source: String(resp.transcript_variant || ""),
+        kind: String(resp.result_kind || ""),
+        status: String(resp.status || ""),
+        created_at: String(resp.created_at || ""),
+        chars: Number(resp.transcript_chars || 0),
+        cached: Boolean(resp.cached),
+      });
+      els.llmArtifactMetaText.textContent = template || JSON.stringify(resp, null, 2);
+    }
+  }
+
+  if (els.llmArtifactFiles) {
+    els.llmArtifactFiles.innerHTML = "";
+    const files = resp && Array.isArray(resp.files) ? resp.files : [];
+    if (!files.length) {
+      const empty = document.createElement("div");
+      empty.className = "rag-hit-empty";
+      empty.textContent = dict.llm_artifact_result_none || "No artifact yet";
+      els.llmArtifactFiles.appendChild(empty);
+    } else {
+      files.forEach((fileRef) => {
+        const fmt = String(fileRef && fileRef.fmt ? fileRef.fmt : "").trim().toLowerCase();
+        if (!fmt) return;
+        const btn = document.createElement("button");
+        btn.className = "ghost llm-artifact-file-btn";
+        const label = formatText(dict.llm_artifact_file_download || "Download {fmt}", { fmt: fmt.toUpperCase() });
+        btn.textContent = `${label} (${_formatBytes(fileRef.bytes)})`;
+        btn.addEventListener("click", () => {
+          void downloadLlmArtifactFile(fmt, fileRef);
+        });
+        els.llmArtifactFiles.appendChild(btn);
+      });
+    }
+  }
+
+  const busy = Boolean(state.llmArtifact.busy);
+  if (els.llmArtifactGenerateBtn) {
+    els.llmArtifactGenerateBtn.disabled = busy;
+  }
+  if (state.llmArtifact.hintKey) {
+    setLlmArtifactHint(state.llmArtifact.hintKey, state.llmArtifact.hintStyle || "muted", false);
+  } else if (state.llmArtifact.hintText) {
+    setLlmArtifactHint(state.llmArtifact.hintText, state.llmArtifact.hintStyle || "muted", true);
+  } else {
+    setLlmArtifactHint("llm_artifact_hint_idle", "muted");
+  }
+};
+
+const generateLlmArtifact = async () => {
+  _syncLlmArtifactControlsToState();
+  const meetingId = String(state.llmArtifact.meetingId || "").trim();
+  if (!meetingId) {
+    setLlmArtifactHint("llm_artifact_hint_no_meeting", "bad");
+    return;
+  }
+  const mode = _llmArtifactMode();
+  const prompt = String((els.llmArtifactPromptInput && els.llmArtifactPromptInput.value) || "").trim();
+  if ((mode === "custom" || mode === "table") && !prompt) {
+    setLlmArtifactHint("llm_artifact_hint_prompt_required", "bad");
+    return;
+  }
+  const schemaParsed = _parseLlmArtifactSchema();
+  if (!schemaParsed.ok) {
+    setLlmArtifactHint("llm_artifact_hint_schema_invalid", "bad");
+    return;
+  }
+
+  const body = {
+    transcript_variant: _llmArtifactSource(),
+    mode,
+    template_id: String((els.llmArtifactTemplateSelect && els.llmArtifactTemplateSelect.value) || "analysis").trim(),
+    prompt: prompt || null,
+    schema: schemaParsed.value,
+    force_rebuild: Boolean(els.llmArtifactForceRebuild && els.llmArtifactForceRebuild.checked),
+  };
+  if (mode !== "template") {
+    delete body.template_id;
+  }
+
+  state.llmArtifact.busy = true;
+  renderLlmArtifactWorkspace();
+  setLlmArtifactHint("llm_artifact_hint_running", "muted");
+  showBusyOverlay("llm_artifact_busy_title", "llm_artifact_busy_text");
+  try {
+    const res = await fetch(`/v1/meetings/${meetingId}/artifacts/generate`, {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`llm_artifact_generate_failed_${res.status}`);
+    }
+    const payload = await res.json();
+    state.llmArtifact.lastResponse = payload;
+    setLlmArtifactHint("llm_artifact_hint_done", "good");
+  } catch (err) {
+    console.warn("llm artifact generate failed", err);
+    state.llmArtifact.lastResponse = null;
+    setLlmArtifactHint("llm_artifact_hint_failed", "bad");
+  } finally {
+    hideBusyOverlay();
+    state.llmArtifact.busy = false;
+    renderLlmArtifactWorkspace();
+  }
+};
+
+const downloadLlmArtifactFile = async (fmt, fileRef = null) => {
+  const resp = state.llmArtifact.lastResponse;
+  const meetingId = String((state.llmArtifact.meetingId || _llmArtifactMeetingId() || "")).trim();
+  if (!resp || typeof resp !== "object" || !meetingId) {
+    setLlmArtifactHint("llm_artifact_hint_no_result", "bad");
+    return;
+  }
+  const artifactId = String(resp.artifact_id || "").trim();
+  if (!artifactId) {
+    setLlmArtifactHint("llm_artifact_hint_no_result", "bad");
+    return;
+  }
+  const fmtSafe = ["json", "txt", "csv"].includes(String(fmt || "").toLowerCase()) ? String(fmt).toLowerCase() : "json";
+  const url = `/v1/meetings/${meetingId}/artifacts/${artifactId}/download?fmt=${fmtSafe}`;
+  const filename = _llmArtifactSuggestedFilename({
+    meetingId,
+    fmt: fmtSafe,
+    response: resp,
+    fileRef,
+  });
+  const result = await downloadArtifact(url, filename, { preferPicker: true });
+  if (!result || !result.ok) {
+    setLlmArtifactHint("llm_artifact_hint_failed", "bad");
+  }
+};
+
+const setRagHint = (hintKeyOrText = "", style = "muted", isRaw = false, params = {}) => {
+  if (!els.ragHint) return;
+  const dict = i18n[state.lang] || {};
+  let text = "";
+  if (!hintKeyOrText) {
+    text = "";
+    state.rag.hintKey = "";
+    state.rag.hintText = "";
+    state.rag.hintStyle = "muted";
+  } else if (!isRaw && dict[hintKeyOrText]) {
+    text = formatText(dict[hintKeyOrText], params || {});
+    state.rag.hintKey = hintKeyOrText;
+    state.rag.hintText = "";
+    state.rag.hintStyle = style || "muted";
+  } else {
+    text = String(hintKeyOrText || "");
+    state.rag.hintKey = "";
+    state.rag.hintText = text;
+    state.rag.hintStyle = style || "muted";
+  }
+  els.ragHint.textContent = text;
+  els.ragHint.className = `hint ${style || "muted"}`;
+};
+
+const _ragSelectedMeetingIds = () => {
+  const set = state.rag && state.rag.selectedMeetingIds instanceof Set ? state.rag.selectedMeetingIds : new Set();
+  const existing = new Set(Array.from(state.recordsMeta.keys()));
+  return Array.from(set)
+    .map((v) => String(v || "").trim())
+    .filter((v) => v && existing.has(v));
+};
+
+const _setRagSelectedMeetingIds = (values = []) => {
+  if (!(state.rag.selectedMeetingIds instanceof Set)) {
+    state.rag.selectedMeetingIds = new Set();
+  }
+  state.rag.selectedMeetingIds.clear();
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const meetingId = String(value || "").trim();
+    if (meetingId && state.recordsMeta.has(meetingId)) {
+      state.rag.selectedMeetingIds.add(meetingId);
+    }
+  });
+};
+
+const _ragSourceValue = () => {
+  const raw = String((els.ragSourceSelect && els.ragSourceSelect.value) || state.rag.source || "clean").trim();
+  if (raw === "raw" || raw === "normalized") return raw;
+  return "clean";
+};
+
+const _ragTopKValue = () => {
+  const raw = Number((els.ragTopKInput && els.ragTopKInput.value) || state.rag.topK || 8);
+  const bounded = Math.min(50, Math.max(1, Number.isFinite(raw) ? Math.round(raw) : 8));
+  return bounded;
+};
+
+const _syncRagControlsToState = () => {
+  state.rag.source = _ragSourceValue();
+  state.rag.topK = _ragTopKValue();
+  state.rag.useLlmAnswer = Boolean(els.ragUseLlmAnswer && els.ragUseLlmAnswer.checked);
+  state.rag.autoIndex = !(els.ragAutoIndex && !els.ragAutoIndex.checked);
+  state.rag.forceReindex = Boolean(els.ragForceReindex && els.ragForceReindex.checked);
+};
+
+const renderRagMeetingPicker = () => {
+  if (!els.ragMeetingPicker) return;
+  const dict = i18n[state.lang] || {};
+  const items = Array.from(state.recordsMeta.values());
+  const currentSelected = String(getSelectedMeeting() || "").trim();
+  const existingIds = new Set(items.map((item) => String(item && item.meeting_id ? item.meeting_id : "")));
+
+  if (!(state.rag.selectedMeetingIds instanceof Set)) {
+    state.rag.selectedMeetingIds = new Set();
+  }
+  Array.from(state.rag.selectedMeetingIds).forEach((meetingId) => {
+    if (!existingIds.has(String(meetingId || ""))) {
+      state.rag.selectedMeetingIds.delete(meetingId);
+    }
+  });
+  if (!state.rag.selectedMeetingIds.size && currentSelected && existingIds.has(currentSelected)) {
+    state.rag.selectedMeetingIds.add(currentSelected);
+  }
+
+  if (els.ragSourceSelect) {
+    els.ragSourceSelect.value = state.rag.source || "clean";
+  }
+  if (els.ragTopKInput) {
+    els.ragTopKInput.value = String(_ragTopKValue());
+  }
+  if (els.ragUseLlmAnswer) {
+    els.ragUseLlmAnswer.checked = Boolean(state.rag.useLlmAnswer);
+  }
+  if (els.ragAutoIndex) {
+    els.ragAutoIndex.checked = Boolean(state.rag.autoIndex);
+  }
+  if (els.ragForceReindex) {
+    els.ragForceReindex.checked = Boolean(state.rag.forceReindex);
+  }
+
+  els.ragMeetingPicker.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "rag-meeting-picker-empty";
+    empty.textContent = dict.rag_picker_empty || "No recordings yet.";
+    els.ragMeetingPicker.appendChild(empty);
+    return;
+  }
+
+  items.forEach((meta) => {
+    const meetingId = String(meta.meeting_id || "").trim();
+    if (!meetingId) return;
+    const row = document.createElement("label");
+    row.className = "rag-meeting-option";
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = state.rag.selectedMeetingIds.has(meetingId);
+    cb.addEventListener("change", () => {
+      if (cb.checked) state.rag.selectedMeetingIds.add(meetingId);
+      else state.rag.selectedMeetingIds.delete(meetingId);
+      renderRagWorkspace();
+    });
+
+    const body = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "rag-meeting-title";
+    title.textContent = formatMeetingOptionLabel(meta);
+
+    const sub = document.createElement("div");
+    sub.className = "rag-meeting-sub";
+    const parts = [];
+    if (meta && meta.artifacts && meta.artifacts.audio_mp3) parts.push("MP3");
+    if (meta && meta.artifacts && meta.artifacts.clean) parts.push("clean");
+    if (meta && meta.artifacts && meta.artifacts.normalized) parts.push("normalized");
+    if (meta && meta.artifacts && meta.artifacts.raw) parts.push("raw");
+    sub.textContent = parts.length ? parts.join(" • ") : "—";
+
+    body.appendChild(title);
+    body.appendChild(sub);
+    row.appendChild(cb);
+    row.appendChild(body);
+    els.ragMeetingPicker.appendChild(row);
+  });
+};
+
+const _ragHitPill = (text, style = "muted") => {
+  const span = document.createElement("span");
+  span.className = `pill ${style}`;
+  span.textContent = String(text || "");
+  return span;
+};
+
+const renderRagResults = () => {
+  const dict = i18n[state.lang] || {};
+  const resp = state.rag.lastResponse && typeof state.rag.lastResponse === "object" ? state.rag.lastResponse : null;
+  const hits = resp && Array.isArray(resp.hits) ? resp.hits : [];
+  const answerText = resp ? String(resp.answer || "").trim() : "";
+
+  if (els.ragResultMeta) {
+    if (!resp) {
+      els.ragResultMeta.textContent = dict.rag_result_meta_none || "No results";
+      els.ragResultMeta.className = "pill muted";
+    } else {
+      const mode = String(resp.llm_used ? "llm" : "retrieval_only");
+      const txt = formatText(dict.rag_result_meta_template || "", {
+        meetings: Number(resp.searched_meetings || 0),
+        indexed: Number(resp.indexed_meetings || 0),
+        chunks: Number(resp.total_chunks_scanned || 0),
+        hits: hits.length,
+        mode,
+      });
+      els.ragResultMeta.textContent = txt || mode;
+      els.ragResultMeta.className = `pill ${hits.length ? "good" : "muted"}`;
+    }
+  }
+
+  if (els.ragAnswerText) {
+    if (!resp) {
+      els.ragAnswerText.textContent = "";
+    } else if (answerText) {
+      const warnings = Array.isArray(resp.warnings) ? resp.warnings.filter(Boolean) : [];
+      const warnLine = warnings.length ? `Warnings: ${warnings.join(", ")}\n\n` : "";
+      els.ragAnswerText.textContent = `${warnLine}${answerText}`;
+    } else {
+      const warnings = Array.isArray(resp.warnings) ? resp.warnings.filter(Boolean) : [];
+      els.ragAnswerText.textContent = warnings.length ? `Warnings: ${warnings.join(", ")}` : "";
+    }
+  }
+
+  if (els.ragHitsList) {
+    els.ragHitsList.innerHTML = "";
+    if (!hits.length) {
+      const empty = document.createElement("div");
+      empty.className = "rag-hit-empty";
+      empty.textContent = dict.rag_hits_empty || "Retrieved chunks will appear here.";
+      els.ragHitsList.appendChild(empty);
+    } else {
+      hits.forEach((hit) => {
+        const card = document.createElement("div");
+        card.className = "rag-hit-card";
+
+        const head = document.createElement("div");
+        head.className = "rag-hit-head";
+
+        const title = document.createElement("div");
+        title.className = "rag-hit-title";
+        title.textContent = `${dict.rag_hit_meta_meeting || "Record"}: ${String(hit.meeting_id || "")}`;
+
+        const meta = document.createElement("div");
+        meta.className = "rag-hit-meta";
+        const score = Number.isFinite(Number(hit.score)) ? Number(hit.score).toFixed(3) : "0";
+        const chunkId = String(hit.chunk_id || "");
+        meta.textContent = `${dict.rag_hit_meta_score || "Score"}=${score} • chunk=${chunkId}`;
+
+        head.appendChild(title);
+        head.appendChild(meta);
+        card.appendChild(head);
+
+        const cite = document.createElement("div");
+        cite.className = "rag-hit-cite";
+        if (hit.line_start != null || hit.line_end != null) {
+          const ls = hit.line_start != null ? hit.line_start : "?";
+          const le = hit.line_end != null ? hit.line_end : "?";
+          cite.appendChild(_ragHitPill(`${dict.rag_hit_meta_lines || "Lines"}: ${ls}-${le}`, "muted"));
+        }
+        if (String(hit.timestamp_start || "").trim() || String(hit.timestamp_end || "").trim()) {
+          cite.appendChild(
+            _ragHitPill(
+              `${dict.rag_hit_meta_time || "Time"}: ${String(hit.timestamp_start || "?")}..${String(hit.timestamp_end || "?")}`,
+              "muted"
+            )
+          );
+        }
+        const speakers = Array.isArray(hit.speakers) ? hit.speakers.filter(Boolean) : [];
+        if (speakers.length) {
+          cite.appendChild(
+            _ragHitPill(`${dict.rag_hit_meta_speakers || "Speakers"}: ${speakers.join(", ")}`, "muted")
+          );
+        }
+        if (String(hit.candidate_name || "").trim()) {
+          cite.appendChild(
+            _ragHitPill(
+              `${dict.rag_hit_meta_candidate || "Candidate"}: ${String(hit.candidate_name)}`,
+              "good"
+            )
+          );
+        }
+        if (String(hit.vacancy || "").trim()) {
+          cite.appendChild(
+            _ragHitPill(`${dict.rag_hit_meta_vacancy || "Vacancy"}: ${String(hit.vacancy)}`, "muted")
+          );
+        }
+        if (String(hit.level || "").trim()) {
+          cite.appendChild(_ragHitPill(`${dict.rag_hit_meta_level || "Level"}: ${String(hit.level)}`, "muted"));
+        }
+        if (cite.childNodes.length) {
+          card.appendChild(cite);
+        }
+
+        const text = document.createElement("pre");
+        text.className = "rag-hit-text";
+        text.textContent = String(hit.text || "");
+        card.appendChild(text);
+
+        els.ragHitsList.appendChild(card);
+      });
+    }
+  }
+
+  const hasResponse = Boolean(resp);
+  [els.ragExportJsonBtn, els.ragExportCsvBtn, els.ragExportTxtBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = !hasResponse;
+  });
+};
+
+const renderRagWorkspace = () => {
+  _syncRagControlsToState();
+  renderRagMeetingPicker();
+  renderRagResults();
+  if (state.rag.hintKey) {
+    setRagHint(state.rag.hintKey, state.rag.hintStyle || "muted", false);
+  } else if (state.rag.hintText) {
+    setRagHint(state.rag.hintText, state.rag.hintStyle || "muted", true);
+  } else {
+    setRagHint("rag_hint_idle", "muted");
+  }
+  const busyAny = Boolean(state.rag.queryBusy || state.rag.indexBusy);
+  if (els.ragRunBtn) els.ragRunBtn.disabled = busyAny;
+  if (els.ragIndexSelectedBtn) els.ragIndexSelectedBtn.disabled = busyAny;
+};
+
+const _ragJsonHeaders = () => ({
+  ...buildHeaders(),
+});
+
+const indexSelectedRagMeetings = async () => {
+  const selectedIds = _ragSelectedMeetingIds();
+  if (!selectedIds.length) {
+    setRagHint("rag_hint_index_no_selection", "bad");
+    return;
+  }
+  _syncRagControlsToState();
+  state.rag.indexBusy = true;
+  renderRagWorkspace();
+  setRagHint("rag_hint_indexing", "muted");
+  showBusyOverlay("busy_rag_index_title", "busy_rag_index_text");
+  try {
+    let okCount = 0;
+    for (const meetingId of selectedIds) {
+      const res = await fetch(`/v1/meetings/${meetingId}/rag/index`, {
+        method: "POST",
+        headers: _ragJsonHeaders(),
+        body: JSON.stringify({
+          transcript_variant: state.rag.source || "clean",
+          force_rebuild: Boolean(state.rag.forceReindex),
+        }),
+      });
+      if (res.ok) okCount += 1;
+    }
+    if (okCount === 0) {
+      setRagHint("rag_hint_failed", "bad");
+    } else {
+      const ru = state.lang === "ru";
+      setRagHint(
+        ru ? `Индексация завершена: ${okCount}/${selectedIds.length}.` : `Indexing completed: ${okCount}/${selectedIds.length}.`,
+        okCount === selectedIds.length ? "good" : "muted",
+        true
+      );
+    }
+  } catch (err) {
+    console.warn("rag index failed", err);
+    setRagHint("rag_hint_failed", "bad");
+  } finally {
+    hideBusyOverlay();
+    state.rag.indexBusy = false;
+    renderRagWorkspace();
+  }
+};
+
+const runRagQuery = async () => {
+  const query = String((els.ragQueryInput && els.ragQueryInput.value) || "").trim();
+  if (!query) {
+    setRagHint("rag_hint_query_empty", "bad");
+    return;
+  }
+  _syncRagControlsToState();
+  const selectedIds = _ragSelectedMeetingIds();
+  const payload = {
+    query,
+    transcript_variant: state.rag.source || "clean",
+    meeting_ids: selectedIds,
+    top_k: _ragTopKValue(),
+    auto_index: Boolean(state.rag.autoIndex),
+    force_reindex: Boolean(state.rag.forceReindex),
+    answer_mode: state.rag.useLlmAnswer ? "llm" : "none",
+    answer_prompt: String((els.ragAnswerPromptInput && els.ragAnswerPromptInput.value) || "").trim(),
+  };
+
+  state.rag.queryBusy = true;
+  renderRagWorkspace();
+  setRagHint("rag_hint_querying", "muted");
+  showBusyOverlay("busy_rag_query_title", "busy_rag_query_text");
+  try {
+    const res = await fetch("/v1/rag/query", {
+      method: "POST",
+      headers: _ragJsonHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      throw new Error(`rag_query_failed_${res.status}`);
+    }
+    const body = await res.json();
+    state.rag.lastResponse = body;
+    renderRagResults();
+    const hits = Array.isArray(body && body.hits) ? body.hits : [];
+    if (!hits.length) {
+      setRagHint("rag_hint_no_results", "muted");
+    } else {
+      setRagHint("rag_hint_done", "good");
+    }
+  } catch (err) {
+    console.warn("rag query failed", err);
+    state.rag.lastResponse = null;
+    renderRagResults();
+    setRagHint("rag_hint_failed", "bad");
+  } finally {
+    hideBusyOverlay();
+    state.rag.queryBusy = false;
+    renderRagWorkspace();
+  }
+};
+
+const _ragCsvEscape = (value) => {
+  const text = String(value == null ? "" : value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+};
+
+const _ragResponseToCsv = (resp) => {
+  const hits = Array.isArray(resp && resp.hits) ? resp.hits : [];
+  const headers = [
+    "meeting_id",
+    "chunk_id",
+    "score",
+    "line_start",
+    "line_end",
+    "start_ms",
+    "end_ms",
+    "timestamp_start",
+    "timestamp_end",
+    "speakers",
+    "candidate_name",
+    "candidate_id",
+    "vacancy",
+    "level",
+    "interviewer",
+    "text",
+  ];
+  const rows = [headers.join(",")];
+  hits.forEach((hit) => {
+    rows.push(
+      [
+        hit.meeting_id,
+        hit.chunk_id,
+        hit.score,
+        hit.line_start,
+        hit.line_end,
+        hit.start_ms,
+        hit.end_ms,
+        hit.timestamp_start,
+        hit.timestamp_end,
+        Array.isArray(hit.speakers) ? hit.speakers.join("|") : "",
+        hit.candidate_name,
+        hit.candidate_id,
+        hit.vacancy,
+        hit.level,
+        hit.interviewer,
+        hit.text,
+      ]
+        .map(_ragCsvEscape)
+        .join(",")
+    );
+  });
+  return `\ufeff${rows.join("\n")}`;
+};
+
+const _ragResponseToTxt = (resp) => {
+  const body = resp && typeof resp === "object" ? resp : {};
+  const hits = Array.isArray(body.hits) ? body.hits : [];
+  const lines = [];
+  lines.push(`Query: ${String(body.query || "")}`);
+  lines.push(`Transcript source: ${String(body.transcript_variant || "")}`);
+  lines.push(
+    `Meetings: searched=${Number(body.searched_meetings || 0)}, indexed=${Number(body.indexed_meetings || 0)}`
+  );
+  lines.push(`Chunks scanned: ${Number(body.total_chunks_scanned || 0)}`);
+  lines.push(`LLM used: ${Boolean(body.llm_used)}`);
+  if (Array.isArray(body.warnings) && body.warnings.length) {
+    lines.push(`Warnings: ${body.warnings.join(", ")}`);
+  }
+  lines.push("");
+  lines.push("Answer:");
+  lines.push(String(body.answer || "").trim() || "—");
+  lines.push("");
+  lines.push("Hits:");
+  hits.forEach((hit, idx) => {
+    lines.push(
+      `[${idx + 1}] meeting=${String(hit.meeting_id || "")} chunk=${String(hit.chunk_id || "")} score=${String(hit.score || "")}`
+    );
+    lines.push(
+      `lines=${String(hit.line_start ?? "?")}-${String(hit.line_end ?? "?")} time=${String(hit.timestamp_start || "?")}..${String(hit.timestamp_end || "?")}`
+    );
+    if (Array.isArray(hit.speakers) && hit.speakers.length) {
+      lines.push(`speakers=${hit.speakers.join(", ")}`);
+    }
+    lines.push(String(hit.text || ""));
+    lines.push("");
+  });
+  return lines.join("\n");
+};
+
+const exportRagResults = async (fmt = "json") => {
+  const resp = state.rag.lastResponse;
+  if (!resp || typeof resp !== "object") {
+    setRagHint("rag_hint_export_empty", "bad");
+    return;
+  }
+  const query = String(resp.query || "rag_query")
+    .slice(0, 40)
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, "_");
+  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  let filename = `rag_${query || "query"}_${stamp}.${fmt}`;
+  let blob = null;
+  if (fmt === "json") {
+    blob = new Blob([JSON.stringify(resp, null, 2)], { type: "application/json" });
+  } else if (fmt === "csv") {
+    blob = new Blob([_ragResponseToCsv(resp)], { type: "text/csv;charset=utf-8" });
+  } else {
+    blob = new Blob([_ragResponseToTxt(resp)], { type: "text/plain;charset=utf-8" });
+    filename = `rag_${query || "query"}_${stamp}.txt`;
+  }
+  const saved = await saveLocalBlob(filename, blob, { preferPicker: true });
+  if (!saved.ok) {
+    setRagHint("rag_hint_failed", "bad");
+  }
 };
 
 const renderDeviceStatus = () => {
@@ -2463,6 +3646,183 @@ const applyLlmModel = async () => {
   }
 };
 
+const renderEmbeddingStatus = () => {
+  if (!els.embeddingStatusText) return;
+  const dict = i18n[state.lang] || {};
+  let text = state.embeddingStatusText;
+  if (!text) {
+    const template = dict[state.embeddingStatusKey] || state.embeddingStatusKey;
+    text = formatText(template, state.embeddingStatusParams || {});
+  }
+  els.embeddingStatusText.textContent = text;
+  els.embeddingStatusText.className = `hint llm-status ${state.embeddingStatusStyle || "muted"}`;
+};
+
+const setEmbeddingStatus = (
+  statusKeyOrText = "embedding_status_loading",
+  style = "muted",
+  params = {},
+  isRaw = false
+) => {
+  state.embeddingStatusStyle = style || "muted";
+  state.embeddingStatusParams = params || {};
+  if (isRaw) {
+    state.embeddingStatusText = String(statusKeyOrText || "");
+    state.embeddingStatusKey = "";
+  } else {
+    state.embeddingStatusKey = String(statusKeyOrText || "");
+    state.embeddingStatusText = "";
+  }
+  renderEmbeddingStatus();
+};
+
+const setEmbeddingModelOptions = (models = [], preferredModel = "") => {
+  if (!els.embeddingModelSelect) return;
+  const incoming = Array.isArray(models) ? models : [];
+  const normalized = incoming
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const unique = [];
+  normalized.forEach((model) => {
+    if (seen.has(model)) return;
+    seen.add(model);
+    unique.push(model);
+  });
+
+  const currentValue = String(preferredModel || els.embeddingModelSelect.value || "").trim();
+  if (currentValue && !seen.has(currentValue)) {
+    unique.push(currentValue);
+  }
+  state.embeddingModels = unique;
+
+  els.embeddingModelSelect.innerHTML = "";
+  if (!unique.length) {
+    const emptyOpt = document.createElement("option");
+    emptyOpt.value = "";
+    emptyOpt.textContent = i18n[state.lang].embedding_model_placeholder || "Select embedding model";
+    els.embeddingModelSelect.appendChild(emptyOpt);
+    els.embeddingModelSelect.value = "";
+    return;
+  }
+
+  unique.forEach((model) => {
+    const opt = document.createElement("option");
+    opt.value = model;
+    opt.textContent = model;
+    els.embeddingModelSelect.appendChild(opt);
+  });
+
+  if (currentValue && unique.includes(currentValue)) {
+    els.embeddingModelSelect.value = currentValue;
+  } else {
+    els.embeddingModelSelect.value = unique[0];
+  }
+};
+
+const fetchEmbeddingStatus = async (options = {}) => {
+  const { scanAfter = false } = options;
+  if (!els.embeddingModelSelect) return;
+  setEmbeddingStatus("embedding_status_loading", "muted");
+  try {
+    const res = await fetch("/v1/llm/embeddings/status", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`embedding_status_failed_${res.status}`);
+    }
+    const data = await res.json();
+    const currentModel = String(data.model_id || "").trim();
+    if (currentModel) {
+      setEmbeddingModelOptions([currentModel], currentModel);
+    } else {
+      setEmbeddingModelOptions([], "");
+    }
+    const available = Boolean(data.available);
+    const message = String(data.message || "").trim();
+    if (available) {
+      if (message) {
+        setEmbeddingStatus(message, "good", {}, true);
+      } else {
+        setEmbeddingStatus("embedding_status_ready", "good", { model: currentModel || "—" });
+      }
+    } else {
+      setEmbeddingStatus(message || "embedding_status_unavailable", "bad", {}, Boolean(message));
+    }
+    if (scanAfter) {
+      await scanEmbeddingModels({ silentErrors: true });
+    }
+  } catch (err) {
+    console.warn("embedding status fetch failed", err);
+    setEmbeddingStatus("embedding_status_unavailable", "bad");
+  }
+};
+
+const scanEmbeddingModels = async (options = {}) => {
+  const { silentErrors = false } = options;
+  if (!els.embeddingModelSelect) return;
+  setEmbeddingStatus("embedding_status_scanning", "muted");
+  if (els.scanEmbeddingModels) els.scanEmbeddingModels.disabled = true;
+  if (els.applyEmbeddingModel) els.applyEmbeddingModel.disabled = true;
+  try {
+    const res = await fetch("/v1/llm/embeddings/models", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`embedding_models_failed_${res.status}`);
+    }
+    const data = await res.json();
+    const models = Array.isArray(data.models) ? data.models : [];
+    const currentModel = String(data.current_model || els.embeddingModelSelect.value || "").trim();
+    setEmbeddingModelOptions(models, currentModel);
+    const selectedModel = String(els.embeddingModelSelect.value || currentModel || "—");
+    if (models.length) {
+      setEmbeddingStatus("embedding_status_scan_done", "good", {
+        count: models.length,
+        model: selectedModel,
+      });
+    } else {
+      setEmbeddingStatus("embedding_status_scan_empty", "bad", { model: selectedModel });
+    }
+  } catch (err) {
+    console.warn("embedding model scan failed", err);
+    if (!silentErrors) {
+      setEmbeddingStatus("embedding_status_unavailable", "bad");
+    }
+  } finally {
+    if (els.scanEmbeddingModels) els.scanEmbeddingModels.disabled = false;
+    if (els.applyEmbeddingModel) els.applyEmbeddingModel.disabled = false;
+  }
+};
+
+const applyEmbeddingModel = async () => {
+  if (!els.embeddingModelSelect) return;
+  const modelId = String(els.embeddingModelSelect.value || "").trim();
+  if (!modelId) {
+    setEmbeddingStatus("embedding_model_missing", "bad");
+    return;
+  }
+  if (els.applyEmbeddingModel) els.applyEmbeddingModel.disabled = true;
+  try {
+    const res = await fetch("/v1/llm/embeddings/model", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({ model_id: modelId }),
+    });
+    if (!res.ok) {
+      throw new Error(`embedding_model_update_failed_${res.status}`);
+    }
+    const data = await res.json();
+    const appliedModel = String(data.model_id || modelId).trim();
+    setEmbeddingModelOptions(
+      state.embeddingModels.length ? state.embeddingModels : [appliedModel],
+      appliedModel
+    );
+    setEmbeddingStatus("embedding_status_applied", "good", { model: appliedModel || "—" });
+  } catch (err) {
+    console.warn("embedding model switch failed", err);
+    setEmbeddingStatus("embedding_status_apply_failed", "bad");
+  } finally {
+    if (els.applyEmbeddingModel) els.applyEmbeddingModel.disabled = false;
+  }
+};
+
 const normalizeWorkMode = (value) => {
   const raw = String(value || "").trim();
   return WORK_MODE_CONFIGS[raw] ? raw : "driver_audio";
@@ -2599,6 +3959,10 @@ const applyWorkModeUi = () => {
     if (!el) return;
     el.disabled = !quickEnabled || quickBusy;
   });
+  if (els.quickRecordTranscribe) {
+    els.quickRecordTranscribe.checked = false;
+    els.quickRecordTranscribe.disabled = true;
+  }
   if (els.apiKey) {
     els.apiKey.disabled = cfg.id === "api_upload" ? quickBusy : false;
   }
@@ -4393,6 +5757,13 @@ const stopRecording = async (options = {}) => {
   state.captureStopper = null;
   state.captureEngine = null;
   const backupBlob = await stopBackupRecorder();
+  // Stop local media/meter immediately on user Stop; backend may still finalize/save MP3.
+  if (state.stream) {
+    releasePreparedCapture();
+  } else {
+    closeAudioMeter();
+  }
+  setRecordingButtons(false);
   clearWsReconnectTimer();
   clearHttpDrainTimer();
   state.wsReconnectAttempts = 0;
@@ -4411,26 +5782,24 @@ const stopRecording = async (options = {}) => {
   }
   if (activeMeetingId && (forceFinish || wasRecording || wasCountingDown)) {
     setTranscriptUiState("loading");
+    showBusyOverlay("busy_finish_title", "busy_finish_text");
     try {
       await fetch(`/v1/meetings/${activeMeetingId}/finish`, {
         method: "POST",
         headers: buildHeaders(),
       });
-      await loadFinalTranscripts(activeMeetingId);
       await fetchRecords();
+      setTranscriptUiState(hasTranscriptContent() ? "ready" : "empty");
       finishedOk = true;
     } catch (err) {
       setTranscriptUiState("empty");
       // ignore and keep local UI responsive
+    } finally {
+      hideBusyOverlay();
     }
   }
   if (shouldOfferMp3 && finishedOk) {
-    await saveMeetingMp3(activeMeetingId, { askUser: true });
-  }
-  if (state.stream) {
-    releasePreparedCapture();
-  } else {
-    closeAudioMeter();
+    await saveMeetingMp3(activeMeetingId, { askUser: true, syncRecordName: true });
   }
   if (!preserveStatus) {
     setStatus("status_idle", "idle");
@@ -4457,7 +5826,6 @@ const stopRecording = async (options = {}) => {
   );
   state.meetingId = null;
   els.meetingIdText.textContent = "—";
-  setRecordingButtons(false);
   state.stopRequested = false;
 };
 
@@ -4818,6 +6186,10 @@ const setQuickButtonsByStatus = (status) => {
     if (!el) return;
     el.disabled = !quickEnabled || busy;
   });
+  if (els.quickRecordTranscribe) {
+    els.quickRecordTranscribe.checked = false;
+    els.quickRecordTranscribe.disabled = true;
+  }
   if (els.apiKey) {
     els.apiKey.disabled = workCfg.id === "api_upload" ? busy : false;
   }
@@ -4988,9 +6360,7 @@ const startQuickRecord = async () => {
     return;
   }
 
-  const transcribe = apiMode
-    ? false
-    : Boolean(quickControls.transcribe && quickControls.transcribe.checked);
+  const transcribe = false;
   const uploadToAgent = apiMode
     ? true
     : Boolean(quickControls.upload && quickControls.upload.checked);
@@ -5215,13 +6585,22 @@ const syncReportSelectors = () => {
 };
 
 const syncResultsState = () => {
-  if (!els.resultsRaw || !els.resultsClean) return;
   const source = state.resultsSource === "raw" ? "raw" : "clean";
-  els.resultsRaw.classList.toggle("active", source === "raw");
-  els.resultsClean.classList.toggle("active", source === "clean");
+  if (els.resultsRaw) {
+    els.resultsRaw.classList.toggle("active", source === "raw");
+  }
+  if (els.resultsClean) {
+    els.resultsClean.classList.toggle("active", source === "clean");
+  }
   const filename = buildFilename({ kind: "report", source, fmt: "txt" });
   if (els.resultFileName) {
     els.resultFileName.textContent = filename;
+  }
+  if (els.reportNameInput) {
+    const currentName = String(els.reportNameInput.value || "").trim();
+    if (!currentName) {
+      els.reportNameInput.value = source === "clean" ? "report_clean" : "report_raw";
+    }
   }
   const hasMeeting = Boolean(getSelectedMeeting());
   [
@@ -5240,6 +6619,8 @@ const syncResultsState = () => {
     closeRecordMenu();
   }
   syncReportSelectors();
+  renderLlmArtifactWorkspace();
+  renderRagWorkspace();
 };
 
 const chooseFolder = async () => {
@@ -5346,6 +6727,30 @@ const normalizeFilenameWithExt = (value, fallbackBase = "record", ext = "txt") =
   return `${safeBase}.${String(ext || "txt").trim().toLowerCase()}`;
 };
 
+const _stripFileExt = (value, ext = "") => {
+  const suffix = String(ext || "").trim().toLowerCase();
+  const text = String(value || "").trim();
+  if (!suffix) return text.replace(/\.[a-z0-9]{1,8}$/i, "");
+  return text.replace(new RegExp(`\\.${suffix}$`, "i"), "");
+};
+
+const ensureNamedReportInput = (inputEl, source = "raw") => {
+  const fallbackBase = source === "clean" ? "report_clean" : "report_raw";
+  const current = String((inputEl && inputEl.value) || "").trim();
+  if (current) return current;
+  const dict = i18n[state.lang] || {};
+  const question = dict.prompt_report_name || "Enter report filename:";
+  const suggested = fallbackBase;
+  const entered = window.prompt(question, suggested);
+  if (entered == null) return "";
+  const normalized = normalizeFilenameWithExt(entered, fallbackBase, "txt");
+  const baseOnly = _stripFileExt(normalized, "txt");
+  if (inputEl) {
+    inputEl.value = baseOnly;
+  }
+  return baseOnly;
+};
+
 const closeRecordMenu = () => {
   if (els.recordMenu) {
     els.recordMenu.classList.add("hidden");
@@ -5438,14 +6843,9 @@ const saveToFolder = async (filename, blob) => {
   }
 };
 
-const downloadArtifact = async (url, filename, options = {}) => {
-  const { preferPicker = false } = options;
+const saveLocalBlob = async (filename, blob, options = {}) => {
+  const { preferPicker = false } = options || {};
   try {
-    const res = await fetch(url, { headers: buildAuthHeaders() });
-    if (!res.ok) {
-      return { ok: false, status: res.status };
-    }
-    const blob = await res.blob();
     if (preferPicker) {
       const savedPicker = await saveBlobViaPicker(filename, blob);
       if (savedPicker) return { ok: true, status: 200 };
@@ -5462,16 +6862,32 @@ const downloadArtifact = async (url, filename, options = {}) => {
     setTimeout(() => URL.revokeObjectURL(objectUrl), 500);
     return { ok: true, status: 200 };
   } catch (err) {
+    console.warn("save local blob failed", err);
+    return { ok: false, status: 0 };
+  }
+};
+
+const downloadArtifact = async (url, filename, options = {}) => {
+  const { preferPicker = false } = options;
+  try {
+    const res = await fetch(url, { headers: buildAuthHeaders() });
+    if (!res.ok) {
+      return { ok: false, status: res.status };
+    }
+    const blob = await res.blob();
+    return await saveLocalBlob(filename, blob, { preferPicker });
+  } catch (err) {
     console.warn("download failed", err);
     return { ok: false, status: 0 };
   }
 };
 
 const saveMeetingMp3 = async (meetingId, options = {}) => {
-  const { askUser = false } = options;
+  const { askUser = false, syncRecordName = false } = options;
   if (!meetingId) return false;
   const dict = i18n[state.lang] || {};
   let filename = buildFilename({ kind: "audio", fmt: "mp3", meetingId });
+  let recordNameFromMp3 = "";
   if (askUser) {
     const question = dict.prompt_save_mp3_after_stop || "Recording is finished. Enter MP3 file name:";
     const suggested = normalizeMp3Filename(filename, "record");
@@ -5480,14 +6896,62 @@ const saveMeetingMp3 = async (meetingId, options = {}) => {
       return false;
     }
     filename = normalizeMp3Filename(entered, suggested.replace(/\.mp3$/i, ""));
+    recordNameFromMp3 = _stripFileExt(filename, "mp3");
+  }
+  if (syncRecordName && recordNameFromMp3) {
+    try {
+      const renameRes = await fetch(`/v1/meetings/${meetingId}/rename`, {
+        method: "POST",
+        headers: buildHeaders(),
+        body: JSON.stringify({ display_name: recordNameFromMp3 }),
+      });
+      if (renameRes.ok) {
+        const body = await renameRes.json();
+        const confirmedName = String((body && body.display_name) || recordNameFromMp3).trim() || recordNameFromMp3;
+        const existing = state.recordsMeta.get(meetingId) || { meeting_id: meetingId };
+        state.recordsMeta.set(meetingId, { ...existing, display_name: confirmedName });
+        if (els.recordsSelect && els.recordsSelect.options) {
+          const option = Array.from(els.recordsSelect.options).find((opt) => String(opt.value || "") === meetingId);
+          if (option) {
+            option.textContent = formatMeetingOptionLabel(state.recordsMeta.get(meetingId));
+          }
+        }
+        syncReportSelectors();
+      }
+    } catch (err) {
+      console.warn("sync record name from mp3 failed", err);
+    }
   }
   const url = `/v1/meetings/${meetingId}/artifact?kind=audio&fmt=mp3`;
-  const result = await downloadArtifact(url, filename, { preferPicker: true });
+  let result = null;
+  showBusyOverlay("busy_mp3_title", "busy_mp3_text");
+  try {
+    result = await downloadArtifact(url, filename, { preferPicker: true });
+  } finally {
+    hideBusyOverlay();
+  }
   if (result && result.ok) {
-    setStatusHint("hint_mp3_saved", "good");
+    if (syncRecordName && recordNameFromMp3) {
+      const ru = state.lang === "ru";
+      setStatusHint(
+        ru ? "MP3 сохранён. Название записи обновлено." : "MP3 saved. Recording name updated.",
+        "good",
+        true
+      );
+    } else {
+      setStatusHint("hint_mp3_saved", "good");
+    }
+    void fetchRecords();
     return true;
   }
   if (result && result.status === 404) {
+    setStatusHint("hint_mp3_not_found_ffmpeg", "bad");
+    logUiEvent(
+      "mp3_artifact_missing_after_finish",
+      { meeting_id: meetingId, filename, status: 404 },
+      "error"
+    );
+  } else if (result && !result.ok) {
     setStatusHint("hint_mp3_not_found", "bad");
   }
   return false;
@@ -5615,13 +7079,26 @@ const downloadCurrentReportTxt = async () => {
     return;
   }
   const source = state.resultsSource === "clean" ? "clean" : "raw";
-  const inputValue = String((els.reportNameInput && els.reportNameInput.value) || "").trim();
+  let inputValue = String((els.reportNameInput && els.reportNameInput.value) || "").trim();
+  if (!inputValue) {
+    inputValue = ensureNamedReportInput(els.reportNameInput, source);
+    if (!inputValue) {
+      setStatusHint("hint_report_name_missing", "bad");
+      return;
+    }
+  }
   const fallback = source === "raw" ? "report_raw" : "report_clean";
   const filename = normalizeFilenameWithExt(inputValue, fallback, "txt");
   const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
   let result = await downloadArtifact(url, filename, { preferPicker: true });
   if (result && result.status === 404) {
-    const generated = await generateReportForMeeting(meetingId, source);
+    let generated = false;
+    showBusyOverlay("busy_report_title", "busy_report_text");
+    try {
+      generated = await generateReportForMeeting(meetingId, source);
+    } finally {
+      hideBusyOverlay();
+    }
     if (!generated) {
       setStatusHint("hint_report_missing", "bad");
       return;
@@ -5644,20 +7121,31 @@ const generateAndSaveCurrentReport = async () => {
     return;
   }
   const source = state.resultsSource === "clean" ? "clean" : "raw";
-  const inputValue = String((els.reportNameInput && els.reportNameInput.value) || "").trim();
+  let inputValue = String((els.reportNameInput && els.reportNameInput.value) || "").trim();
+  if (!inputValue) {
+    inputValue = ensureNamedReportInput(els.reportNameInput, source);
+  }
   if (!inputValue) {
     setStatusHint("hint_report_name_missing", "bad");
     return;
   }
-  const generated = await generateReportForMeeting(meetingId, source);
-  if (!generated) return;
-  const filename = normalizeFilenameWithExt(
-    inputValue,
-    source === "raw" ? "report_raw" : "report_clean",
-    "txt"
-  );
-  const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
-  const result = await downloadArtifact(url, filename, { preferPicker: true });
+  let generated = false;
+  let result = null;
+  showBusyOverlay("busy_report_title", "busy_report_text");
+  try {
+    generated = await generateReportForMeeting(meetingId, source);
+    if (generated) {
+      const filename = normalizeFilenameWithExt(
+        inputValue,
+        source === "raw" ? "report_raw" : "report_clean",
+        "txt"
+      );
+      const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
+      result = await downloadArtifact(url, filename, { preferPicker: true });
+    }
+  } finally {
+    hideBusyOverlay();
+  }
   if (!result || !result.ok) {
     setStatusHint("hint_report_missing", "bad");
     return;
@@ -5675,24 +7163,49 @@ const exportReportLane = async (source = "raw", exportKind = "report_txt") => {
     return;
   }
   const inputEl = getReportNameInputEl(src);
-  const rawName = String((inputEl && inputEl.value) || "").trim();
+  let rawName = String((inputEl && inputEl.value) || "").trim();
+  if (!rawName) {
+    rawName = ensureNamedReportInput(inputEl, src);
+    if (!rawName) {
+      setStatusHint("hint_report_name_missing", "bad");
+      return;
+    }
+  }
 
   if (exportKind === "report_txt") {
-    const ok = await generateReportForMeeting(meetingId, src);
+    let ok = false;
+    let result = null;
+    showBusyOverlay("busy_report_title", "busy_report_text");
+    try {
+      ok = await generateReportForMeeting(meetingId, src);
+      if (ok) {
+        const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${src}&fmt=txt`;
+        const filename = normalizeFilenameWithExt(rawName, `report_${src}`, "txt");
+        result = await downloadArtifact(url, filename, { preferPicker: true });
+      }
+    } finally {
+      hideBusyOverlay();
+    }
     if (!ok) return;
-    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${src}&fmt=txt`;
-    const filename = normalizeFilenameWithExt(rawName, `report_${src}`, "txt");
-    const result = await downloadArtifact(url, filename, { preferPicker: true });
     if (!result || !result.ok) {
       setStatusHint("hint_report_missing", "bad");
       return;
     }
   } else if (exportKind === "report_json") {
-    const ok = await generateReportForMeeting(meetingId, src);
+    let ok = false;
+    let result = null;
+    showBusyOverlay("busy_report_title", "busy_report_text");
+    try {
+      ok = await generateReportForMeeting(meetingId, src);
+      if (ok) {
+        const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${src}&fmt=json`;
+        const filename = normalizeFilenameWithExt(rawName, `report_${src}`, "json");
+        result = await downloadArtifact(url, filename, { preferPicker: true });
+      }
+    } finally {
+      hideBusyOverlay();
+    }
     if (!ok) return;
-    const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${src}&fmt=json`;
-    const filename = normalizeFilenameWithExt(rawName, `report_${src}`, "json");
-    const result = await downloadArtifact(url, filename, { preferPicker: true });
     if (!result || !result.ok) {
       setStatusHint("hint_report_missing", "bad");
       return;
@@ -5794,8 +7307,8 @@ const uploadAudioToMeetingPipeline = async (file, options = {}) => {
     if (!finishRes.ok) {
       throw new Error(`meeting_finish_failed_${finishRes.status}`);
     }
-    await loadFinalTranscripts(meetingId);
     await fetchRecords();
+    setTranscriptUiState(hasTranscriptContent() ? "ready" : "empty");
     if (els.recordsSelect) {
       els.recordsSelect.value = meetingId;
     }
@@ -5846,6 +7359,16 @@ if (els.scanLlmModels) {
 if (els.applyLlmModel) {
   els.applyLlmModel.addEventListener("click", () => {
     void applyLlmModel();
+  });
+}
+if (els.scanEmbeddingModels) {
+  els.scanEmbeddingModels.addEventListener("click", () => {
+    void scanEmbeddingModels();
+  });
+}
+if (els.applyEmbeddingModel) {
+  els.applyEmbeddingModel.addEventListener("click", () => {
+    void applyEmbeddingModel();
   });
 }
 if (els.qualityFast) {
@@ -6074,6 +7597,121 @@ if (els.downloadCompareJson) {
     void downloadComparison("json");
   });
 }
+if (els.llmArtifactGenerateBtn) {
+  els.llmArtifactGenerateBtn.addEventListener("click", () => {
+    void generateLlmArtifact();
+  });
+}
+[els.llmArtifactMeetingSelect, els.llmArtifactSourceSelect, els.llmArtifactModeSelect, els.llmArtifactTemplateSelect].forEach(
+  (el) => {
+    if (!el) return;
+    el.addEventListener("change", () => {
+      _syncLlmArtifactControlsToState();
+      renderLlmArtifactWorkspace();
+    });
+  }
+);
+if (els.llmArtifactForceRebuild) {
+  els.llmArtifactForceRebuild.addEventListener("change", () => {
+    _syncLlmArtifactControlsToState();
+    renderLlmArtifactWorkspace();
+  });
+}
+if (els.llmArtifactPromptInput) {
+  els.llmArtifactPromptInput.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey)) return;
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void generateLlmArtifact();
+  });
+}
+if (els.llmArtifactSchemaInput) {
+  els.llmArtifactSchemaInput.addEventListener("blur", () => {
+    const raw = String(els.llmArtifactSchemaInput.value || "").trim();
+    if (!raw) return;
+    const parsed = _parseLlmArtifactSchema();
+    if (!parsed.ok) {
+      setLlmArtifactHint("llm_artifact_hint_schema_invalid", "bad");
+    }
+  });
+}
+if (els.ragRefreshMeetingsBtn) {
+  els.ragRefreshMeetingsBtn.addEventListener("click", () => {
+    void fetchRecords();
+  });
+}
+if (els.ragSelectCurrentBtn) {
+  els.ragSelectCurrentBtn.addEventListener("click", () => {
+    const current = String(getSelectedMeeting() || "").trim();
+    if (!current) return;
+    _setRagSelectedMeetingIds([current]);
+    renderRagWorkspace();
+  });
+}
+if (els.ragSelectAllBtn) {
+  els.ragSelectAllBtn.addEventListener("click", () => {
+    _setRagSelectedMeetingIds(Array.from(state.recordsMeta.keys()));
+    renderRagWorkspace();
+  });
+}
+if (els.ragClearSelectionBtn) {
+  els.ragClearSelectionBtn.addEventListener("click", () => {
+    _setRagSelectedMeetingIds([]);
+    renderRagWorkspace();
+  });
+}
+if (els.ragSourceSelect) {
+  els.ragSourceSelect.addEventListener("change", () => {
+    state.rag.source = _ragSourceValue();
+    renderRagWorkspace();
+  });
+}
+if (els.ragTopKInput) {
+  els.ragTopKInput.addEventListener("change", () => {
+    state.rag.topK = _ragTopKValue();
+    renderRagWorkspace();
+  });
+}
+[els.ragUseLlmAnswer, els.ragAutoIndex, els.ragForceReindex].forEach((el) => {
+  if (!el) return;
+  el.addEventListener("change", () => {
+    _syncRagControlsToState();
+    renderRagWorkspace();
+  });
+});
+if (els.ragRunBtn) {
+  els.ragRunBtn.addEventListener("click", () => {
+    void runRagQuery();
+  });
+}
+if (els.ragIndexSelectedBtn) {
+  els.ragIndexSelectedBtn.addEventListener("click", () => {
+    void indexSelectedRagMeetings();
+  });
+}
+if (els.ragQueryInput) {
+  els.ragQueryInput.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey)) return;
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void runRagQuery();
+  });
+}
+if (els.ragExportJsonBtn) {
+  els.ragExportJsonBtn.addEventListener("click", () => {
+    void exportRagResults("json");
+  });
+}
+if (els.ragExportCsvBtn) {
+  els.ragExportCsvBtn.addEventListener("click", () => {
+    void exportRagResults("csv");
+  });
+}
+if (els.ragExportTxtBtn) {
+  els.ragExportTxtBtn.addEventListener("click", () => {
+    void exportRagResults("txt");
+  });
+}
 
 const savedTheme = (() => {
   try {
@@ -6099,6 +7737,7 @@ pruneStaleCaptureLock();
 clearCaptureLock();
 listDevices();
 fetchLlmStatus({ scanAfter: true });
+fetchEmbeddingStatus({ scanAfter: true });
 updateCaptureUi();
 fetchRecords();
 setRecordingButtons(false);
@@ -6106,6 +7745,10 @@ setDriverHelpTab("mac");
 syncResultsState();
 setCompareHint("compare_hint_idle", "muted");
 renderComparisonTable();
+setLlmArtifactHint("llm_artifact_hint_idle", "muted");
+renderLlmArtifactWorkspace();
+setRagHint("rag_hint_idle", "muted");
+renderRagWorkspace();
 setQuickStatus("quick_record_state_idle", "muted");
 setQuickHint("quick_record_hint_ready", "muted");
 setQuickButtonsByStatus("idle");

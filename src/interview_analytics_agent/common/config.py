@@ -271,6 +271,22 @@ class Settings(BaseSettings):
     llm_cleanup_probe_timeout_sec: float = Field(
         default=2.0, alias="LLM_CLEANUP_PROBE_TIMEOUT_SEC"
     )
+    embedding_model_id: str = Field(default="nomic-embed-text", alias="EMBEDDING_MODEL_ID")
+    embedding_api_base: str | None = Field(default=None, alias="EMBEDDING_API_BASE")
+    embedding_api_key: str | None = Field(default=None, alias="EMBEDDING_API_KEY")
+
+    # -------------------------------------------------------------------------
+    # RAG / embeddings retrieval
+    # -------------------------------------------------------------------------
+    rag_vector_enabled: bool = Field(default=True, alias="RAG_VECTOR_ENABLED")
+    rag_embedding_provider: str = Field(default="auto", alias="RAG_EMBEDDING_PROVIDER")
+    rag_embedding_request_timeout_sec: float = Field(
+        default=8.0, alias="RAG_EMBEDDING_REQUEST_TIMEOUT_SEC"
+    )
+    rag_embedding_dim: int = Field(default=96, alias="RAG_EMBEDDING_DIM")
+    rag_embedding_char_ngrams: bool = Field(default=True, alias="RAG_EMBEDDING_CHAR_NGRAMS")
+    rag_keyword_weight: float = Field(default=0.6, alias="RAG_KEYWORD_WEIGHT")
+    rag_vector_weight: float = Field(default=0.4, alias="RAG_VECTOR_WEIGHT")
 
     # -------------------------------------------------------------------------
     # Speaker inference

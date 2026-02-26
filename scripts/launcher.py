@@ -28,6 +28,7 @@ APP_URL: str | None = None
 LOG_FILE: Path | None = None
 
 OLLAMA_DEFAULT_MODEL = "llama3.1:8b"
+OLLAMA_DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 
 
 def _bundle_root() -> Path:
@@ -343,10 +344,14 @@ def _preflight_snapshot() -> dict:
     install_mode_saved = _load_install_mode()
     runtime = _load_runtime_overrides()
     target_model = str(runtime.get("LLM_MODEL_ID") or "").strip() or OLLAMA_DEFAULT_MODEL
+    target_embedding_model = (
+        str(runtime.get("EMBEDDING_MODEL_ID") or "").strip() or OLLAMA_DEFAULT_EMBEDDING_MODEL
+    )
     ollama_cli = _ollama_bin() is not None
     ollama_ready = _ollama_running(timeout_sec=1.4) if ollama_cli else False
     models = _ollama_models(timeout_sec=2.5) if ollama_cli else []
     model_present, model_exact, model_matched = _resolve_model_match(target_model, models)
+    emb_present, emb_exact, emb_matched = _resolve_model_match(target_embedding_model, models)
     return {
         "venv_ready": venv_ready,
         "whisper_ready": whisper_ready,
@@ -357,6 +362,10 @@ def _preflight_snapshot() -> dict:
         "ollama_model_present": model_present,
         "ollama_model_exact": model_exact,
         "ollama_model_matched": model_matched,
+        "ollama_embedding_model_default": target_embedding_model,
+        "ollama_embedding_model_present": emb_present,
+        "ollama_embedding_model_exact": emb_exact,
+        "ollama_embedding_model_matched": emb_matched,
         "ollama_models": models,
     }
 
@@ -398,8 +407,11 @@ def _install(mode: str) -> None:
         _set_state("error", str(e))
 
 
-def _fix_all(model_id: str | None = None) -> None:
+def _fix_all(model_id: str | None = None, embedding_model_id: str | None = None) -> None:
     target_model = str(model_id or "").strip() or OLLAMA_DEFAULT_MODEL
+    target_embedding_model = (
+        str(embedding_model_id or "").strip() or OLLAMA_DEFAULT_EMBEDDING_MODEL
+    )
     try:
         _set_state("running")
         _log("[wizard] fix-all started")
@@ -421,19 +433,35 @@ def _fix_all(model_id: str | None = None) -> None:
         snap = _preflight_snapshot()
         models = [str(model) for model in (snap.get("ollama_models") or [])]
         model_present, _model_exact, model_matched = _resolve_model_match(target_model, models)
+        emb_present, _emb_exact, emb_matched = _resolve_model_match(target_embedding_model, models)
         active_model = target_model
+        active_embedding_model = target_embedding_model
         if model_present:
             if model_matched and model_matched.lower() != target_model.lower():
-                _log(f"[wizard] compatible model found: {model_matched} (requested {target_model})")
+                _log(f"[wizard] compatible LLM model found: {model_matched} (requested {target_model})")
                 active_model = model_matched
         else:
             if not _pull_ollama_model(target_model):
-                raise RuntimeError(f"Не удалось скачать модель {target_model}")
+                raise RuntimeError(f"Не удалось скачать LLM модель {target_model}")
             active_model = target_model
+        if emb_present:
+            if emb_matched and emb_matched.lower() != target_embedding_model.lower():
+                _log(
+                    f"[wizard] compatible embedding model found: {emb_matched} "
+                    f"(requested {target_embedding_model})"
+                )
+                active_embedding_model = emb_matched
+        else:
+            if not _pull_ollama_model(target_embedding_model):
+                raise RuntimeError(f"Не удалось скачать embeddings модель {target_embedding_model}")
+            active_embedding_model = target_embedding_model
 
         _save_runtime_override("LLM_MODEL_ID", active_model)
+        _save_runtime_override("EMBEDDING_MODEL_ID", active_embedding_model)
         _save_runtime_override("OPENAI_API_BASE", "http://127.0.0.1:11434/v1")
         _save_runtime_override("OPENAI_API_KEY", "ollama")
+        _save_runtime_override("RAG_EMBEDDING_PROVIDER", "openai_compat")
+        _save_runtime_override("RAG_VECTOR_ENABLED", "true")
         _save_runtime_override("LLM_ENABLED", "true")
         _save_runtime_override("LLM_LIVE_ENABLED", "false")
         _set_state("done")
@@ -460,13 +488,14 @@ def _save_runtime_override(key: str, value: str) -> None:
         pass
 
 
-def _pull_model_task(model_id: str) -> None:
-    model = str(model_id or "").strip() or OLLAMA_DEFAULT_MODEL
+def _pull_model_task(model_id: str, override_key: str = "LLM_MODEL_ID") -> None:
+    default_model = OLLAMA_DEFAULT_EMBEDDING_MODEL if override_key == "EMBEDDING_MODEL_ID" else OLLAMA_DEFAULT_MODEL
+    model = str(model_id or "").strip() or default_model
     try:
         _set_state("running")
         if not _pull_ollama_model(model):
             raise RuntimeError(f"Не удалось скачать модель {model}")
-        _save_runtime_override("LLM_MODEL_ID", model)
+        _save_runtime_override(override_key, model)
         _set_state("done")
     except Exception as e:
         _log(traceback.format_exc())
@@ -539,6 +568,9 @@ def _start_app() -> str:
     env.setdefault("OPENAI_API_BASE", "http://127.0.0.1:11434/v1")
     env.setdefault("OPENAI_API_KEY", "ollama")
     env.setdefault("LLM_MODEL_ID", "llama3.1:8b")
+    env.setdefault("EMBEDDING_MODEL_ID", OLLAMA_DEFAULT_EMBEDDING_MODEL)
+    env.setdefault("RAG_EMBEDDING_PROVIDER", "auto")
+    env.setdefault("RAG_VECTOR_ENABLED", "true")
     env.setdefault("LLM_REQUEST_TIMEOUT_SEC", "15")
     env.setdefault("LLM_RETRIES", "1")
     env.setdefault("LLM_CLEANUP_PROBE_TIMEOUT_SEC", "2.0")
@@ -708,13 +740,16 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/fix-all":
             payload = self._read_json()
             model_id = str(payload.get("model_id") or "").strip() or OLLAMA_DEFAULT_MODEL
+            embedding_model_id = (
+                str(payload.get("embedding_model_id") or "").strip() or OLLAMA_DEFAULT_EMBEDDING_MODEL
+            )
             with STATE_LOCK:
                 if INSTALL_STATE == "running":
                     self._send_json({"ok": False, "error": "install_running"}, status=409)
                     return
-            t = threading.Thread(target=_fix_all, args=(model_id,), daemon=True)
+            t = threading.Thread(target=_fix_all, args=(model_id, embedding_model_id), daemon=True)
             t.start()
-            self._send_json({"ok": True, "model_id": model_id})
+            self._send_json({"ok": True, "model_id": model_id, "embedding_model_id": embedding_model_id})
             return
         if parsed.path == "/api/action":
             payload = self._read_json()
@@ -724,22 +759,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": opened})
                 return
             if action == "pull_model":
-                model_id = str(payload.get("model_id") or "").strip() or OLLAMA_DEFAULT_MODEL
+                kind = str(payload.get("kind") or "llm").strip().lower()
+                override_key = "EMBEDDING_MODEL_ID" if kind in {"embedding", "embeddings"} else "LLM_MODEL_ID"
+                default_model = (
+                    OLLAMA_DEFAULT_EMBEDDING_MODEL if override_key == "EMBEDDING_MODEL_ID" else OLLAMA_DEFAULT_MODEL
+                )
+                model_id = str(payload.get("model_id") or "").strip() or default_model
                 with STATE_LOCK:
                     if INSTALL_STATE == "running":
                         self._send_json({"ok": False, "error": "install_running"}, status=409)
                         return
-                t = threading.Thread(target=_pull_model_task, args=(model_id,), daemon=True)
+                t = threading.Thread(target=_pull_model_task, args=(model_id, override_key), daemon=True)
                 t.start()
-                self._send_json({"ok": True, "model_id": model_id})
+                self._send_json({"ok": True, "model_id": model_id, "kind": kind})
                 return
             if action == "set_model":
+                kind = str(payload.get("kind") or "llm").strip().lower()
                 model_id = str(payload.get("model_id") or "").strip()
                 if not model_id:
                     self._send_json({"ok": False, "error": "model_required"}, status=400)
                     return
-                _save_runtime_override("LLM_MODEL_ID", model_id)
-                self._send_json({"ok": True, "model_id": model_id})
+                override_key = "EMBEDDING_MODEL_ID" if kind in {"embedding", "embeddings"} else "LLM_MODEL_ID"
+                _save_runtime_override(override_key, model_id)
+                self._send_json({"ok": True, "model_id": model_id, "kind": kind})
                 return
             self._send_json({"ok": False, "error": "unknown_action"}, status=400)
             return

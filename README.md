@@ -1,471 +1,372 @@
 # 9second_capture
 
-`9second_capture` — локальный агент для записи интервью, получения канонического MP3, построения транскриптов и последующей LLM/RAG-аналитики.
+`9second_capture` — локальный агент для записи интервью в `MP3`, построения транскриптов (`raw / normalized / clean`), генерации LLM-артефактов и RAG-поиска/сравнения по интервью.
 
-## Что меняется в векторе проекта (новая базовая модель)
-Проект переходит на явную многоуровневую схему:
+Проект переведен на `transcript-first` архитектуру:
 
-1. `Audio layer`: запись встречи любым из поддерживаемых способов -> единый `meeting_audio.mp3`
-2. `Transcript layer`: `STT` строит транскрипт из MP3
-3. `Cleaning layer`: очистка текста (эвристики + опционально LLM)
-4. `LLM Artifacts layer`: любые производные форматы (JSON/CSV/таблицы/summary/brief/custom)
-5. `RAG layer`: поиск/сравнение по одному или нескольким интервью с цитатами
+1. Захват (4 режима) -> `meeting_audio.mp3`
+2. `STT` -> `raw transcript`
+3. Deterministic cleaner -> `normalized transcript`
+4. Опциональный `LLM cleaner` -> `clean transcript`
+5. `LLM` строит артефакты из текста (таблицы/JSON/summary/custom)
+6. `RAG` ищет и сравнивает интервью по чанкам транскриптов
 
-Ключевое правило: `STT` отвечает только за распознавание речи (транскрипт), а `LLM` работает поверх текста, а не поверх захвата записи.
+Ключевой принцип: `Stop` должен завершать запись и финализацию `MP3`, а тяжелые `STT/LLM` выполняются по запросу в блоке `Результаты`.
 
-## Новая терминология (фиксируем)
-Чтобы не путаться в слове "отчет", в проекте используется такая терминология:
+## Что делает агент сейчас (актуально)
 
-- `MP3 / Audio artifact` — канонический аудиофайл встречи (`meeting_audio.mp3`)
-- `Raw transcript` — сырой STT-транскрипт с мусорными вставками (`ээ`, `мм`, повторы и т.п.)
-- `Normalized transcript` — транскрипт после детерминированной очистки (без LLM)
-- `Clean transcript` — улучшенный транскрипт (эвристики + опционально LLM)
-- `LLM artifact` — любой артефакт, построенный из транскрипта (summary, таблица, JSON, brief, custom output)
-- `Analysis` — аналитическая сводка/оценка, построенная LLM или fallback-логикой
-- `RAG chat` — чат/запросы по одному или нескольким интервью с retrieval по чанкам транскриптов
+### 1) Захват и MP3-first
+- Поддерживает 4 сценария получения записи (в UI):
+  - `Драйвер: системный звук`
+  - `Браузер: экран + звук`
+  - `API: подключение к встрече`
+  - `Quick fallback (по ссылке)`
+- Во всех сценариях целевой артефакт записи: `meeting_audio.mp3`
+- `Stop` не ждет финальный `STT/LLM` (тяжелая обработка вынесена в on-demand генерацию)
 
-### Важное замечание о текущем коде (legacy naming)
-В текущем коде еще встречаются legacy-названия (`report`, `structured`, `raw.txt`, `clean.txt`, endpoint `/report`). Это рабочее состояние проекта. В roadmap ниже заложена поэтапная миграция на новую терминологию (`transcript`, `analysis`, `llm artifacts`, `rag`).
+### 2) Транскрипты (новая логика)
+- `raw transcript` — прямой STT-результат (грязный текст)
+- `normalized transcript` — служебная deterministic-нормализация без LLM
+- `clean transcript` — пользовательский чистый текст (normalizer + опциональная LLM-очистка)
 
-## Что уже реализовано сейчас (по состоянию текущей ветки)
-### Уже работает
-- 4 сценария получения записи (UI режимы): драйверный захват, экран+аудио, API/quick сценарии, импорт/загрузка аудио
-- Канонический MP3-артефакт встречи (`meeting_audio.mp3`) как основной результат записи
-- `record-first` UX: `Stop` завершает запись/финализирует MP3, а не ждет тяжелую STT/LLM обработку
-- Ленивое построение текста/артефактов по запросу (on-demand) вместо тяжелой финализации на `Stop`
-- Экспорт MP3 и базовые артефакты через UI/API
-- Локальная LLM через OpenAI-compatible endpoint (включая Ollama)
-- Quick fallback режим для аварийной записи MP3
+Важно:
+- Пользовательский сценарий обычно опирается на 2 вида текста: `raw` и `clean`
+- `normalized` нужен как внутренний стабильный слой и fallback
 
-### Что еще в переходе (будет переработано)
-- Понятие `report` перегружено: сейчас это и транскрипт в понимании пользователя, и аналитический отчет в коде
-- Нет отдельного универсального LLM-transform слоя с custom prompt/schema
-- Нет полноценного RAG-индекса по всем интервью и multi-interview chat/compare
-- Нет единого чата в UI для "сделай любой формат из этого транскрипта"
+### 3) LLM-артефакты (из транскрипта)
+- Универсальный backend API для генерации артефактов из `raw|normalized|clean`
+- Режимы:
+  - `template`
+  - `custom`
+  - `table`
+- Поддержка `schema-guided JSON`
+- Скачивание результата в `json/txt/csv`
 
-## Продуктовая логика (целевая)
-### 1) Захват -> MP3 (единый аудио-артефакт)
-Независимо от способа захвата, итогом всегда должен быть стабильный `meeting_audio.mp3`.
+### 4) RAG (поиск/сравнение интервью)
+- Индексация транскрипта чанками с цитатами и таймкодами
+- Multi-meeting query (по выбранным интервью или по recent)
+- RAG chat / compare workspace в UI
+- Hybrid retrieval:
+  - keyword/BM25-lite
+  - vector score
+- Сейчас vector layer поддерживает:
+  - `Ollama/OpenAI-compatible embeddings` (предпочтительно)
+  - `hashing fallback` (локально, офлайн, бесплатно)
 
-Поддерживаемые источники (текущий UI):
-- `Драйвер: системный звук`
-- `Браузер: экран + звук`
-- `API: подключение/интеграционный сценарий`
-- `Quick fallback` (аварийный сценарий записи)
+## Терминология (фиксируем)
 
-### 2) MP3 -> транскрипт (STT)
-`STT` строит транскрипт из MP3. Это не аналитика и не "оценка кандидата". Это текстовая расшифровка речи.
+Чтобы не путаться в слове «отчет», используем такие термины:
 
-Артефакты слоя транскрипта:
-- `raw transcript` — честный STT-output
-- `normalized transcript` — детерминированная очистка (эвристики)
-- `clean transcript` — улучшенная версия (эвристики + опционально LLM)
+- `Audio artifact` — итоговый `meeting_audio.mp3`
+- `Raw transcript` — грязный STT-текст
+- `Normalized transcript` — служебная deterministic-очистка без LLM
+- `Clean transcript` — читабельный текст (normalizer + optional LLM)
+- `LLM artifact` — любой результат из транскрипта (summary / JSON / CSV / table / custom)
+- `Analysis` — аналитический артефакт (legacy alias `/report` сохранен)
+- `RAG chat` — запросы/диалог по одному или нескольким интервью с цитатами
 
-### 3) Транскрипт -> LLM артефакты
-LLM берет `raw` или `clean` транскрипт и строит пользовательский результат:
-- summary
-- аналитическая сводка
-- scorecard
-- таблица для Excel/Google Sheets
-- structured JSON
-- CSV
-- custom format по текстовому запросу пользователя
-- доменные шаблоны (например, hiring brief)
+## Почему `normalized` нужен, если пользователю важны только `raw` и `clean`
 
-### 4) RAG поверх всех интервью
-RAG используется для поиска, сравнения и чата:
-- по одному интервью
-- по выбранному набору интервью
-- по всем интервью с фильтрами
+`normalized` — это не “третий пользовательский отчет”. Это технический слой, который:
+- удаляет `эээ / ммм / ну` и часть шумовых вставок по правилам
+- схлопывает повторы
+- нормализует пробелы/пунктуацию
+- не зависит от LLM
+- не меняет смысл
 
-RAG-ответы должны возвращаться с цитатами/ссылками на фрагменты транскрипта (реплики/таймкоды).
+Зачем это нужно:
+- стабильная база для `clean`
+- fallback, если LLM недоступна
+- часто улучшает RAG-поиск (меньше шумовых слов)
 
-## Почему рекомендуется гибрид для `clean transcript`
-Для качества и стабильности рекомендуется гибридный подход:
+## Ollama в проекте (новая роль)
 
-1. `STT -> raw transcript`
-2. `Deterministic cleaner` (эвристики)
-3. `LLM cleaner` (опционально, для повышения качества)
+Проект теперь умеет работать с **двумя разными моделями Ollama**:
 
-Почему так лучше, чем "сразу LLM":
-- `raw` всегда остается воспроизводимым и проверяемым исходником
-- базовая очистка работает быстро, дешево и предсказуемо
-- LLM можно отключить без потери основного пайплайна
-- меньше риск исказить смысл при недоступности/ошибке LLM
+1. `LLM модель` (текстовая)
+- используется для:
+  - `clean transcript` (опциональная LLM-очистка)
+  - `analysis`
+  - `LLM artifacts` (`template/custom/table`)
+  - `RAG answer` (ответ по найденным цитатам)
 
-## Архитектура (целевая, с учетом текущей базы)
-### Слои
-- `Capture & Audio`: запись/загрузка/финализация MP3
-- `Transcript Service`: STT + нормализация + clean pipeline
-- `Artifact Service`: генерация артефактов из транскрипта (LLM/non-LLM)
-- `RAG Service`: indexing/retrieval/synthesis
-- `UI`: запись, управление артефактами, чат/запросы, compare workspace
+2. `Embeddings модель`
+- используется для:
+  - векторизации чанков транскриптов в `RAG`
+  - семантического поиска и сравнения интервью
 
-### Принцип разделения ответственности
-- Захват не делает тяжелую аналитику
-- STT не делает продуктовую аналитику
-- LLM не трогает аудио напрямую
-- RAG не подменяет транскрипт, а помогает находить релевантные фрагменты
+### Почему лучше 2 модели, а не одна
+- embeddings-модель обычно легче и быстрее
+- поиск не грузит большую LLM на каждый запрос
+- качество retrieval по смыслу выше и стабильнее
 
-## Состояние UI (как мыслить блоками после миграции)
-### Блок 1. Запись
-Назначение: получить стабильный `meeting_audio.mp3`
+### Что происходит, если embeddings-модель не установлена
+Ничего не ломается:
+- `RAG` продолжает работать через `hashing fallback` (локально)
+- качество semantic retrieval может быть ниже
+- keyword/BM25-lite retrieval остается рабочим
 
-### Блок 2. Транскрипты
-Назначение: построить/перестроить
-- `raw transcript`
-- `normalized transcript`
-- `clean transcript`
+## Установка для пользователя (desktop app)
 
-### Блок 3. LLM Артефакты
-Назначение: взять выбранный транскрипт (`raw|normalized|clean`) и получить:
-- шаблонный вывод
-- custom формат
-- structured table / JSON / CSV
+### Что нужно поставить
+- `ffmpeg` (рекомендуется обязательно)
+- `Ollama` (если хотите LLM и качественный vector RAG локально)
 
-### Блок 4. RAG Chat / Compare
-Назначение:
-- чат по одному интервью
-- чат по выбранным интервью
-- сравнение интервью в ручном наборе
-- поиск по всем интервью
+### Рекомендуемый быстрый путь (launcher)
+1. Откройте `9second_capture.app`
+2. На стартовом экране (мастер установки) заполните модели:
+   - `LLM модель` (например `llama3.1:8b`)
+   - `Embeddings модель` (например `nomic-embed-text`)
+3. Нажмите `Исправить в 1 клик`
+4. Дождитесь, пока мастер:
+   - установит STT зависимости
+   - проверит `Ollama CLI`
+   - запустит `Ollama`
+   - скачает обе модели (если их нет)
+   - сохранит runtime-настройки агента
+5. Нажмите `Открыть UI агента`
 
-## Где хранятся данные (текущая и целевая модель)
-Для desktop-сценария launcher хранит рабочие данные в пользовательской папке:
-- `~/.9second_capture/records/<meeting_id>/meeting_audio.mp3`
-- `~/.9second_capture/records/<meeting_id>/raw.txt` (legacy name, semantically `raw transcript`)
-- `~/.9second_capture/records/<meeting_id>/clean.txt` (legacy name, semantically `clean transcript`)
-- `~/.9second_capture/records/<meeting_id>/report_*.json|txt` (legacy analytics artifacts)
-- `~/.9second_capture/records/<meeting_id>/structured_*.json|csv` (legacy structured artifacts)
-- `~/.9second_capture/records/<meeting_id>/meeting_meta.json`
+### Что проверяет стартовый экран (launcher preflight)
+- `Python venv`
+- `STT зависимости`
+- `Ollama CLI`
+- `Ollama сервис`
+- `LLM модель` (наличие)
+- `Embeddings модель` (наличие)
+- браузерные разрешения (микрофон / экран)
 
-Для dev/server запуска путь задается через `RECORDS_DIR` (по умолчанию `./data/records`).
+## Подробная установка Ollama и моделей (вручную)
 
-Quick fallback-рекордер хранит отдельные файлы в `QUICK_RECORD_OUTPUT_DIR` (по умолчанию `./data/records/quick`).
-
-### Целевая эволюция структуры артефактов (roadmap)
-Планируемая структура внутри папки встречи:
-- `audio/meeting_audio.mp3`
-- `transcripts/raw.txt`
-- `transcripts/normalized.txt`
-- `transcripts/clean.txt`
-- `transcripts/chunks/*.jsonl` (реплики/таймкоды/спикеры)
-- `artifacts/<artifact_id>/` (`request.json`, `result.json`, `result.csv`, `meta.json`)
-- `rag/chunks.jsonl`
-- `rag/index_refs.json`
-- `meeting_meta.json`
-
-## Установка и запуск (актуально)
-## Для конечного пользователя
-Рекомендуемый путь — готовые бинарники из релизов:
-- [GitHub Releases](https://github.com/Bastard989/9second_capture/releases)
-
-### Первый запуск (launcher)
-1. Нажмите `Исправить в 1 клик`
-2. Нажмите `Открыть UI агента`
-3. Проверьте preflight/аудио-источники
-4. Нажмите `Старт`, затем `Стоп`
-5. Сохраните MP3 (экспортная копия)
-6. Перейдите в блок транскриптов/артефактов и формируйте нужные результаты
-
-## Сборка из исходников
 ### macOS
 ```bash
+brew install ffmpeg
+brew install --cask ollama
+open -a Ollama
+```
+
+### Проверка Ollama
+```bash
+ollama list
+```
+
+### Скачать 2 модели (обязательно для полной локальной схемы)
+```bash
+# LLM (пример)
+ollama pull llama3.1:8b
+
+# Embeddings (пример, рекомендуется)
+ollama pull nomic-embed-text
+```
+
+### Альтернативные embeddings-модели (если хотите попробовать)
+```bash
+ollama pull mxbai-embed-large
+# или
+ollama pull all-minilm
+```
+
+### Что выбрать по умолчанию
+- `LLM`: `llama3.1:8b` (комфортный старт локально)
+- `Embeddings`: `nomic-embed-text`
+
+## Главный UI (что теперь есть)
+
+### Блок «Результаты»
+1. `Raw / Clean` экспорт (и legacy совместимые кнопки)
+2. `LLM-экспорт / кастомные форматы`
+   - выбор записи
+   - выбор источника транскрипта (`raw / normalized / clean`)
+   - режимы `template / custom / table`
+   - `prompt`
+   - optional `schema JSON`
+3. `RAG chat / compare workspace`
+   - выбор интервью вручную
+   - query по одному/нескольким интервью
+   - citations с линиями/таймкодами/спикерами
+   - экспорт RAG результата (`JSON / CSV citations / TXT answer`)
+
+### Выбор моделей в главном UI
+В главном UI теперь есть **два селектора**:
+- `LLM модель`
+- `Embeddings модель`
+
+Оба умеют:
+- `Сканировать` модели из Ollama/OpenAI-compatible `/models`
+- `Сменить модель` (с сохранением runtime override)
+
+## Архитектура данных (текущая логика)
+
+### Capture layer
+- задача: получить надежный `meeting_audio.mp3`
+- `Stop` завершает запись и финализирует аудио, без ожидания STT/LLM
+
+### Transcript layer
+- `STT` строит `raw`
+- deterministic cleaner строит `normalized`
+- optional LLM cleaner строит `clean`
+
+### LLM Artifact layer
+- вход: `raw | normalized | clean`
+- выход: `analysis / table / json / csv / custom`
+- поддержка кэширования по fingerprint запроса
+
+### RAG layer
+- индексирует чанки транскрипта
+- хранит metadata чанков:
+  - `meeting_id`
+  - `speaker(s)`
+  - `line_start/line_end`
+  - `start_ms/end_ms`
+  - `timestamp_start/timestamp_end`
+  - `meeting_meta` (candidate/vacancy/level/interviewer)
+- retrieval:
+  - keyword/BM25-lite
+  - vector (Ollama embeddings) или `hashing fallback`
+- synthesis (опционально): LLM отвечает по найденным цитатам
+
+## API (актуально)
+
+Все маршруты ниже идут под префиксом `/v1`.
+
+### LLM / embeddings model control
+- `GET /llm/status`
+- `GET /llm/models`
+- `POST /llm/model`
+- `GET /llm/embeddings/status`
+- `GET /llm/embeddings/models`
+- `POST /llm/embeddings/model`
+
+### Diagnostics
+- `GET /diagnostics/preflight`
+  - включает `stt`, `llm`, `embeddings`
+- `POST /diagnostics/ui-event`
+
+### Meetings / MP3 / transcripts
+- `GET /meetings`
+- `POST /meetings/{meeting_id}/finish` (`MP3-first` finalize)
+- `POST /meetings/{meeting_id}/transcripts/generate`
+- `POST /meetings/{meeting_id}/transcripts/rebuild`
+- `GET /meetings/{meeting_id}/transcripts/{variant}` (`raw|normalized|clean`, `fmt=txt|json`)
+
+### RAG
+- `POST /meetings/{meeting_id}/rag/index`
+- `GET /meetings/{meeting_id}/rag/index`
+- `POST /rag/query`
+
+### LLM artifacts / analysis / compare
+- `POST /meetings/{meeting_id}/artifacts/generate`
+- `GET /meetings/{meeting_id}/artifacts/{artifact_id}`
+- `GET /meetings/{meeting_id}/artifacts/{artifact_id}/download?fmt=json|txt|csv`
+- `POST /meetings/{meeting_id}/analysis` (новый термин)
+- `POST /meetings/{meeting_id}/report` (legacy alias)
+- `POST /meetings/{meeting_id}/structured` (legacy endpoint)
+- `POST /meetings/{meeting_id}/senior-brief`
+- `GET /meetings/compare`
+- `GET /meetings/compare/export`
+- `GET /meetings/{meeting_id}/artifact` (legacy download multiplexer)
+
+## Конфигурация (важные env)
+
+### Базовое LLM / Ollama
+```bash
+OPENAI_API_BASE=http://127.0.0.1:11434/v1
+OPENAI_API_KEY=ollama
+LLM_ENABLED=true
+LLM_MODEL_ID=llama3.1:8b
+```
+
+### Embeddings / RAG vector
+```bash
+RAG_VECTOR_ENABLED=true
+RAG_EMBEDDING_PROVIDER=auto
+EMBEDDING_MODEL_ID=nomic-embed-text
+# optional (если хотите отдельный endpoint для embeddings)
+# EMBEDDING_API_BASE=http://127.0.0.1:11434/v1
+# EMBEDDING_API_KEY=ollama
+```
+
+`RAG_EMBEDDING_PROVIDER`:
+- `auto` (рекомендуется): пытается OpenAI-compatible embeddings, иначе fallback на hashing
+- `openai_compat` / `ollama`: использовать embeddings API (с fallback на hashing в части сценариев)
+- `hashing`: принудительно локальный hashing (офлайн)
+
+## Разработка и запуск из исходников
+
+### Локально
+```bash
+cd /Users/kirill/Documents/New\ project/9second_capture
+python3 scripts/run_local_agent.py
+```
+
+### Сборка macOS app
+```bash
+cd /Users/kirill/Documents/New\ project/9second_capture
 bash tools/packaging/build_mac.sh
 open -n dist/9second_capture.app
 ```
 
-### Windows (PowerShell)
-```powershell
-powershell -ExecutionPolicy Bypass -File tools/packaging/build_windows.ps1
-.\dist\9second_capture\9second_capture.exe
-```
+## Тесты и быстрые проверки
 
-### Linux
+### Python unit tests (пример)
 ```bash
-bash tools/packaging/build_linux.sh
-./dist/9second_capture/9second_capture
+pytest -q tests/unit/test_llm_router.py
+pytest -q tests/unit/test_artifacts_compare_router.py
+pytest -q tests/unit/test_enhancer.py
 ```
 
-## Инженерный запуск (без desktop launcher)
+### Синтаксические проверки
 ```bash
-# локально
-python3 scripts/run_local_agent.py
-
-# или контейнеры
-docker compose up -d --build
+python3 -m py_compile apps/api_gateway/routers/artifacts.py apps/api_gateway/routers/llm.py
+node --check apps/api_gateway/ui/app.js
 ```
 
-## Зависимости для аудио и LLM
-### ffmpeg (рекомендуется обязательно)
-Используется для materialize/транскодирования MP3.
+## Как мыслить новой логикой (коротко)
 
-macOS:
-```bash
-brew install ffmpeg
-```
+### Что делает `STT`
+Только переводит `MP3 -> текст` (`raw transcript`).
 
-### Ollama / локальная LLM (опционально)
-Пример:
-```bash
-# macOS
-brew install --cask ollama
-open -a Ollama
-ollama pull llama3.1:8b
-ollama list
-```
+### Что делает `normalizer`
+Чистит мусор детерминированно (`raw -> normalized`) без LLM.
 
-Пример конфигурации:
-```bash
-LLM_ENABLED=true
-OPENAI_API_BASE=http://127.0.0.1:11434/v1
-OPENAI_API_KEY=ollama
-LLM_MODEL_ID=llama3.1:8b
-```
+### Что делает `LLM`
+Работает **только с транскриптом**, а не с аудио:
+- `normalized -> clean` (опционально)
+- `raw|normalized|clean -> artifacts / analysis / custom formats`
+- `RAG citations -> answer`
 
-## Текущее API (рабочее, legacy naming местами)
-### Основное
-- `GET /v1/diagnostics/preflight` — готовность окружения/STT/LLM
-- `GET /v1/meetings` — список встреч
-- `POST /v1/meetings/{id}/rename` — переименование записи
-- `POST /v1/meetings/{id}/finish` — финализация записи (закрытие встречи + попытка подготовить MP3)
-- `GET /v1/meetings/{id}/artifact?kind=audio&fmt=mp3` — скачать итоговый MP3
+## Что еще в roadmap до продакшна
 
-### Тексты и артефакты (legacy names, будет миграция)
-- `GET /v1/meetings/{id}/artifact?kind=raw&fmt=txt`
-- `GET /v1/meetings/{id}/artifact?kind=clean&fmt=txt`
-- `POST /v1/meetings/{id}/report`
-- `POST /v1/meetings/{id}/structured`
+1. Улучшить embeddings provider layer (батчинг, кэширование эмбеддингов, внешний provider по конфигу)
+2. Полный hybrid retrieval (`BM25 + embeddings`) с более точной нормализацией/ранжированием
+3. Расширить UI `compare workspace` (сохраненные наборы интервью, фильтры)
+4. Production hardening (очереди, retries, observability, SLA)
 
-## Целевое API (roadmap, не все реализовано)
-### Transcript API
-- `POST /v1/meetings/{id}/transcripts/generate`
-  - body: `{ source_audio: "meeting_audio", variants: ["raw","normalized","clean"] }`
-- `GET /v1/meetings/{id}/transcripts/{variant}`
-- `POST /v1/meetings/{id}/transcripts/rebuild`
+## Troubleshooting
 
-### LLM Artifact API
-- `POST /v1/meetings/{id}/artifacts/generate`
-  - body: `{ transcript_variant, mode: "template|custom|table", template_id?, prompt?, schema? }`
-- `GET /v1/meetings/{id}/artifacts/{artifact_id}`
-- `GET /v1/meetings/{id}/artifacts/{artifact_id}/download?fmt=json|csv|txt|xlsx`
+### `Stop` долго выполняется
+В новой логике `Stop` должен завершать запись и финализацию `MP3` без тяжелого `STT/LLM`.
+Если долго:
+- проверьте `ffmpeg`
+- проверьте, что зависание не в сохранении/экспорте артефактов после `Stop`
+- посмотрите `agent.log` / `launcher.log`
 
-### RAG API
-- `POST /v1/rag/index/rebuild` (по одной встрече или батчем)
-- `POST /v1/rag/query`
-  - body: `{ meeting_ids?: [], filters?: {}, query, response_format, with_citations: true }`
-- `POST /v1/rag/chat`
-  - body: `{ thread_id?, meeting_ids|filters, message }`
+### RAG работает, но ответы «слабые»
+- вероятно используется `hashing fallback`
+- проверьте `Embeddings модель` в launcher/main UI
+- установите `nomic-embed-text` и пересоберите индекс (`force reindex`)
 
-### Compare API
-- `POST /v1/compare/jobs`
-  - body: `{ meeting_ids: [...], prompt|template, output_format }`
-- `GET /v1/compare/jobs/{job_id}`
+### LLM-артефакты не генерируются
+- проверьте `Ollama` и `OPENAI_API_BASE`
+- проверьте выбранную `LLM модель`
+- посмотрите `LLM status` в главном UI
 
-## RAG: что именно планируется (production-ready подход)
-### Базовые требования
-- Индексация чанков транскрипта (`chunk_id`, `meeting_id`, `speaker`, `time range`, `text`)
-- Metadata filters (`candidate`, `vacancy`, `level`, `interviewer`, `date`, `source mode`)
-- Retrieval с цитатами (`citations`) в ответе
-- Multi-meeting retrieval (выбранные интервью)
-- All-meetings retrieval (по фильтру)
+## Где хранятся локальные данные (desktop launcher)
 
-### Рекомендуемый стартовый стек (прагматично)
-- Chunking по репликам/таймкодам
-- Hybrid retrieval:
-  - keyword/BM25
-  - embeddings/vector search
-- LLM synthesis поверх топ-N чанков
-- JSON schema output для таблиц/сравнений
+Обычно в папке пользователя:
+- `~/.9second_capture/records/` — записи и артефакты
+- `~/.9second_capture/state/runtime_overrides.json` — сохраненные runtime-настройки (модели, LLM/embeddings)
+- `~/.9second_capture/agent.log`
+- `~/.9second_capture/launcher.log`
 
-### Почему нужен именно полный RAG для этой задачи
-Потому что целевой сценарий — не только "один отчет по одной записи", а:
-- сравнить несколько интервью вручную
-- найти все интервью, где обсуждали конкретную технологию/кейсы
-- построить сводную таблицу по выбранным встречам
-- задать произвольный вопрос по всем интервью и получить ответ с доказательствами
-
-## LLM Chat в UI (обязательная часть нового вектора)
-В UI планируется отдельный блок `LLM / RAG`, где пользователь сможет:
-- выбрать источник (`raw|normalized|clean` transcript)
-- выбрать scope (`одно интервью | выбранные интервью | все интервью по фильтру`)
-- писать произвольный запрос
-- получить ответ с цитатами
-- сохранить результат в `TXT / JSON / CSV / XLSX`
-
-### Режимы блока LLM
-1. `Templates`
-- Summary
-- Hiring brief
-- Scorecard
-- Structured table
-
-2. `Custom format`
-- Пользователь пишет, какой формат нужен
-- Можно передать JSON-schema (опционально)
-- Backend валидирует результат и экспортирует
-
-3. `Chat (RAG)`
-- Вопросы по транскриптам
-- Сравнение интервью
-- Уточняющие вопросы
-- Ответы с цитатами и ссылками на фрагменты
-
-## Как стабильно генерировать таблицы и БД-виды
-Для таблиц и структурированных данных рекомендуется контракт:
-- LLM возвращает **JSON**, а не "красивый текст"
-- backend валидирует JSON
-- backend экспортирует в CSV/XLSX/Google Sheets-compatible CSV
-
-Рекомендуемый минимальный формат ответа LLM:
-- `columns`
-- `rows`
-- `assumptions`
-- `citations`
-- `warnings`
-
-Это дает:
-- воспроизводимость
-- валидацию
-- меньше поломок экспорта
-- возможность повторно экспортировать в разные форматы без повторного вызова LLM
-
-## Roadmap до production (новый план разработки)
-Ниже зафиксирован новый вектор разработки с учетом текущего состояния проекта.
-
-### Phase 0 — Stabilize MP3-first foundation (текущая база)
-Цель: запись завершается быстро, MP3 надежно сохраняется, тяжелая обработка не висит на `Stop`.
-
-Задачи:
-- закрепить `Stop = finalize recording + MP3 only`
-- убрать/пометить legacy UI тексты, где "report" используется вместо "transcript"
-- доработать smoke-тесты для 4 способов получения MP3
-- проверить кейсы без `ffmpeg` и с fallback-путями
-
-Критерий готовности:
-- пользователь стабильно получает MP3 после `Stop`
-- первая генерация текста идет отдельным действием и не ломает запись
-
-### Phase 1 — Transcript domain refactor
-Цель: выделить транскрипт как отдельную доменную сущность.
-
-Задачи:
-- ввести явные сущности `raw/normalized/clean transcript`
-- вынести построение транскриптов в отдельный service/API
-- переименовать UI блоки (`Транскрипты` вместо legacy `Отчеты`, где это про текст)
-- сохранить обратную совместимость с legacy endpoints на переходный период
-- добавить кэширование по `meeting_id + audio hash + transcript variant + stt config`
-
-Критерий готовности:
-- транскрипт можно сгенерировать/пересобрать независимо от LLM-аналитики
-- legacy и новые пути дают эквивалентный результат
-
-### Phase 2 — LLM Artifacts platform (template + custom)
-Цель: сделать универсальный слой генерации артефактов из транскрипта.
-
-Задачи:
-- `LLM Artifact API` (`generate/get/download`)
-- шаблонные режимы (`summary`, `scorecard`, `brief`, `structured table`)
-- `custom prompt` режим
-- поддержка `schema-guided` JSON output
-- валидация и кэш артефактов (`transcript hash + model + prompt/schema`)
-- экспорт `JSON/CSV/TXT`, затем `XLSX`
-
-Критерий готовности:
-- пользователь может получить любой нужный формат данных без правки кода
-- ошибки LLM не ломают запись и базовый транскрипт
-
-### Phase 3 — Full RAG indexing and retrieval
-Цель: полноценный RAG по одному/нескольким/всем интервью.
-
-Задачи:
-- chunking транскриптов с метаданными (speaker/timecodes/meeting context)
-- embeddings pipeline + vector index
-- keyword/BM25 индекс (hybrid retrieval)
-- retrieval API с filters и citations
-- batched reindex / incremental updates
-- метрики качества retrieval (hit rate / citation coverage)
-
-Критерий готовности:
-- ответы по нескольким интервью содержат цитаты и воспроизводимы
-- поиск по выбранным интервью и по фильтрам работает стабильно
-
-### Phase 4 — UI: LLM/RAG Chat + Compare Workspace
-Цель: дать пользователю интерфейс для произвольных запросов и сравнений.
-
-Задачи:
-- блок `LLM / RAG` в UI
-- чат по одному интервью
-- чат по выбранным интервью
-- compare workspace (ручной выбор встреч)
-- сохранение результатов чата/таблиц
-- понятные статусы стадий (indexing/retrieval/generation/export)
-
-Критерий готовности:
-- пользователь без инженера может получить таблицу/сводку/сравнение по кастомному запросу
-
-### Phase 5 — Production hardening and rollout
-Цель: довести систему до управляемого production-сценария.
-
-Задачи:
-- observability (метрики, structured logs, tracing ключевых стадий)
-- очереди/фоновые задачи для тяжелых операций (STT/LLM/RAG indexing)
-- ретраи, таймауты, idempotency
-- контроль стоимости/латентности LLM
-- RBAC/auth/audit (если multi-user deployment)
-- backup/retention policy
-- релизный процесс и rollback
-- нагрузочные и регрессионные тесты на representative dataset
-
-Критерий готовности:
-- predictable SLA на запись/транскрипт/артефакты
-- наблюдаемость и воспроизводимость инцидентов
-- безопасный rollout обновлений
-
-## Метрики качества (что нужно мерить по новому вектору)
-### Capture/Audio
-- `% успешной финализации MP3`
-- время `Stop -> MP3 ready`
-- частота fallback-путей (`backup_audio`, `source_upload`, chunk fallback)
-
-### Transcript
-- время `MP3 -> raw transcript`
-- время `raw -> normalized -> clean`
-- покрытие/длина транскрипта
-- доля пустых/низкокачественных транскриптов
-
-### LLM Artifacts
-- latency по шаблонам/кастомным запросам
-- процент валидных JSON outputs
-- доля повторных запросов, обслуженных из кэша
-
-### RAG
-- retrieval latency
-- citation coverage
-- precision@k / recall@k на тестовых сценариях
-- качество multi-interview compare (ручная оценка + regression set)
-
-## Ограничения и принципы безопасности
-- `raw transcript` должен сохраняться как исходник для верификации
-- `clean transcript` и LLM-артефакты не должны тихо подменять смысл без возможности проверить источник
-- RAG-ответы должны отдавать цитаты/фрагменты
-- отсутствие LLM не должно блокировать запись и базовый транскрипт
-
-## Прод-конфигурация (минимум)
-```bash
-APP_ENV=prod
-AUTH_MODE=api_key
-API_KEYS=<user_keys>
-SERVICE_API_KEYS=<service_keys>
-RECORDS_DIR=/var/lib/9second_capture/records
-```
-
-## Техническая структура проекта (текущая)
-- `apps/api_gateway` — API + WebSocket + встроенный UI
-- `src/interview_analytics_agent` — STT/LLM, постобработка, storage, quick record, сервисы артефактов
-- `scripts/launcher.py` — desktop launcher
-- `scripts/run_local_agent.py` — инженерный запуск сервиса без упаковки
-- `tools/packaging` — сборка desktop-бинарников
-
-## Что считать успехом этого вектора
-Пользователь записывает интервью любым способом, получает надежный MP3, отдельно строит нужный вариант транскрипта, а затем через LLM/RAG превращает его в любой полезный формат (таблица, сводка, сравнение, чат с цитатами) без ручной доработки кода под каждый новый запрос.
+## Релизы
+- [GitHub Releases](https://github.com/Bastard989/9second_capture/releases)

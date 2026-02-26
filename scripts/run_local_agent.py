@@ -46,10 +46,15 @@ def _apply_runtime_overrides() -> None:
         return
     allowed_keys = {
         "LLM_MODEL_ID",
+        "EMBEDDING_MODEL_ID",
         "LLM_ENABLED",
         "LLM_LIVE_ENABLED",
         "OPENAI_API_BASE",
         "OPENAI_API_KEY",
+        "EMBEDDING_API_BASE",
+        "EMBEDDING_API_KEY",
+        "RAG_EMBEDDING_PROVIDER",
+        "RAG_VECTOR_ENABLED",
     }
     for key in allowed_keys:
         value = raw.get(key)
@@ -152,6 +157,9 @@ def main() -> None:
     os.environ.setdefault("OPENAI_API_BASE", "http://127.0.0.1:11434/v1")
     os.environ.setdefault("OPENAI_API_KEY", "ollama")
     os.environ.setdefault("LLM_MODEL_ID", "llama3.1:8b")
+    os.environ.setdefault("EMBEDDING_MODEL_ID", "nomic-embed-text")
+    os.environ.setdefault("RAG_EMBEDDING_PROVIDER", "auto")
+    os.environ.setdefault("RAG_VECTOR_ENABLED", "true")
     os.environ.setdefault("LLM_REQUEST_TIMEOUT_SEC", "15")
     os.environ.setdefault("LLM_RETRIES", "1")
     os.environ.setdefault("LLM_CLEANUP_PROBE_TIMEOUT_SEC", "2.0")
