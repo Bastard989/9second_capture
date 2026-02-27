@@ -103,6 +103,11 @@ const state = {
     mode: "template",
     templateId: "analysis",
     forceRebuild: false,
+    chatMessages: [],
+    chatAttachments: [],
+    chatHintKey: "llm_chat_hint_idle",
+    chatHintText: "",
+    chatHintStyle: "muted",
     lastResponse: null,
     busy: false,
     hintKey: "llm_artifact_hint_idle",
@@ -123,6 +128,11 @@ const state = {
     indexBusy: false,
     indexJobId: "",
     indexJobStatus: null,
+    chatMessages: [],
+    chatAttachments: [],
+    chatHintKey: "rag_chat_hint_idle",
+    chatHintText: "",
+    chatHintStyle: "muted",
     hintKey: "rag_hint_idle",
     hintText: "",
     hintStyle: "muted",
@@ -346,6 +356,10 @@ const i18n = {
       "Clean (чистый): очищенный текст для чтения и отчетов. Обычно строится из raw через нормализацию и (опционально) LLM-очистку.",
     help_transcript_sources:
       "Raw — исходный STT текст. Normalized — служебная нормализация без LLM (убирает мусор/повторы, сохраняет смысл). Clean — пользовательский чистый текст после normalizer + опциональной LLM-очистки.",
+    help_llm_chat_any_format:
+      "LLM сгенерирует вам любой формат данных который вам необходим из транскрипта.",
+    help_rag_chat_any_format:
+      "RAG-чат сравнит выбранные интервью и соберет ответ с цитатами. Можно добавить файлы для дополнительного контекста.",
     llm_scan_btn: "Сканировать",
     llm_apply_btn: "Сменить модель",
     embedding_scan_btn: "Сканировать",
@@ -594,7 +608,36 @@ const i18n = {
     llm_artifact_busy_title: "LLM-артефакт",
     llm_artifact_busy_text:
       "Генерируем артефакт из выбранного транскрипта. Для custom/table и LLM может потребоваться больше времени.",
-    rag_title: "RAG чат / compare workspace",
+    llm_chat_title: "LLM чат по транскрипту",
+    llm_chat_send_btn: "Отправить",
+    llm_chat_hint_idle: "Опишите нужный формат. LLM сформирует артефакт по выбранному транскрипту.",
+    llm_chat_hint_prompt_required: "Введите запрос в чат LLM.",
+    llm_chat_hint_running: "LLM обрабатывает запрос...",
+    llm_chat_hint_done: "Ответ LLM получен.",
+    llm_chat_hint_failed: "Не удалось получить ответ LLM.",
+    llm_chat_input_label: "Запрос в LLM",
+    llm_chat_input_placeholder:
+      "Сделай табличный отчёт по clean transcript: навыки, доказательства, риски, рекомендации.",
+    llm_chat_preset_summary: "Summary",
+    llm_chat_preset_table: "Таблица",
+    llm_chat_preset_json: "JSON",
+    llm_chat_preset_csv: "CSV",
+    llm_chat_preset_summary_prompt:
+      "Сделай короткое summary по clean transcript: ключевые темы, сильные стороны кандидата, риски, итог.",
+    llm_chat_preset_table_prompt:
+      "Сделай таблицу для Google Sheets по clean transcript: columns=[Критерий, Факт, Оценка, Риск, Рекомендация], rows по смыслу.",
+    llm_chat_preset_json_prompt:
+      "Верни структурированный JSON по clean transcript: skills, evidence, risks, recommendations, итоговый_вердикт.",
+    llm_chat_preset_csv_prompt:
+      "Собери табличный CSV по clean transcript: candidate, criterion, evidence, score, risk, recommendation.",
+    llm_chat_history_empty: "Здесь появится диалог с LLM.",
+    chat_attach_btn: "📎 Прикрепить файлы",
+    chat_attach_none: "Файлы не выбраны",
+    chat_attach_selected: "Файлов: {count}",
+    llm_chat_role_user: "Вы",
+    llm_chat_role_assistant: "LLM",
+    llm_chat_preview_error: "Не удалось загрузить предпросмотр артефакта.",
+    rag_title: "RAG чат / сравнение интервью",
     rag_refresh_meetings: "Обновить список",
     rag_index_selected: "Индексировать выбранные",
     rag_run_btn: "Выполнить запрос",
@@ -635,7 +678,15 @@ const i18n = {
     rag_index_status_orphaned: "без транскрипта",
     rag_index_status_unknown: "неизвестно",
     rag_topk_label: "Top-K цитат",
-    rag_query_title: "RAG запрос / чат",
+    rag_query_title: "Запрос по выбранным интервью (compare)",
+    rag_chat_send_btn: "Отправить",
+    rag_chat_hint_idle: "RAG-чат сравнивает выбранные интервью и отвечает с цитатами.",
+    rag_chat_hint_running: "RAG обрабатывает запрос...",
+    rag_chat_hint_done: "Ответ RAG получен.",
+    rag_chat_hint_failed: "Не удалось получить ответ RAG.",
+    rag_chat_history_empty: "Здесь появится диалог RAG-чата.",
+    rag_chat_role_user: "Вы",
+    rag_chat_role_assistant: "RAG",
     rag_use_llm_answer: "Сгенерировать ответ LLM по найденным цитатам",
     rag_auto_index: "Автоиндексация выбранных интервью перед запросом",
     rag_force_reindex: "Принудительно пересобрать индекс",
@@ -917,6 +968,10 @@ const i18n = {
       "Clean: user-facing cleaned transcript for reading and reports. Usually built from raw via normalization and optional LLM cleanup.",
     help_transcript_sources:
       "Raw = original STT text. Normalized = internal deterministic cleanup without LLM (removes noise/repeats, preserves meaning). Clean = user-facing text after normalizer + optional LLM cleanup.",
+    help_llm_chat_any_format:
+      "LLM will generate any data format you need from the transcript.",
+    help_rag_chat_any_format:
+      "RAG chat compares selected interviews and returns citation-backed answers. You can attach files for extra context.",
     llm_scan_btn: "Scan",
     llm_apply_btn: "Switch model",
     embedding_scan_btn: "Scan",
@@ -1163,7 +1218,36 @@ const i18n = {
     llm_artifact_busy_title: "LLM artifact",
     llm_artifact_busy_text:
       "Generating artifact from the selected transcript. Custom/table modes may take longer with LLM.",
-    rag_title: "RAG chat / compare workspace",
+    llm_chat_title: "LLM chat over transcript",
+    llm_chat_send_btn: "Send",
+    llm_chat_hint_idle: "Describe the target format. LLM will generate an artifact from the selected transcript.",
+    llm_chat_hint_prompt_required: "Enter a prompt for LLM chat.",
+    llm_chat_hint_running: "LLM is processing the request...",
+    llm_chat_hint_done: "LLM response received.",
+    llm_chat_hint_failed: "Failed to get an LLM response.",
+    llm_chat_input_label: "LLM prompt",
+    llm_chat_input_placeholder:
+      "Build a table from clean transcript: skills, evidence, risks, recommendations.",
+    llm_chat_preset_summary: "Summary",
+    llm_chat_preset_table: "Table",
+    llm_chat_preset_json: "JSON",
+    llm_chat_preset_csv: "CSV",
+    llm_chat_preset_summary_prompt:
+      "Create a short summary from clean transcript: key topics, candidate strengths, risks, final conclusion.",
+    llm_chat_preset_table_prompt:
+      "Build a Google Sheets-ready table from clean transcript with columns [Criterion, Evidence, Score, Risk, Recommendation].",
+    llm_chat_preset_json_prompt:
+      "Return structured JSON from clean transcript with keys: skills, evidence, risks, recommendations, final_decision.",
+    llm_chat_preset_csv_prompt:
+      "Build a CSV table from clean transcript with fields: candidate, criterion, evidence, score, risk, recommendation.",
+    llm_chat_history_empty: "LLM chat history will appear here.",
+    chat_attach_btn: "📎 Attach files",
+    chat_attach_none: "No files selected",
+    chat_attach_selected: "Files: {count}",
+    llm_chat_role_user: "You",
+    llm_chat_role_assistant: "LLM",
+    llm_chat_preview_error: "Failed to load artifact preview.",
+    rag_title: "RAG chat / interview comparison",
     rag_refresh_meetings: "Refresh list",
     rag_index_selected: "Index selected",
     rag_run_btn: "Run query",
@@ -1204,7 +1288,15 @@ const i18n = {
     rag_index_status_orphaned: "orphaned",
     rag_index_status_unknown: "unknown",
     rag_topk_label: "Top-K citations",
-    rag_query_title: "RAG query / chat",
+    rag_query_title: "Query across selected interviews (compare)",
+    rag_chat_send_btn: "Send",
+    rag_chat_hint_idle: "RAG chat compares selected interviews and answers with citations.",
+    rag_chat_hint_running: "RAG is processing your request...",
+    rag_chat_hint_done: "RAG response received.",
+    rag_chat_hint_failed: "Failed to get a RAG response.",
+    rag_chat_history_empty: "RAG chat history will appear here.",
+    rag_chat_role_user: "You",
+    rag_chat_role_assistant: "RAG",
     rag_use_llm_answer: "Generate an LLM answer from retrieved citations",
     rag_auto_index: "Auto-index selected interviews before query",
     rag_force_reindex: "Force rebuild index",
@@ -1507,6 +1599,17 @@ const els = {
   llmArtifactPromptInput: document.getElementById("llmArtifactPromptInput"),
   llmArtifactSchemaInput: document.getElementById("llmArtifactSchemaInput"),
   llmArtifactForceRebuild: document.getElementById("llmArtifactForceRebuild"),
+  llmChatSendBtn: document.getElementById("llmChatSendBtn"),
+  llmChatHint: document.getElementById("llmChatHint"),
+  llmChatHistory: document.getElementById("llmChatHistory"),
+  llmChatInput: document.getElementById("llmChatInput"),
+  llmChatAttachBtn: document.getElementById("llmChatAttachBtn"),
+  llmChatAttachInput: document.getElementById("llmChatAttachInput"),
+  llmChatAttachments: document.getElementById("llmChatAttachments"),
+  llmChatPresetSummary: document.getElementById("llmChatPresetSummary"),
+  llmChatPresetTable: document.getElementById("llmChatPresetTable"),
+  llmChatPresetJson: document.getElementById("llmChatPresetJson"),
+  llmChatPresetCsv: document.getElementById("llmChatPresetCsv"),
   llmArtifactMetaBadge: document.getElementById("llmArtifactMetaBadge"),
   llmArtifactMetaText: document.getElementById("llmArtifactMetaText"),
   llmArtifactFiles: document.getElementById("llmArtifactFiles"),
@@ -1527,7 +1630,13 @@ const els = {
   ragUseLlmAnswer: document.getElementById("ragUseLlmAnswer"),
   ragAutoIndex: document.getElementById("ragAutoIndex"),
   ragForceReindex: document.getElementById("ragForceReindex"),
+  ragChatSendBtn: document.getElementById("ragChatSendBtn"),
+  ragChatHint: document.getElementById("ragChatHint"),
+  ragChatHistory: document.getElementById("ragChatHistory"),
   ragQueryInput: document.getElementById("ragQueryInput"),
+  ragChatAttachBtn: document.getElementById("ragChatAttachBtn"),
+  ragChatAttachInput: document.getElementById("ragChatAttachInput"),
+  ragChatAttachments: document.getElementById("ragChatAttachments"),
   ragAnswerPromptInput: document.getElementById("ragAnswerPromptInput"),
   ragExportJsonBtn: document.getElementById("ragExportJsonBtn"),
   ragExportCsvBtn: document.getElementById("ragExportCsvBtn"),
@@ -2240,6 +2349,154 @@ const setLlmArtifactHint = (hintKeyOrText = "", style = "muted", isRaw = false, 
   els.llmArtifactHint.className = `hint ${style || "muted"}`;
 };
 
+const setLlmChatHint = (hintKeyOrText = "", style = "muted", isRaw = false, params = {}) => {
+  if (!els.llmChatHint) return;
+  const dict = i18n[state.lang] || {};
+  let text = "";
+  if (!hintKeyOrText) {
+    text = "";
+    state.llmArtifact.chatHintKey = "";
+    state.llmArtifact.chatHintText = "";
+    state.llmArtifact.chatHintStyle = "muted";
+  } else if (!isRaw && dict[hintKeyOrText]) {
+    text = formatText(dict[hintKeyOrText], params || {});
+    state.llmArtifact.chatHintKey = hintKeyOrText;
+    state.llmArtifact.chatHintText = "";
+    state.llmArtifact.chatHintStyle = style || "muted";
+  } else {
+    text = String(hintKeyOrText || "");
+    state.llmArtifact.chatHintKey = "";
+    state.llmArtifact.chatHintText = text;
+    state.llmArtifact.chatHintStyle = style || "muted";
+  }
+  els.llmChatHint.textContent = text;
+  els.llmChatHint.className = `hint ${style || "muted"}`;
+};
+
+const setRagChatHint = (hintKeyOrText = "", style = "muted", isRaw = false, params = {}) => {
+  if (!els.ragChatHint) return;
+  const dict = i18n[state.lang] || {};
+  let text = "";
+  if (!hintKeyOrText) {
+    text = "";
+    state.rag.chatHintKey = "";
+    state.rag.chatHintText = "";
+    state.rag.chatHintStyle = "muted";
+  } else if (!isRaw && dict[hintKeyOrText]) {
+    text = formatText(dict[hintKeyOrText], params || {});
+    state.rag.chatHintKey = hintKeyOrText;
+    state.rag.chatHintText = "";
+    state.rag.chatHintStyle = style || "muted";
+  } else {
+    text = String(hintKeyOrText || "");
+    state.rag.chatHintKey = "";
+    state.rag.chatHintText = text;
+    state.rag.chatHintStyle = style || "muted";
+  }
+  els.ragChatHint.textContent = text;
+  els.ragChatHint.className = `hint ${style || "muted"}`;
+};
+
+const _attachmentFilesFromInput = (inputEl) =>
+  Array.from((inputEl && inputEl.files) || [])
+    .filter(Boolean)
+    .slice(0, 8);
+
+const _attachmentIsTextLike = (file) => {
+  const name = String((file && file.name) || "").toLowerCase();
+  const type = String((file && file.type) || "").toLowerCase();
+  if (type.startsWith("text/")) return true;
+  if (type.includes("json") || type.includes("xml") || type.includes("yaml") || type.includes("csv")) return true;
+  return /\.(txt|md|markdown|json|csv|tsv|log|xml|yaml|yml|html|htm|js|ts|jsx|tsx|py|java|go|sql|ini|cfg|conf)$/i.test(
+    name
+  );
+};
+
+const _attachmentContextBlock = async (files = []) => {
+  const list = Array.isArray(files) ? files.filter(Boolean).slice(0, 8) : [];
+  if (!list.length) return "";
+  const ru = state.lang === "ru";
+  const lines = [];
+  lines.push(ru ? "Дополнительные вложения пользователя:" : "Additional user attachments:");
+
+  const maxPerFileChars = 3500;
+  const maxTotalChars = 12000;
+  let consumed = 0;
+
+  for (const file of list) {
+    const name = String(file && file.name ? file.name : "file");
+    const size = Number(file && file.size ? file.size : 0);
+    const type = String(file && file.type ? file.type : "");
+    lines.push(`- ${name} (${_formatBytes(size)}${type ? `, ${type}` : ""})`);
+    if (!_attachmentIsTextLike(file)) continue;
+    if (consumed >= maxTotalChars) continue;
+    try {
+      const rawText = await file.text();
+      const remained = Math.max(0, maxTotalChars - consumed);
+      const localLimit = Math.max(0, Math.min(maxPerFileChars, remained));
+      const text = String(rawText || "").trim();
+      if (!text || !localLimit) continue;
+      const clipped = text.length > localLimit ? `${text.slice(0, localLimit)}\n…` : text;
+      lines.push(`\n[${name}]`);
+      lines.push(clipped);
+      consumed += clipped.length;
+    } catch (err) {
+      // ignore unreadable files
+    }
+  }
+  return lines.join("\n");
+};
+
+const renderLlmChatAttachments = () => {
+  if (!els.llmChatAttachments) return;
+  const dict = i18n[state.lang] || {};
+  const files = Array.isArray(state.llmArtifact.chatAttachments) ? state.llmArtifact.chatAttachments : [];
+  els.llmChatAttachments.innerHTML = "";
+  if (!files.length) {
+    const pill = document.createElement("span");
+    pill.className = "chat-attachment-pill";
+    pill.textContent = dict.chat_attach_none || "No files selected";
+    els.llmChatAttachments.appendChild(pill);
+    return;
+  }
+  const count = document.createElement("span");
+  count.className = "chat-attachment-pill";
+  count.textContent = formatText(dict.chat_attach_selected || "Files: {count}", { count: files.length });
+  els.llmChatAttachments.appendChild(count);
+  files.forEach((file) => {
+    const pill = document.createElement("span");
+    pill.className = "chat-attachment-pill";
+    const name = String((file && file.name) || "file");
+    pill.textContent = `${name} (${_formatBytes(file && file.size ? file.size : 0)})`;
+    els.llmChatAttachments.appendChild(pill);
+  });
+};
+
+const renderRagChatAttachments = () => {
+  if (!els.ragChatAttachments) return;
+  const dict = i18n[state.lang] || {};
+  const files = Array.isArray(state.rag.chatAttachments) ? state.rag.chatAttachments : [];
+  els.ragChatAttachments.innerHTML = "";
+  if (!files.length) {
+    const pill = document.createElement("span");
+    pill.className = "chat-attachment-pill";
+    pill.textContent = dict.chat_attach_none || "No files selected";
+    els.ragChatAttachments.appendChild(pill);
+    return;
+  }
+  const count = document.createElement("span");
+  count.className = "chat-attachment-pill";
+  count.textContent = formatText(dict.chat_attach_selected || "Files: {count}", { count: files.length });
+  els.ragChatAttachments.appendChild(count);
+  files.forEach((file) => {
+    const pill = document.createElement("span");
+    pill.className = "chat-attachment-pill";
+    const name = String((file && file.name) || "file");
+    pill.textContent = `${name} (${_formatBytes(file && file.size ? file.size : 0)})`;
+    els.ragChatAttachments.appendChild(pill);
+  });
+};
+
 const _llmArtifactMeetingId = () => {
   const fromSelect = String((els.llmArtifactMeetingSelect && els.llmArtifactMeetingSelect.value) || "").trim();
   if (fromSelect) return fromSelect;
@@ -2311,34 +2568,276 @@ const _llmArtifactSuggestedFilename = ({ meetingId, fmt, response, fileRef }) =>
   return normalizeFilenameWithExt(base, base, ext);
 };
 
+const _llmChatPushMessage = ({ role = "assistant", text = "", meta = "" } = {}) => {
+  const normalizedRole = String(role || "").trim().toLowerCase() === "user" ? "user" : "assistant";
+  const normalizedText = String(text || "").trim();
+  if (!normalizedText) return;
+  if (!Array.isArray(state.llmArtifact.chatMessages)) {
+    state.llmArtifact.chatMessages = [];
+  }
+  state.llmArtifact.chatMessages.push({
+    role: normalizedRole,
+    text: normalizedText,
+    meta: String(meta || "").trim(),
+    ts: Date.now(),
+  });
+  if (state.llmArtifact.chatMessages.length > 30) {
+    state.llmArtifact.chatMessages = state.llmArtifact.chatMessages.slice(-30);
+  }
+};
+
+const _llmChatInferMode = (prompt) => {
+  const raw = String(prompt || "").toLowerCase();
+  if (
+    /(таблиц|table|csv|sheet|sheets|excel|column|columns|rows|строк|колонк|google)/.test(raw)
+  ) {
+    return "table";
+  }
+  return "custom";
+};
+
+const _llmChatPresetPrompt = (presetId) => {
+  const dict = i18n[state.lang] || {};
+  const keyByPreset = {
+    summary: "llm_chat_preset_summary_prompt",
+    table: "llm_chat_preset_table_prompt",
+    json: "llm_chat_preset_json_prompt",
+    csv: "llm_chat_preset_csv_prompt",
+  };
+  const key = keyByPreset[String(presetId || "").trim().toLowerCase()];
+  if (!key) return "";
+  return String(dict[key] || "").trim();
+};
+
+const _llmArtifactFindFileByFmt = (artifactResponse, fmt) => {
+  const targetFmt = String(fmt || "").trim().toLowerCase();
+  if (!targetFmt) return null;
+  const files = artifactResponse && Array.isArray(artifactResponse.files) ? artifactResponse.files : [];
+  return (
+    files.find((item) => String(item && item.fmt ? item.fmt : "").trim().toLowerCase() === targetFmt) || null
+  );
+};
+
+const _llmArtifactFetchPreviewText = async ({ meetingId, artifactResponse }) => {
+  const artifactId = String((artifactResponse && artifactResponse.artifact_id) || "").trim();
+  if (!meetingId || !artifactId) return "";
+  const preferredFmts = ["txt", "json", "csv"];
+  const fallback = artifactResponse && Array.isArray(artifactResponse.files) ? artifactResponse.files[0] : null;
+  const picked =
+    preferredFmts
+      .map((fmt) => _llmArtifactFindFileByFmt(artifactResponse, fmt))
+      .find((item) => Boolean(item)) || fallback;
+  const fmt = String((picked && picked.fmt) || "").trim().toLowerCase();
+  if (!fmt) return "";
+  const res = await fetch(
+    `/v1/meetings/${encodeURIComponent(meetingId)}/artifacts/${encodeURIComponent(artifactId)}/download?fmt=${encodeURIComponent(fmt)}`,
+    {
+      headers: buildHeaders(),
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`llm_artifact_preview_failed_${res.status}`);
+  }
+  const raw = await res.text();
+  let preview = String(raw || "").trim();
+  if (!preview) return "";
+  if (fmt === "json") {
+    try {
+      preview = JSON.stringify(JSON.parse(preview), null, 2);
+    } catch (err) {
+      // keep raw if not valid JSON text
+    }
+  }
+  const limit = 8000;
+  if (preview.length > limit) {
+    preview = `${preview.slice(0, limit)}\n\n…`;
+  }
+  return preview;
+};
+
+const renderLlmChatHistory = () => {
+  if (!els.llmChatHistory) return;
+  const dict = i18n[state.lang] || {};
+  const messages = Array.isArray(state.llmArtifact.chatMessages) ? state.llmArtifact.chatMessages : [];
+  els.llmChatHistory.innerHTML = "";
+  if (!messages.length) {
+    const empty = document.createElement("div");
+    empty.className = "llm-chat-empty";
+    empty.textContent = dict.llm_chat_history_empty || "LLM chat history will appear here.";
+    els.llmChatHistory.appendChild(empty);
+  } else {
+    messages.forEach((msg) => {
+      const card = document.createElement("div");
+      card.className = `llm-chat-msg ${msg.role === "user" ? "user" : "assistant"}`;
+
+      const head = document.createElement("div");
+      head.className = "llm-chat-msg-head";
+      const role = document.createElement("span");
+      role.className = "llm-chat-msg-role";
+      role.textContent =
+        msg.role === "user"
+          ? dict.llm_chat_role_user || "You"
+          : dict.llm_chat_role_assistant || "LLM";
+      head.appendChild(role);
+
+      const right = document.createElement("span");
+      const parts = [];
+      if (Number.isFinite(Number(msg.ts))) {
+        try {
+          parts.push(new Date(Number(msg.ts)).toLocaleTimeString());
+        } catch (err) {
+          // ignore time formatting issues
+        }
+      }
+      if (msg.meta) parts.push(String(msg.meta));
+      right.textContent = parts.join(" • ");
+      head.appendChild(right);
+      card.appendChild(head);
+
+      const body = document.createElement("pre");
+      body.className = "llm-chat-msg-body";
+      body.textContent = String(msg.text || "");
+      card.appendChild(body);
+      els.llmChatHistory.appendChild(card);
+    });
+  }
+  els.llmChatHistory.scrollTop = els.llmChatHistory.scrollHeight;
+
+  if (els.llmChatSendBtn) {
+    els.llmChatSendBtn.disabled = Boolean(state.llmArtifact.busy);
+  }
+  if (state.llmArtifact.chatHintKey) {
+    setLlmChatHint(state.llmArtifact.chatHintKey, state.llmArtifact.chatHintStyle || "muted", false);
+  } else if (state.llmArtifact.chatHintText) {
+    setLlmChatHint(state.llmArtifact.chatHintText, state.llmArtifact.chatHintStyle || "muted", true);
+  } else {
+    setLlmChatHint("llm_chat_hint_idle", "muted");
+  }
+  renderLlmChatAttachments();
+};
+
+const _ragChatPushMessage = ({ role = "assistant", text = "", meta = "" } = {}) => {
+  const normalizedRole = String(role || "").trim().toLowerCase() === "user" ? "user" : "assistant";
+  const normalizedText = String(text || "").trim();
+  if (!normalizedText) return;
+  if (!Array.isArray(state.rag.chatMessages)) {
+    state.rag.chatMessages = [];
+  }
+  state.rag.chatMessages.push({
+    role: normalizedRole,
+    text: normalizedText,
+    meta: String(meta || "").trim(),
+    ts: Date.now(),
+  });
+  if (state.rag.chatMessages.length > 30) {
+    state.rag.chatMessages = state.rag.chatMessages.slice(-30);
+  }
+};
+
+const renderRagChatHistory = () => {
+  if (!els.ragChatHistory) return;
+  const dict = i18n[state.lang] || {};
+  const messages = Array.isArray(state.rag.chatMessages) ? state.rag.chatMessages : [];
+  els.ragChatHistory.innerHTML = "";
+  if (!messages.length) {
+    const empty = document.createElement("div");
+    empty.className = "llm-chat-empty";
+    empty.textContent = dict.rag_chat_history_empty || "RAG chat history will appear here.";
+    els.ragChatHistory.appendChild(empty);
+  } else {
+    messages.forEach((msg) => {
+      const card = document.createElement("div");
+      card.className = `llm-chat-msg ${msg.role === "user" ? "user" : "assistant"}`;
+
+      const head = document.createElement("div");
+      head.className = "llm-chat-msg-head";
+      const role = document.createElement("span");
+      role.className = "llm-chat-msg-role";
+      role.textContent =
+        msg.role === "user"
+          ? dict.rag_chat_role_user || dict.llm_chat_role_user || "You"
+          : dict.rag_chat_role_assistant || "RAG";
+      head.appendChild(role);
+
+      const right = document.createElement("span");
+      const parts = [];
+      if (Number.isFinite(Number(msg.ts))) {
+        try {
+          parts.push(new Date(Number(msg.ts)).toLocaleTimeString());
+        } catch (err) {
+          // ignore time formatting issues
+        }
+      }
+      if (msg.meta) parts.push(String(msg.meta));
+      right.textContent = parts.join(" • ");
+      head.appendChild(right);
+      card.appendChild(head);
+
+      const body = document.createElement("pre");
+      body.className = "llm-chat-msg-body";
+      body.textContent = String(msg.text || "");
+      card.appendChild(body);
+      els.ragChatHistory.appendChild(card);
+    });
+  }
+  els.ragChatHistory.scrollTop = els.ragChatHistory.scrollHeight;
+  if (els.ragChatSendBtn) {
+    els.ragChatSendBtn.disabled = Boolean(state.rag.queryBusy || state.rag.indexBusy);
+  }
+  if (state.rag.chatHintKey) {
+    setRagChatHint(state.rag.chatHintKey, state.rag.chatHintStyle || "muted", false);
+  } else if (state.rag.chatHintText) {
+    setRagChatHint(state.rag.chatHintText, state.rag.chatHintStyle || "muted", true);
+  } else {
+    setRagChatHint("rag_chat_hint_idle", "muted");
+  }
+  renderRagChatAttachments();
+};
+
+const _applyLlmChatPreset = (presetId) => {
+  const prompt = _llmChatPresetPrompt(presetId);
+  if (!prompt || !els.llmChatInput) return;
+  els.llmChatInput.value = prompt;
+  if (els.llmArtifactSourceSelect) {
+    els.llmArtifactSourceSelect.value = "clean";
+  }
+  state.llmArtifact.transcriptSource = "clean";
+  _syncLlmArtifactControlsToState();
+  renderLlmArtifactWorkspace();
+  els.llmChatInput.focus();
+};
+
 const renderLlmArtifactWorkspace = () => {
-  if (!els.llmArtifactMeetingSelect) return;
   _syncLlmArtifactControlsToState();
   const dict = i18n[state.lang] || {};
   const items = Array.from(state.recordsMeta.values());
   const current = String(getSelectedMeeting() || "").trim();
 
-  const prevMeeting = String(state.llmArtifact.meetingId || "").trim();
-  els.llmArtifactMeetingSelect.innerHTML = "";
-  if (!items.length) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = dict.report_picker_empty || "No records";
-    els.llmArtifactMeetingSelect.appendChild(opt);
-    state.llmArtifact.meetingId = "";
-  } else {
-    items.forEach((meta) => {
-      const meetingId = String(meta.meeting_id || "").trim();
+  if (els.llmArtifactMeetingSelect) {
+    const prevMeeting = String(state.llmArtifact.meetingId || "").trim();
+    els.llmArtifactMeetingSelect.innerHTML = "";
+    if (!items.length) {
       const opt = document.createElement("option");
-      opt.value = meetingId;
-      opt.textContent = formatMeetingOptionLabel(meta);
+      opt.value = "";
+      opt.textContent = dict.report_picker_empty || "No records";
       els.llmArtifactMeetingSelect.appendChild(opt);
-    });
-    const preferred = [prevMeeting, current, String(items[0].meeting_id || "").trim()].find(
-      (id) => id && items.some((item) => String(item.meeting_id || "") === id)
-    );
-    els.llmArtifactMeetingSelect.value = String(preferred || "");
-    state.llmArtifact.meetingId = String(els.llmArtifactMeetingSelect.value || "");
+      state.llmArtifact.meetingId = "";
+    } else {
+      items.forEach((meta) => {
+        const meetingId = String(meta.meeting_id || "").trim();
+        const opt = document.createElement("option");
+        opt.value = meetingId;
+        opt.textContent = formatMeetingOptionLabel(meta);
+        els.llmArtifactMeetingSelect.appendChild(opt);
+      });
+      const preferred = [prevMeeting, current, String(items[0].meeting_id || "").trim()].find(
+        (id) => id && items.some((item) => String(item.meeting_id || "") === id)
+      );
+      els.llmArtifactMeetingSelect.value = String(preferred || "");
+      state.llmArtifact.meetingId = String(els.llmArtifactMeetingSelect.value || "");
+    }
+  } else {
+    state.llmArtifact.meetingId = _llmArtifactMeetingId();
   }
 
   if (els.llmArtifactSourceSelect) {
@@ -2425,6 +2924,7 @@ const renderLlmArtifactWorkspace = () => {
   if (els.llmArtifactGenerateBtn) {
     els.llmArtifactGenerateBtn.disabled = busy;
   }
+  renderLlmChatHistory();
   if (state.llmArtifact.hintKey) {
     setLlmArtifactHint(state.llmArtifact.hintKey, state.llmArtifact.hintStyle || "muted", false);
   } else if (state.llmArtifact.hintText) {
@@ -2488,6 +2988,110 @@ const generateLlmArtifact = async () => {
   } finally {
     hideBusyOverlay();
     state.llmArtifact.busy = false;
+    renderLlmArtifactWorkspace();
+  }
+};
+
+const sendLlmChatPrompt = async () => {
+  _syncLlmArtifactControlsToState();
+  const dict = i18n[state.lang] || {};
+  const meetingId = String(state.llmArtifact.meetingId || "").trim();
+  if (!meetingId) {
+    setLlmArtifactHint("llm_artifact_hint_no_meeting", "bad");
+    setLlmChatHint("llm_artifact_hint_no_meeting", "bad");
+    return;
+  }
+  const prompt = String((els.llmChatInput && els.llmChatInput.value) || "").trim();
+  if (!prompt) {
+    setLlmChatHint("llm_chat_hint_prompt_required", "bad");
+    return;
+  }
+
+  if (els.llmArtifactSourceSelect) {
+    els.llmArtifactSourceSelect.value = "clean";
+  }
+  state.llmArtifact.transcriptSource = "clean";
+  const mode = _llmChatInferMode(prompt);
+  const attachments = Array.isArray(state.llmArtifact.chatAttachments) ? state.llmArtifact.chatAttachments : [];
+  const attachmentContext = await _attachmentContextBlock(attachments);
+  const promptWithAttachments = attachmentContext ? `${prompt}\n\n${attachmentContext}` : prompt;
+  const body = {
+    transcript_variant: "clean",
+    mode,
+    prompt: promptWithAttachments,
+    schema: null,
+    force_rebuild: Boolean(els.llmArtifactForceRebuild && els.llmArtifactForceRebuild.checked),
+  };
+
+  if (els.llmArtifactModeSelect) {
+    els.llmArtifactModeSelect.value = mode;
+  }
+  state.llmArtifact.mode = mode;
+  const userMetaParts = ["source=clean"];
+  if (attachments.length) userMetaParts.push(`files=${attachments.length}`);
+  _llmChatPushMessage({ role: "user", text: prompt, meta: userMetaParts.join(" • ") });
+  if (els.llmChatInput) {
+    els.llmChatInput.value = "";
+  }
+
+  state.llmArtifact.busy = true;
+  setLlmChatHint("llm_chat_hint_running", "muted");
+  setLlmArtifactHint("llm_artifact_hint_running", "muted");
+  renderLlmArtifactWorkspace();
+  showBusyOverlay("llm_artifact_busy_title", "llm_artifact_busy_text");
+  try {
+    const res = await fetch(`/v1/meetings/${meetingId}/artifacts/generate`, {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const payload = await res.json();
+        detail = String((payload && payload.detail) || "").trim();
+      } catch (err) {
+        // ignore non-json errors
+      }
+      throw new Error(detail ? `llm_chat_failed_${res.status}_${detail}` : `llm_chat_failed_${res.status}`);
+    }
+    const payload = await res.json();
+    state.llmArtifact.lastResponse = payload;
+
+    let previewText = "";
+    try {
+      previewText = await _llmArtifactFetchPreviewText({ meetingId, artifactResponse: payload });
+    } catch (err) {
+      previewText = "";
+    }
+    if (!previewText) {
+      previewText = dict.llm_chat_preview_error || "Failed to load artifact preview.";
+    }
+    const rid = String(payload.artifact_id || "").trim();
+    const shortId = rid ? rid.slice(0, 10) : "";
+    const modeLabel = String(payload.mode || mode);
+    _llmChatPushMessage({
+      role: "assistant",
+      text: previewText,
+      meta: shortId ? `${modeLabel} • ${shortId}` : modeLabel,
+    });
+    setLlmChatHint("llm_chat_hint_done", "good");
+    setLlmArtifactHint("llm_artifact_hint_done", "good");
+  } catch (err) {
+    console.warn("llm chat failed", err);
+    _llmChatPushMessage({
+      role: "assistant",
+      text: `${dict.llm_chat_hint_failed || "Failed to get an LLM response."}\n${String(err && err.message ? err.message : err)}`,
+    });
+    setLlmChatHint("llm_chat_hint_failed", "bad");
+    setLlmArtifactHint("llm_artifact_hint_failed", "bad");
+  } finally {
+    hideBusyOverlay();
+    state.llmArtifact.busy = false;
+    state.llmArtifact.chatAttachments = [];
+    if (els.llmChatAttachInput) {
+      els.llmChatAttachInput.value = "";
+    }
     renderLlmArtifactWorkspace();
   }
 };
@@ -2989,6 +3593,7 @@ const renderRagWorkspace = () => {
   _syncRagControlsToState();
   renderRagMeetingPicker();
   renderRagResults();
+  renderRagChatHistory();
   if (state.rag.hintKey) {
     setRagHint(state.rag.hintKey, state.rag.hintStyle || "muted", false);
   } else if (state.rag.hintText) {
@@ -3140,13 +3745,19 @@ const indexSelectedRagMeetings = async () => {
 };
 
 const runRagQuery = async () => {
+  const dict = i18n[state.lang] || {};
   const query = String((els.ragQueryInput && els.ragQueryInput.value) || "").trim();
   if (!query) {
     setRagHint("rag_hint_query_empty", "bad");
+    setRagChatHint("rag_hint_query_empty", "bad");
     return;
   }
   _syncRagControlsToState();
   const selectedIds = _ragSelectedMeetingIds();
+  const attachments = Array.isArray(state.rag.chatAttachments) ? state.rag.chatAttachments : [];
+  const attachmentContext = await _attachmentContextBlock(attachments);
+  const answerPromptBase = String((els.ragAnswerPromptInput && els.ragAnswerPromptInput.value) || "").trim();
+  const mergedAnswerPrompt = [answerPromptBase, attachmentContext].filter(Boolean).join("\n\n");
   const payload = {
     query,
     transcript_variant: state.rag.source || "clean",
@@ -3155,8 +3766,12 @@ const runRagQuery = async () => {
     auto_index: Boolean(state.rag.autoIndex),
     force_reindex: Boolean(state.rag.forceReindex),
     answer_mode: state.rag.useLlmAnswer ? "llm" : "none",
-    answer_prompt: String((els.ragAnswerPromptInput && els.ragAnswerPromptInput.value) || "").trim(),
+    answer_prompt: mergedAnswerPrompt,
   };
+  const userMetaParts = [];
+  if (selectedIds.length) userMetaParts.push(`meetings=${selectedIds.length}`);
+  if (attachments.length) userMetaParts.push(`files=${attachments.length}`);
+  _ragChatPushMessage({ role: "user", text: query, meta: userMetaParts.join(" • ") });
 
   state.rag.queryBusy = true;
   renderRagWorkspace();
@@ -3165,6 +3780,7 @@ const runRagQuery = async () => {
   }
   renderRagWorkspace();
   setRagHint(selectedIds.length && state.rag.autoIndex ? "rag_hint_indexing" : "rag_hint_querying", "muted");
+  setRagChatHint("rag_chat_hint_running", "muted");
   showBusyOverlay("busy_rag_query_title", "busy_rag_query_text");
   try {
     if (selectedIds.length && state.rag.autoIndex) {
@@ -3190,20 +3806,44 @@ const runRagQuery = async () => {
     state.rag.lastResponse = body;
     renderRagResults();
     const hits = Array.isArray(body && body.hits) ? body.hits : [];
+    const answerText = String((body && body.answer) || "").trim();
+    const fallback = hits.length
+      ? hits
+          .slice(0, 3)
+          .map((hit, idx) => `[${idx + 1}] ${String(hit && hit.text ? hit.text : "").trim()}`)
+          .filter(Boolean)
+          .join("\n\n")
+      : "";
+    _ragChatPushMessage({
+      role: "assistant",
+      text: answerText || fallback || (dict.rag_hint_no_results || "No relevant transcript chunks were found."),
+      meta: `hits=${hits.length}`,
+    });
     if (!hits.length) {
       setRagHint("rag_hint_no_results", "muted");
+      setRagChatHint("rag_hint_no_results", "muted");
     } else {
       setRagHint("rag_hint_done", "good");
+      setRagChatHint("rag_chat_hint_done", "good");
     }
   } catch (err) {
     console.warn("rag query failed", err);
     state.rag.lastResponse = null;
     renderRagResults();
     setRagHint("rag_hint_failed", "bad");
+    _ragChatPushMessage({
+      role: "assistant",
+      text: `${dict.rag_chat_hint_failed || "Failed to get a RAG response."}\n${String(err && err.message ? err.message : err)}`,
+    });
+    setRagChatHint("rag_chat_hint_failed", "bad");
   } finally {
     hideBusyOverlay();
     state.rag.indexBusy = false;
     state.rag.queryBusy = false;
+    state.rag.chatAttachments = [];
+    if (els.ragChatAttachInput) {
+      els.ragChatAttachInput.value = "";
+    }
     renderRagWorkspace();
   }
 };
@@ -7976,6 +8616,42 @@ if (els.llmArtifactSchemaInput) {
     }
   });
 }
+if (els.llmChatSendBtn) {
+  els.llmChatSendBtn.addEventListener("click", () => {
+    void sendLlmChatPrompt();
+  });
+}
+if (els.llmChatInput) {
+  els.llmChatInput.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey)) return;
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void sendLlmChatPrompt();
+  });
+}
+if (els.llmChatAttachBtn && els.llmChatAttachInput) {
+  els.llmChatAttachBtn.addEventListener("click", () => {
+    els.llmChatAttachInput.value = "";
+    els.llmChatAttachInput.click();
+  });
+}
+if (els.llmChatAttachInput) {
+  els.llmChatAttachInput.addEventListener("change", () => {
+    state.llmArtifact.chatAttachments = _attachmentFilesFromInput(els.llmChatAttachInput);
+    renderLlmChatAttachments();
+  });
+}
+[
+  [els.llmChatPresetSummary, "summary"],
+  [els.llmChatPresetTable, "table"],
+  [els.llmChatPresetJson, "json"],
+  [els.llmChatPresetCsv, "csv"],
+].forEach(([el, preset]) => {
+  if (!el) return;
+  el.addEventListener("click", () => {
+    _applyLlmChatPreset(preset);
+  });
+});
 if (els.ragRefreshMeetingsBtn) {
   els.ragRefreshMeetingsBtn.addEventListener("click", () => {
     void fetchRecords();
@@ -8046,6 +8722,11 @@ if (els.ragRunBtn) {
     void runRagQuery();
   });
 }
+if (els.ragChatSendBtn) {
+  els.ragChatSendBtn.addEventListener("click", () => {
+    void runRagQuery();
+  });
+}
 if (els.ragIndexSelectedBtn) {
   els.ragIndexSelectedBtn.addEventListener("click", () => {
     void indexSelectedRagMeetings();
@@ -8057,6 +8738,18 @@ if (els.ragQueryInput) {
     if (event.key !== "Enter") return;
     event.preventDefault();
     void runRagQuery();
+  });
+}
+if (els.ragChatAttachBtn && els.ragChatAttachInput) {
+  els.ragChatAttachBtn.addEventListener("click", () => {
+    els.ragChatAttachInput.value = "";
+    els.ragChatAttachInput.click();
+  });
+}
+if (els.ragChatAttachInput) {
+  els.ragChatAttachInput.addEventListener("change", () => {
+    state.rag.chatAttachments = _attachmentFilesFromInput(els.ragChatAttachInput);
+    renderRagChatAttachments();
   });
 }
 if (els.ragExportJsonBtn) {

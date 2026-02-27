@@ -70,7 +70,7 @@ def test_quick_record_start_and_status(monkeypatch) -> None:
         s.quick_record_enabled = snapshot_quick
 
 
-def test_quick_record_start_rejects_missing_agent_key_when_upload(monkeypatch) -> None:
+def test_quick_record_start_allows_missing_agent_key_when_upload_auth_none(monkeypatch) -> None:
     fake = _FakeManager()
     monkeypatch.setattr(
         "apps.api_gateway.routers.quick_record.get_quick_record_manager",
@@ -95,8 +95,46 @@ def test_quick_record_start_rejects_missing_agent_key_when_upload(monkeypatch) -
                 "upload_to_agent": True,
             },
         )
+        assert resp.status_code == 200
+        assert fake.started_with is not None
+        assert fake.started_with.agent_api_key is None
+    finally:
+        s.auth_mode = snapshot_auth
+        s.quick_record_enabled = snapshot_quick
+        s.quick_record_agent_api_key = snapshot_key
+
+
+def test_quick_record_start_rejects_missing_agent_key_when_upload_auth_required(monkeypatch) -> None:
+    fake = _FakeManager()
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.quick_record.get_quick_record_manager",
+        lambda: fake,
+    )
+
+    s = get_settings()
+    snapshot_auth = s.auth_mode
+    snapshot_quick = s.quick_record_enabled
+    snapshot_key = s.quick_record_agent_api_key
+    snapshot_api_keys = s.api_keys
+    try:
+        s.auth_mode = "api_key"
+        s.api_keys = "test-local-api-key"
+        s.quick_record_enabled = True
+        s.quick_record_agent_api_key = None
+        client = TestClient(app)
+
+        resp = client.post(
+            "/v1/quick-record/start",
+            json={
+                "meeting_url": "https://meet.example/789",
+                "duration_sec": 30,
+                "upload_to_agent": True,
+            },
+            headers={"X-API-Key": "test-local-api-key"},
+        )
         assert resp.status_code == 400
     finally:
         s.auth_mode = snapshot_auth
+        s.api_keys = snapshot_api_keys
         s.quick_record_enabled = snapshot_quick
         s.quick_record_agent_api_key = snapshot_key

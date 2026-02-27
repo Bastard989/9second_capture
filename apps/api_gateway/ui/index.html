@@ -517,8 +517,8 @@
 
       <section class="card card-results">
         <h2 data-i18n="records_title">Результаты</h2>
-
-        <div class="results-block">
+        <div class="results-grid">
+        <div class="results-block results-block-mp3">
           <div class="results-block-head">
             <strong data-i18n="results_mp3_title">1) MP3 после встречи</strong>
           </div>
@@ -551,7 +551,7 @@
           </div>
         </div>
 
-        <div class="results-block">
+        <div class="results-block results-block-convert">
           <div class="results-block-head">
             <strong data-i18n="results_convert_title">2) Конвертация готовых отчётов</strong>
           </div>
@@ -746,108 +746,46 @@
               </div>
             </div>
           </div>
-        </div>
-
-        <div class="llm-artifact-workspace">
-          <div class="row compare-header">
-            <strong data-i18n="llm_artifact_title">LLM-экспорт / кастомные форматы</strong>
-            <div class="row row-wrap llm-artifact-header-actions">
-              <button id="llmArtifactGenerateBtn" class="ghost" data-i18n="llm_artifact_generate_btn">
-                Сформировать
-              </button>
-            </div>
-          </div>
-          <div id="llmArtifactHint" class="hint" data-i18n="llm_artifact_hint_idle">
-            Выберите запись и формат, затем сформируйте LLM-артефакт из транскрипта.
-          </div>
-
-          <div class="llm-artifact-grid">
-            <div class="llm-artifact-panel">
-              <div class="file-title" data-i18n="llm_artifact_source_panel_title">Источник и режим</div>
-              <div class="field">
-                <label for="llmArtifactMeetingSelect">
-                  <span data-i18n="llm_artifact_meeting_label">Запись</span>
-                </label>
-                <select id="llmArtifactMeetingSelect"></select>
-              </div>
-              <div class="llm-artifact-row-2">
-                <div class="field">
-                  <label for="llmArtifactSourceSelect">
-                    <span data-i18n="llm_artifact_transcript_source_label">Источник транскрипта</span>
-                    <span class="help-tip" data-help-i18n="help_transcript_sources" aria-label="help">?</span>
-                  </label>
-                  <select id="llmArtifactSourceSelect">
-                    <option value="clean" data-i18n="rag_source_clean">Clean</option>
-                    <option value="normalized" data-i18n="rag_source_normalized">Normalized</option>
-                    <option value="raw" data-i18n="rag_source_raw">Raw</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="llmArtifactModeSelect">
-                    <span data-i18n="llm_artifact_mode_label">Режим</span>
-                  </label>
-                  <select id="llmArtifactModeSelect">
-                    <option value="template" data-i18n="llm_artifact_mode_template">Шаблон</option>
-                    <option value="custom" data-i18n="llm_artifact_mode_custom">Custom prompt</option>
-                    <option value="table" data-i18n="llm_artifact_mode_table">Таблица (JSON+CSV)</option>
-                  </select>
-                </div>
-              </div>
-              <div class="field" id="llmArtifactTemplateField">
-                <label for="llmArtifactTemplateSelect">
-                  <span data-i18n="llm_artifact_template_label">Шаблон</span>
-                </label>
-                <select id="llmArtifactTemplateSelect">
-                  <option value="analysis" data-i18n="llm_artifact_template_analysis">Analysis</option>
-                  <option value="summary" data-i18n="llm_artifact_template_summary">Summary</option>
-                  <option value="structured_table" data-i18n="llm_artifact_template_structured">Structured table</option>
-                  <option value="senior_brief" data-i18n="llm_artifact_template_senior">Senior brief</option>
-                </select>
-              </div>
-              <label class="checkbox-line llm-artifact-checkbox">
-                <input id="llmArtifactForceRebuild" type="checkbox" />
-                <span data-i18n="llm_artifact_force_rebuild">Принудительно пересобрать (игнорировать cache)</span>
-              </label>
-            </div>
-
-            <div class="llm-artifact-panel">
-              <div class="file-title" data-i18n="llm_artifact_prompt_panel_title">Prompt / Schema</div>
-              <div class="field">
-                <label for="llmArtifactPromptInput">
-                  <span data-i18n="llm_artifact_prompt_label">Prompt (для custom/table)</span>
-                </label>
-                <textarea
-                  id="llmArtifactPromptInput"
-                  rows="4"
-                  placeholder="Сделай таблицу для Google Sheets: навыки, опыт, риски, рекомендации."
-                  data-i18n-placeholder="llm_artifact_prompt_placeholder"
-                ></textarea>
-              </div>
-              <div class="field">
-                <label for="llmArtifactSchemaInput">
-                  <span data-i18n="llm_artifact_schema_label">Schema JSON (опционально)</span>
-                  <span class="help-tip" data-help-i18n="help_llm_schema" aria-label="help">?</span>
-                </label>
-                <textarea
-                  id="llmArtifactSchemaInput"
-                  rows="5"
-                  placeholder='{"type":"object","properties":{"rows":{"type":"array"}}}'
-                  data-i18n-placeholder="llm_artifact_schema_placeholder"
-                ></textarea>
-              </div>
-            </div>
-          </div>
-
-          <div class="llm-artifact-result">
+          <div class="llm-chat-panel llm-chat-inline">
             <div class="row compare-header">
-              <strong data-i18n="llm_artifact_result_title">Результат LLM-артефакта</strong>
-              <span id="llmArtifactMetaBadge" class="pill muted">—</span>
+              <div class="chat-title-with-help">
+                <strong data-i18n="llm_chat_title">LLM чат по транскрипту</strong>
+                <span class="help-tip" data-help-i18n="help_llm_chat_any_format" aria-label="help">?</span>
+              </div>
+              <button id="llmChatSendBtn" class="ghost" data-i18n="llm_chat_send_btn">Отправить</button>
             </div>
-            <pre id="llmArtifactMetaText" class="llm-artifact-meta-text"></pre>
-            <div id="llmArtifactFiles" class="llm-artifact-files"></div>
+            <div id="llmChatHint" class="hint" data-i18n="llm_chat_hint_idle">
+              Опишите нужный формат. LLM сформирует артефакт по выбранному транскрипту.
+            </div>
+            <div id="llmChatHistory" class="llm-chat-history"></div>
+            <div class="field">
+              <label for="llmChatInput">
+                <span data-i18n="llm_chat_input_label">Запрос в LLM</span>
+              </label>
+              <textarea
+                id="llmChatInput"
+                rows="3"
+                placeholder="Сделай таблицу для Google Sheets: навыки, примеры, риски, рекомендации."
+                data-i18n-placeholder="llm_chat_input_placeholder"
+              ></textarea>
+            </div>
+            <div class="row row-wrap chat-attach-row">
+              <button id="llmChatAttachBtn" class="ghost clip-btn" data-i18n="chat_attach_btn">
+                📎 Прикрепить файлы
+              </button>
+              <input id="llmChatAttachInput" type="file" multiple class="hidden-file-input" />
+              <div id="llmChatAttachments" class="chat-attachments"></div>
+            </div>
+            <div class="row row-wrap llm-chat-presets">
+              <button id="llmChatPresetSummary" class="ghost" data-i18n="llm_chat_preset_summary">Summary</button>
+              <button id="llmChatPresetTable" class="ghost" data-i18n="llm_chat_preset_table">Таблица</button>
+              <button id="llmChatPresetJson" class="ghost" data-i18n="llm_chat_preset_json">JSON</button>
+              <button id="llmChatPresetCsv" class="ghost" data-i18n="llm_chat_preset_csv">CSV</button>
+            </div>
           </div>
         </div>
 
+        <div class="comparison-grid">
         <div class="compare-block">
           <div class="row compare-header">
             <strong data-i18n="compare_title">Сравнение интервью</strong>
@@ -885,7 +823,7 @@
 
         <div class="rag-workspace">
           <div class="row compare-header">
-            <strong data-i18n="rag_title">RAG чат / compare workspace</strong>
+            <strong data-i18n="rag_title">RAG чат / сравнение интервью</strong>
             <div class="row row-wrap rag-header-actions">
               <button id="ragRefreshMeetingsBtn" class="ghost" data-i18n="rag_refresh_meetings">
                 Обновить список
@@ -931,7 +869,17 @@
             </div>
 
             <div class="rag-panel">
-              <div class="file-title" data-i18n="rag_query_title">RAG запрос / чат</div>
+              <div class="row compare-header">
+                <div class="chat-title-with-help">
+                  <div class="file-title" data-i18n="rag_query_title">Запрос по выбранным интервью (compare)</div>
+                  <span class="help-tip" data-help-i18n="help_rag_chat_any_format" aria-label="help">?</span>
+                </div>
+                <button id="ragChatSendBtn" class="ghost" data-i18n="rag_chat_send_btn">Отправить</button>
+              </div>
+              <div id="ragChatHint" class="hint" data-i18n="rag_chat_hint_idle">
+                RAG-чат сравнивает выбранные интервью и отвечает с цитатами.
+              </div>
+              <div id="ragChatHistory" class="llm-chat-history rag-chat-history"></div>
               <div class="rag-query-grid">
                 <div class="field">
                   <label for="ragSourceSelect">
@@ -976,6 +924,13 @@
                   data-i18n-placeholder="rag_query_input_placeholder"
                 ></textarea>
               </div>
+              <div class="row row-wrap chat-attach-row">
+                <button id="ragChatAttachBtn" class="ghost clip-btn" data-i18n="chat_attach_btn">
+                  📎 Прикрепить файлы
+                </button>
+                <input id="ragChatAttachInput" type="file" multiple class="hidden-file-input" />
+                <div id="ragChatAttachments" class="chat-attachments"></div>
+              </div>
               <div class="field">
                 <label for="ragAnswerPromptInput">
                   <span data-i18n="rag_answer_prompt_label">Доп. инструкция для ответа (опционально)</span>
@@ -1011,6 +966,8 @@
             </div>
           </div>
         </div>
+        </div>
+        </div>
       </section>
 
     </main>
@@ -1033,6 +990,6 @@
       </span>
     </footer>
 
-    <script src="/ui/app.js?v=20260226_phase4g_rag_saved_sets"></script>
+    <script src="/ui/app.js?v=20260227_phase4i_compact_chats"></script>
   </body>
 </html>
