@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from apps.api_gateway.deps import auth_dep
@@ -12,6 +12,7 @@ from interview_analytics_agent.quick_record import (
     QuickRecordConfig,
     QuickRecordJobStatus,
     get_quick_record_manager,
+    probe_quick_capture,
 )
 
 router = APIRouter()
@@ -44,6 +45,20 @@ class QuickRecordStatusResponse(BaseModel):
 class QuickRecordStopResponse(BaseModel):
     ok: bool = True
     job: QuickRecordJobStatus | None = None
+
+
+class QuickRecordProbeResult(BaseModel):
+    signal_ok: bool
+    peak: float
+    peak_percent: float
+    duration_sec: int
+    device: str | None = None
+    detail: str | None = None
+
+
+class QuickRecordProbeResponse(BaseModel):
+    ok: bool = True
+    probe: QuickRecordProbeResult
 
 
 @router.post("/quick-record/start", response_model=QuickRecordStartResponse)
@@ -150,3 +165,40 @@ def quick_record_stop(_=AUTH_DEP) -> QuickRecordStopResponse:
         extra={"payload": {"job_id": (job.job_id if job else ""), "status": (job.status if job else "")}},
     )
     return QuickRecordStopResponse(job=job)
+
+
+@router.get("/quick-record/probe", response_model=QuickRecordProbeResponse)
+def quick_record_probe(
+    duration_sec: int = Query(default=5, ge=2, le=30),
+    _=AUTH_DEP,
+) -> QuickRecordProbeResponse:
+    s = get_settings()
+    sample_rate = int(getattr(s, "quick_record_sample_rate", 44100))
+    block_size = int(getattr(s, "quick_record_block_size", 1024))
+    try:
+        probe = probe_quick_capture(
+            duration_sec=duration_sec,
+            sample_rate=sample_rate,
+            block_size=block_size,
+        )
+        return QuickRecordProbeResponse(
+            probe=QuickRecordProbeResult(
+                signal_ok=bool(probe.get("signal_ok")),
+                peak=float(probe.get("peak") or 0.0),
+                peak_percent=float(probe.get("peak_percent") or 0.0),
+                duration_sec=int(probe.get("duration_sec") or duration_sec),
+                device=str(probe.get("device") or "") or None,
+                detail=None,
+            )
+        )
+    except Exception as exc:
+        return QuickRecordProbeResponse(
+            probe=QuickRecordProbeResult(
+                signal_ok=False,
+                peak=0.0,
+                peak_percent=0.0,
+                duration_sec=int(duration_sec),
+                device=None,
+                detail=str(exc),
+            )
+        )

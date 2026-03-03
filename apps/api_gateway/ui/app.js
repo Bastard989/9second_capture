@@ -96,6 +96,8 @@ const state = {
   quickHintText: "",
   quickHintStyle: "muted",
   quickPollTimer: null,
+  quickCompletedHandledJobId: "",
+  quickStopOverlayVisible: false,
   compareItems: [],
   llmArtifact: {
     meetingId: "",
@@ -175,6 +177,8 @@ const MIC_STREAM_GAIN = 1.12;
 const DIAG_SYSTEM_MIN_LEVEL = 0.01;
 const DIAG_SYSTEM_CRITICAL_MIN = 0.006;
 const DIAG_MIC_MIN_LEVEL = 0.008;
+const QUICK_PROBE_DURATION_SEC = 5;
+const QUICK_SIGNAL_MIN_PEAK = 0.001;
 const CAPTURE_LOCK_KEY = "9second_capture_active_lock";
 const CAPTURE_LOCK_TTL_MS = 20000;
 const CAPTURE_LOCK_HEARTBEAT_MS = 4000;
@@ -241,10 +245,10 @@ const WORK_MODE_CONFIGS = {
     id: "link_fallback",
     labelKey: "work_mode_quick",
     descriptionKey: "work_mode_desc_quick",
-    supportsRealtime: false,
+    supportsRealtime: true,
     supportsUpload: false,
     supportsQuick: true,
-    forceCaptureMode: null,
+    forceCaptureMode: "screen",
     useDeviceDriver: false,
     contextMode: "link_fallback",
   },
@@ -275,14 +279,14 @@ const i18n = {
     help_mode_api:
       "Подключение к встрече через API-коннектор. Запись MP3 запускается кнопками Старт/Стоп.",
     help_mode_quick:
-      "Fallback-запись по ссылке встречи, когда основной захват недоступен.",
+      "Вставьте ссылку, нажмите «Старт»: агент откроет встречу и запишет через браузерный Share audio.",
     work_mode_hint:
       "Выберите один режим: его настройки будут активны, остальные секции станут неактивными.",
     work_mode_active_label: "Активный режим:",
     work_mode_driver: "Драйвер: системный звук",
     work_mode_browser: "Браузер: экран + звук",
     work_mode_api: "API: подключение к встрече",
-    work_mode_quick: "Ссылка: quick fallback",
+    work_mode_quick: "Ссылка: браузер + звук",
     work_mode_desc_driver:
       "Запись встреч в realtime через виртуальный драйвер (BlackHole/VB-CABLE/Monitor).",
     work_mode_desc_browser:
@@ -290,7 +294,7 @@ const i18n = {
     work_mode_desc_api:
       "Подключение к видеовстрече через API-коннектор и запись MP3 без локального live-транскрипта.",
     work_mode_desc_quick:
-      "Fallback-режим: запись встречи по ссылке через quick recorder и опциональная отправка в агент.",
+      "Запись по ссылке через браузерный захват: на «Старт» открываем встречу и пишем звук вкладки (Share audio).",
     mode_settings_title: "Настройки выбранного режима",
     mode_settings_browser_hint:
       "Для браузерного захвата выберите вкладку/экран и включите “Share audio”.",
@@ -300,10 +304,12 @@ const i18n = {
       "Укажите параметры API-подключения. Запуск и остановка записи MP3 выполняются в блоке «Запись».",
     work_mode_recording_disabled:
       "Режим записи выключен для текущего профиля. Переключитесь на «Драйвер» или «Браузер».",
+    work_mode_quick_no_realtime_diag:
+      "В текущем режиме realtime-индикатор не используется. Для проверки сигнала нажмите «Проверить».",
     work_mode_upload_disabled:
       "Загрузка файла выключена в текущем режиме. Активируйте «API/файл».",
     work_mode_quick_disabled:
-      "Quick fallback выключен в текущем режиме. Активируйте «Ссылка: quick fallback».",
+      "Режим API-коннектора выключен для текущего профиля. Активируйте «API: подключение к встрече».",
     work_mode_device_disabled:
       "Настройки драйвера доступны только в режиме «Драйвер: системный звук».",
     err_work_mode_switch_locked:
@@ -313,10 +319,15 @@ const i18n = {
     err_work_mode_upload_only:
       "Прямая загрузка файла отключена в режимах захвата. Используйте «Импорт MP3» в блоке «Результаты».",
     err_work_mode_quick_only:
-      "Quick fallback доступен только в режиме «Ссылка: quick fallback».",
+      "Этот запуск доступен только в режиме «API: подключение к встрече».",
+    err_link_mode_url_missing: "Укажите ссылку встречи для режима «Ссылка».",
+    link_mode_opening: "Открываем ссылку встречи перед началом записи...",
+    link_mode_open_failed_popup:
+      "Не удалось автоматически открыть ссылку. Откройте встречу вручную в браузере и продолжите старт.",
     connection_title: "Контекст интервью",
     api_key_label: "API ключ (опционально)",
-    help_api_key: "Нужен только если на локальном API включена авторизация.",
+    help_api_key:
+      "Это ключ локального агента (X-API-Key), а не пароль/код от видеовстречи. Нужен только если на локальном API включена авторизация.",
     api_key_placeholder: "X-API-Key",
     api_record_url_label: "Ссылка встречи",
     help_api_meeting_url:
@@ -331,7 +342,7 @@ const i18n = {
     api_record_started: "API-захват запущен. Идёт запись MP3.",
     api_record_stopped: "Останавливаем API-захват...",
     api_record_completed: "API-запись завершена. MP3 доступен в блоке «Результаты».",
-    api_record_failed: "Ошибка API-записи. Проверьте ссылку встречи и ключ API.",
+    api_record_failed: "Ошибка API-записи. Проверьте ссылку встречи и настройки локального API.",
     interview_meta_title: "Контекст интервью (опционально)",
     help_interview_meta:
       "Рекомендуется заполнить для сравнимой аналитики между интервью. Поля не обязательны.",
@@ -344,7 +355,7 @@ const i18n = {
       "Поля не обязательны, но помогают делать сравнимую аналитику между интервью.",
     llm_model_label: "LLM модель",
     help_llm:
-      "LLM используется только при формировании clean-текста и итоговых отчётов/таблиц в блоке «Результаты».",
+      "LLM используется в чате для генерации форматов из транскрипта. Сам TXT транскрипт строится STT без LLM.",
     embedding_model_label: "Embeddings модель",
     help_embeddings_model:
       "Отдельная модель для RAG-поиска по смыслу (эмбеддинги). Используется для поиска/сравнения интервью. Если недоступна, включается локальный hashing fallback.",
@@ -537,19 +548,22 @@ const i18n = {
     results_import_mp3_btn: "Импорт MP3",
     results_report_title: "2) TXT отчёт из MP3",
     results_report_hint: "Выберите тип отчёта (грязный/чистый), задайте имя и сохраните TXT.",
-    results_stt_title: "Настройки STT для отчётов",
+    results_stt_title: "Настройки STT для транскриптов",
     results_report_name_label: "Имя файла отчёта (обязательно)",
     results_report_name_placeholder: "report_clean",
     results_generate_report_btn: "Сформировать TXT",
     results_download_report_btn: "Сохранить TXT",
     results_current_report_file: "Текущий файл отчёта",
-    results_convert_title: "2) Конвертация готовых отчётов",
+    results_convert_title: "2) TXT транскрипты и LLM-чат",
+    results_convert_settings_toggle: "Настройки STT и моделей",
     results_convert_hint:
-      "Единый блок: сначала при необходимости строим TXT (Raw/Clean), затем экспортируем в JSON/CSV/Таблица JSON.",
-    results_raw_lane_title: "Грязный отчёт (Raw)",
-    results_clean_lane_title: "Чистый отчёт (Clean)",
-    results_raw_report_name_placeholder: "raw_report_export",
-    results_clean_report_name_placeholder: "clean_report_export",
+      "Сначала сохраняем TXT транскрипт (Raw/Clean). Другие форматы создаются через LLM-чат ниже.",
+    results_raw_lane_title: "Грязный транскрипт (Raw)",
+    results_clean_lane_title: "Чистый транскрипт (Clean)",
+    results_raw_report_name_placeholder: "raw_transcript",
+    results_clean_report_name_placeholder: "clean_transcript",
+    results_transcript_name_label: "Имя TXT файла",
+    results_transcript_name_hint: "Введите имя файла (без .txt)",
     results_export_txt: "TXT",
     results_export_json: "JSON",
     results_export_csv: "CSV",
@@ -631,6 +645,7 @@ const i18n = {
     llm_chat_preset_csv_prompt:
       "Собери табличный CSV по clean transcript: candidate, criterion, evidence, score, risk, recommendation.",
     llm_chat_history_empty: "Здесь появится диалог с LLM.",
+    llm_chat_files_title: "Файлы результата",
     chat_attach_btn: "📎 Прикрепить файлы",
     chat_attach_none: "Файлы не выбраны",
     chat_attach_selected: "Файлов: {count}",
@@ -728,7 +743,7 @@ const i18n = {
     file_action_mp3: "MP3",
     prompt_rename_record: "Введите новое название записи:",
     prompt_save_mp3_after_stop: "Запись завершена. Укажите имя MP3 файла:",
-    prompt_report_name: "Укажите имя файла отчёта:",
+    prompt_report_name: "Укажите имя TXT файла:",
     hint_record_renamed: "Название записи обновлено.",
     hint_record_rename_failed: "Не удалось переименовать запись. Проверьте лог локального API.",
     hint_mp3_saved: "MP3 сохранен.",
@@ -738,19 +753,19 @@ const i18n = {
     hint_mp3_import_started: "Загружаем MP3 в агент и строим запись...",
     hint_mp3_import_done: "MP3 импортирован. Можно формировать отчёты.",
     hint_mp3_import_failed: "Не удалось импортировать MP3 файл.",
-    hint_report_generated: "TXT отчёт сформирован.",
-    hint_report_source_missing: "Сначала выберите запись для отчёта.",
-    hint_report_name_missing: "Укажите имя файла отчёта.",
-    hint_report_missing: "Отчёт пока не найден. Сначала нажмите «Сформировать TXT».",
+    hint_report_generated: "TXT транскрипт сохранён.",
+    hint_report_source_missing: "Сначала выберите запись для транскрипта.",
+    hint_report_name_missing: "Укажите имя TXT файла.",
+    hint_report_missing: "TXT транскрипт пока не найден для этой записи.",
     busy_overlay_title: "Подождите...",
-    busy_finish_title: "Завершаем запись",
+    busy_finish_title: "Формируем MP3",
     busy_finish_text:
       "Сохраняем аудио и готовим MP3. Текст и отчёты формируются позже по запросу в блоке «Результаты».",
     busy_mp3_title: "Готовим MP3",
     busy_mp3_text: "Конвертируем запись в MP3 и открываем сохранение файла.",
-    busy_report_title: "Формируем отчёт",
+    busy_report_title: "Формируем транскрипт",
     busy_report_text:
-      "Строим TXT-отчёт из выбранной записи. При первом запуске для записи могут выполняться STT/LLM, на CPU это может занять минуты.",
+      "Строим TXT транскрипт из MP3 через STT (без LLM). На длинных записях это может занять время.",
     report_picker_empty: "Нет записей",
     download_raw: "Скачать raw",
     download_clean: "Скачать clean",
@@ -772,16 +787,14 @@ const i18n = {
     upload_video_label: "Видео файл",
     upload_video_btn: "Видео (в разработке)",
     upload_hint: "Импортируйте MP3 в блоке «Результаты», чтобы собрать raw/clean и отчёты.",
-    quick_record_title: "Quick fallback запись",
+    quick_record_title: "Запись по ссылке (браузерный захват)",
     quick_record_url_label: "Ссылка встречи",
     help_quick_url:
-      "Ссылка на встречу для quick fallback-рекордера, когда обычный захват недоступен.",
+      "Ссылка встречи. На старте агент откроет её и запустит браузерный захват вкладки со звуком.",
     quick_record_url_placeholder: "https://...",
     quick_record_duration_label: "Длительность (сек)",
     help_quick_duration:
       "Ограничение времени quick-записи. По достижении лимита запись остановится.",
-    quick_record_transcribe_label: "Локальная транскрибация (отключено)",
-    quick_record_upload_label: "Отправить запись в пайплайн агента",
     quick_record_start_btn: "Quick старт",
     quick_record_stop_btn: "Quick стоп",
     quick_record_state_idle: "Не запущено",
@@ -789,7 +802,8 @@ const i18n = {
     quick_record_state_stopping: "Останавливаем",
     quick_record_state_completed: "Завершено",
     quick_record_state_failed: "Ошибка",
-    quick_record_hint_ready: "Fallback запись готова к запуску.",
+    quick_record_hint_ready:
+      "Нажмите «Старт»: откроется встреча, затем в окне браузера выберите вкладку встречи и включите Share audio.",
     quick_record_hint_started: "Fallback запись запущена.",
     quick_record_hint_stopped: "Fallback запись остановлена.",
     quick_record_hint_missing_url: "Укажите ссылку встречи (http/https).",
@@ -797,8 +811,15 @@ const i18n = {
     quick_record_hint_already_running: "Quick запись уже выполняется.",
     quick_record_hint_start_failed: "Не удалось запустить quick запись.",
     quick_record_hint_stop_failed: "Не удалось остановить quick запись.",
+    quick_record_hint_running_probe_wait: "Идёт запись. Первичная проверка сигнала через {seconds} сек.",
+    quick_record_hint_running_probe_ok: "Идёт запись: сигнал обнаружен ({peak}%). Устройство: {device}.",
+    quick_record_hint_running_probe_fail:
+      "Идёт запись, но за первые 5 сек сигнал не обнаружен. Проверьте, что звук встречи реально воспроизводится на системный выход.",
     quick_record_hint_failed: "Quick запись завершилась с ошибкой: {error}",
     quick_record_hint_completed: "Quick запись завершена: {path}",
+    quick_probe_failed: "Проверка quick-захвата не удалась: {detail}",
+    quick_probe_no_signal: "Проверка quick-захвата: сигнал не обнаружен. Устройство: {device}.",
+    quick_probe_signal_ok: "Проверка quick-захвата: сигнал есть ({peak}%). Устройство: {device}.",
     help_title: "Как настроить звук",
     help_item_1: "Установите драйвер loopback (BlackHole / VB-Cable / PulseAudio).",
     help_item_2: "macOS: BlackHole + Multi‑Output Device (колонки + BlackHole).",
@@ -887,14 +908,14 @@ const i18n = {
     help_mode_api:
       "Connect to meeting through API connector. MP3 recording starts with Start/Stop controls.",
     help_mode_quick:
-      "Fallback capture by meeting URL when normal capture is not available.",
+      "Paste a meeting URL and press Start: app opens the meeting and records via browser Share audio.",
     work_mode_hint:
       "Choose one mode: only its settings stay active, other sections are dimmed and blocked.",
     work_mode_active_label: "Active mode:",
     work_mode_driver: "Driver: system audio",
     work_mode_browser: "Browser: screen + audio",
     work_mode_api: "API: meeting connector",
-    work_mode_quick: "Link: quick fallback",
+    work_mode_quick: "Link: browser + audio",
     work_mode_desc_driver:
       "Realtime interview capture via virtual loopback driver (BlackHole/VB-CABLE/Monitor).",
     work_mode_desc_browser:
@@ -902,7 +923,7 @@ const i18n = {
     work_mode_desc_api:
       "Meeting API connector flow: record MP3 from meeting source without live transcript.",
     work_mode_desc_quick:
-      "Fallback mode: capture meeting by URL via quick recorder and optionally upload to agent.",
+      "Meeting-by-link browser capture: on Start we open the meeting and record tab audio via Share audio.",
     mode_settings_title: "Selected mode settings",
     mode_settings_browser_hint:
       "For browser capture, choose tab/screen and enable “Share audio”.",
@@ -912,10 +933,12 @@ const i18n = {
       "Set API connector parameters. Start/Stop in Recording controls MP3 session.",
     work_mode_recording_disabled:
       "Recording controls are disabled for this profile. Switch to Driver or Browser mode.",
+    work_mode_quick_no_realtime_diag:
+      "Realtime live monitor is not used in this mode. Use Check to run signal probe.",
     work_mode_upload_disabled:
       "File upload is disabled for this profile. Switch to API/file mode.",
     work_mode_quick_disabled:
-      "Quick fallback is disabled for this profile. Switch to Link quick fallback mode.",
+      "API connector mode is disabled for this profile. Switch to API meeting connector mode.",
     work_mode_device_disabled:
       "Driver controls are available only in Driver system-audio mode.",
     err_work_mode_switch_locked:
@@ -925,10 +948,15 @@ const i18n = {
     err_work_mode_upload_only:
       "Direct upload mode is removed from capture panels. Use MP3 import in Results.",
     err_work_mode_quick_only:
-      "Quick fallback is available only in Link quick fallback mode.",
+      "This flow is available only in API meeting connector mode.",
+    err_link_mode_url_missing: "Provide meeting URL for Link mode.",
+    link_mode_opening: "Opening meeting URL before capture...",
+    link_mode_open_failed_popup:
+      "Could not open meeting URL automatically. Open it manually in browser and continue.",
     connection_title: "Interview context",
     api_key_label: "API key (optional)",
-    help_api_key: "Needed only when authentication is enabled on local API.",
+    help_api_key:
+      "This is the local agent key (X-API-Key), not a meeting password/code. It is required only when local API authentication is enabled.",
     api_key_placeholder: "X-API-Key",
     api_record_url_label: "Meeting URL",
     help_api_meeting_url:
@@ -943,7 +971,7 @@ const i18n = {
     api_record_started: "API capture started. MP3 recording is in progress.",
     api_record_stopped: "Stopping API capture...",
     api_record_completed: "API recording completed. MP3 is available in Results.",
-    api_record_failed: "API recording failed. Check meeting URL and API key.",
+    api_record_failed: "API recording failed. Check meeting URL and local API settings.",
     interview_meta_title: "Interview context (optional)",
     help_interview_meta:
       "Recommended for comparable analytics across interviews, but not required to start.",
@@ -956,7 +984,7 @@ const i18n = {
       "Fields are optional, but they improve comparability between interviews.",
     llm_model_label: "LLM model",
     help_llm:
-      "LLM is used only when generating clean text and reports/tables in Results.",
+      "LLM is used in chat to generate formats from transcript. TXT transcript itself is built by STT without LLM.",
     embedding_model_label: "Embeddings model",
     help_embeddings_model:
       "Separate model for semantic RAG retrieval (embeddings). Used for search/compare across interviews. If unavailable, local hashing fallback is used.",
@@ -1148,19 +1176,22 @@ const i18n = {
     results_import_mp3_btn: "Import MP3",
     results_report_title: "2) TXT report from MP3",
     results_report_hint: "Choose report type (raw/clean), set file name, and save TXT.",
-    results_stt_title: "STT settings for reports",
+    results_stt_title: "STT settings for transcripts",
     results_report_name_label: "Report filename (required)",
     results_report_name_placeholder: "report_clean",
     results_generate_report_btn: "Build TXT",
     results_download_report_btn: "Save TXT",
     results_current_report_file: "Current report file",
-    results_convert_title: "2) Report conversion",
+    results_convert_title: "2) TXT transcripts and LLM chat",
+    results_convert_settings_toggle: "STT and model settings",
     results_convert_hint:
-      "Single block: build TXT (raw/clean) when needed, then export JSON/CSV/Table JSON.",
-    results_raw_lane_title: "Raw report lane",
-    results_clean_lane_title: "Clean report lane",
-    results_raw_report_name_placeholder: "raw_report_export",
-    results_clean_report_name_placeholder: "clean_report_export",
+      "First save TXT transcript (raw/clean). Generate other formats in the LLM chat below.",
+    results_raw_lane_title: "Raw transcript",
+    results_clean_lane_title: "Clean transcript",
+    results_raw_report_name_placeholder: "raw_transcript",
+    results_clean_report_name_placeholder: "clean_transcript",
+    results_transcript_name_label: "TXT filename",
+    results_transcript_name_hint: "Enter filename (without .txt)",
     results_export_txt: "TXT",
     results_export_json: "JSON",
     results_export_csv: "CSV",
@@ -1241,6 +1272,7 @@ const i18n = {
     llm_chat_preset_csv_prompt:
       "Build a CSV table from clean transcript with fields: candidate, criterion, evidence, score, risk, recommendation.",
     llm_chat_history_empty: "LLM chat history will appear here.",
+    llm_chat_files_title: "Result files",
     chat_attach_btn: "📎 Attach files",
     chat_attach_none: "No files selected",
     chat_attach_selected: "Files: {count}",
@@ -1338,7 +1370,7 @@ const i18n = {
     file_action_mp3: "MP3",
     prompt_rename_record: "Enter new recording name:",
     prompt_save_mp3_after_stop: "Recording is finished. Enter MP3 file name:",
-    prompt_report_name: "Enter report filename:",
+    prompt_report_name: "Enter TXT filename:",
     hint_record_renamed: "Recording name updated.",
     hint_record_rename_failed: "Failed to rename recording. Check local API logs.",
     hint_mp3_saved: "MP3 saved.",
@@ -1348,19 +1380,19 @@ const i18n = {
     hint_mp3_import_started: "Importing MP3 and creating record...",
     hint_mp3_import_done: "MP3 imported. You can build reports now.",
     hint_mp3_import_failed: "Failed to import MP3 file.",
-    hint_report_generated: "TXT report generated.",
-    hint_report_source_missing: "Select a record for report generation.",
-    hint_report_name_missing: "Set report filename.",
-    hint_report_missing: "Report not found yet. Generate TXT first.",
+    hint_report_generated: "TXT transcript saved.",
+    hint_report_source_missing: "Select a record for transcript export.",
+    hint_report_name_missing: "Set TXT filename.",
+    hint_report_missing: "TXT transcript is not available for this recording yet.",
     busy_overlay_title: "Please wait...",
-    busy_finish_title: "Finalizing recording",
+    busy_finish_title: "Building MP3",
     busy_finish_text:
       "Saving audio and preparing MP3. Text and reports are generated later on demand in Results.",
     busy_mp3_title: "Preparing MP3",
     busy_mp3_text: "Converting recording to MP3 and opening the save dialog.",
-    busy_report_title: "Building report",
+    busy_report_title: "Building transcript",
     busy_report_text:
-      "Generating TXT report from the selected recording. First run may perform STT/LLM and can take minutes on CPU.",
+      "Building TXT transcript from MP3 via STT (without LLM). Long recordings can take time.",
     report_picker_empty: "No records",
     download_raw: "Download raw",
     download_clean: "Download clean",
@@ -1381,16 +1413,14 @@ const i18n = {
     upload_video_label: "Video file",
     upload_video_btn: "Video (in development)",
     upload_hint: "Use MP3 import in Results to generate raw/clean and reports.",
-    quick_record_title: "Quick fallback capture",
+    quick_record_title: "Meeting link (browser capture)",
     quick_record_url_label: "Meeting URL",
     help_quick_url:
-      "Meeting URL for quick fallback recorder when regular capture path is unavailable.",
+      "Meeting URL. On Start, app opens this URL and records selected tab with Share audio.",
     quick_record_url_placeholder: "https://...",
     quick_record_duration_label: "Duration (sec)",
     help_quick_duration:
       "Maximum quick-record duration. Recording auto-stops when limit is reached.",
-    quick_record_transcribe_label: "Local transcription (disabled)",
-    quick_record_upload_label: "Upload recording to agent pipeline",
     quick_record_start_btn: "Quick start",
     quick_record_stop_btn: "Quick stop",
     quick_record_state_idle: "Idle",
@@ -1398,7 +1428,8 @@ const i18n = {
     quick_record_state_stopping: "Stopping",
     quick_record_state_completed: "Completed",
     quick_record_state_failed: "Failed",
-    quick_record_hint_ready: "Fallback recorder is ready.",
+    quick_record_hint_ready:
+      "Press Start: meeting URL will open, then select meeting tab in browser capture and enable Share audio.",
     quick_record_hint_started: "Fallback recording started.",
     quick_record_hint_stopped: "Fallback recording stop requested.",
     quick_record_hint_missing_url: "Provide meeting URL (http/https).",
@@ -1406,8 +1437,16 @@ const i18n = {
     quick_record_hint_already_running: "Quick recorder is already running.",
     quick_record_hint_start_failed: "Failed to start quick recorder.",
     quick_record_hint_stop_failed: "Failed to stop quick recorder.",
+    quick_record_hint_running_probe_wait:
+      "Recording is in progress. First signal check will be available in {seconds}s.",
+    quick_record_hint_running_probe_ok: "Recording is in progress: signal detected ({peak}%). Device: {device}.",
+    quick_record_hint_running_probe_fail:
+      "Recording is running, but no signal was detected in the first 5s. Verify that meeting audio is actually playing on system output.",
     quick_record_hint_failed: "Quick recorder failed: {error}",
     quick_record_hint_completed: "Quick recording completed: {path}",
+    quick_probe_failed: "Quick capture probe failed: {detail}",
+    quick_probe_no_signal: "Quick capture probe: no signal detected. Device: {device}.",
+    quick_probe_signal_ok: "Quick capture probe: signal detected ({peak}%). Device: {device}.",
     help_title: "Audio setup",
     help_item_1: "Install a loopback driver (BlackHole / VB-Cable / PulseAudio).",
     help_item_2: "macOS: BlackHole + Multi‑Output Device (speakers + BlackHole).",
@@ -1520,7 +1559,6 @@ const els = {
   apiConnectBlock: document.getElementById("apiConnectBlock"),
   apiRecordUrl: document.getElementById("apiRecordUrl"),
   apiRecordDuration: document.getElementById("apiRecordDuration"),
-  apiRecordUpload: document.getElementById("apiRecordUpload"),
   apiRecordHint: document.getElementById("apiRecordHint"),
   quickRecordBlock: document.getElementById("quickRecordBlock"),
   runDiagnostics: document.getElementById("runDiagnostics"),
@@ -1651,8 +1689,6 @@ const els = {
   busyOverlayText: document.getElementById("busyOverlayText"),
   quickRecordUrl: document.getElementById("quickRecordUrl"),
   quickRecordDuration: document.getElementById("quickRecordDuration"),
-  quickRecordTranscribe: document.getElementById("quickRecordTranscribe"),
-  quickRecordUpload: document.getElementById("quickRecordUpload"),
   quickRecordStart: document.getElementById("quickRecordStart"),
   quickRecordStop: document.getElementById("quickRecordStop"),
   quickRecordState: document.getElementById("quickRecordState"),
@@ -2098,6 +2134,18 @@ const hideBusyOverlay = () => {
   els.busyOverlay.setAttribute("aria-hidden", "true");
 };
 
+const showQuickStopOverlay = () => {
+  if (state.quickStopOverlayVisible) return;
+  state.quickStopOverlayVisible = true;
+  showBusyOverlay("busy_finish_title", "busy_finish_text");
+};
+
+const hideQuickStopOverlay = () => {
+  if (!state.quickStopOverlayVisible) return;
+  state.quickStopOverlayVisible = false;
+  hideBusyOverlay();
+};
+
 const setRecognitionDiagnosis = (messageKeyOrText = "", style = "muted", isRaw = false) => {
   if (!els.recognitionDiagnosis) return;
   const dict = i18n[state.lang] || {};
@@ -2114,7 +2162,11 @@ const setRecognitionDiagnosis = (messageKeyOrText = "", style = "muted", isRaw =
 };
 
 const deriveRecognitionDiagnosis = () => {
-  if (!getWorkModeConfig().supportsRealtime) {
+  const modeCfg = getWorkModeConfig();
+  if (!modeCfg.supportsRealtime) {
+    if (modeCfg.supportsQuick) {
+      return { key: "work_mode_quick_no_realtime_diag", style: "muted" };
+    }
     return { key: "work_mode_recording_disabled", style: "muted" };
   }
   const hint = String(state.statusHintKey || "").trim();
@@ -2281,6 +2333,9 @@ const renderComparisonTable = () => {
 };
 
 const fetchComparison = async () => {
+  if (!els.compareHint && !els.compareTableBody) {
+    return;
+  }
   if (els.refreshCompare) els.refreshCompare.disabled = true;
   setCompareHint("compare_hint_loading", "muted");
   try {
@@ -4084,7 +4139,8 @@ const syncCheckSignalButton = () => {
   const dict = i18n[state.lang];
   const busy = state.signalCheckInProgress;
   const recordingBlocked = isRecordingFlowActive();
-  const modeAllows = Boolean(getWorkModeConfig().supportsRealtime);
+  const modeCfg = getWorkModeConfig();
+  const modeAllows = Boolean(modeCfg.supportsRealtime || modeCfg.supportsQuick);
   els.checkSignal.disabled = busy || recordingBlocked || !modeAllows;
   els.checkSignal.textContent = busy
     ? dict.signal_check_running || "Checking capture..."
@@ -4847,15 +4903,11 @@ const getQuickControlSet = (cfg = getWorkModeConfig()) => {
     return {
       url: els.apiRecordUrl,
       duration: els.apiRecordDuration,
-      transcribe: null,
-      upload: els.apiRecordUpload,
     };
   }
   return {
     url: els.quickRecordUrl,
     duration: els.quickRecordDuration,
-    transcribe: els.quickRecordTranscribe,
-    upload: els.quickRecordUpload,
   };
 };
 
@@ -4934,14 +4986,10 @@ const applyWorkModeUi = () => {
   }
   const quickBusy = isQuickFlowActive();
   const quickControls = getQuickControlSet(cfg);
-  [quickControls.url, quickControls.duration, quickControls.transcribe, quickControls.upload].forEach((el) => {
+  [quickControls.url, quickControls.duration].forEach((el) => {
     if (!el) return;
     el.disabled = !quickEnabled || quickBusy;
   });
-  if (els.quickRecordTranscribe) {
-    els.quickRecordTranscribe.checked = false;
-    els.quickRecordTranscribe.disabled = true;
-  }
   if (els.apiKey) {
     els.apiKey.disabled = cfg.id === "api_upload" ? quickBusy : false;
   }
@@ -4962,7 +5010,7 @@ const applyWorkModeUi = () => {
     setRecordingButtons(false);
   }
   if (els.runDiagnostics && !state.signalCheckInProgress) {
-    els.runDiagnostics.disabled = !realtimeEnabled;
+    els.runDiagnostics.disabled = !(realtimeEnabled || quickEnabled);
   }
 };
 
@@ -5311,7 +5359,8 @@ const ensureStream = async (mode, options = {}) => {
     state.screenAudioMissing = Boolean(result.audioMissing) || !baseStream.getAudioTracks().length;
     state.screenAudioDriverFallback = false;
     if (state.screenAudioMissing) {
-      const driverFallback = await openSystemDriverFallbackStream();
+      const allowDriverFallback = getWorkModeConfig().id !== "link_fallback";
+      const driverFallback = allowDriverFallback ? await openSystemDriverFallbackStream() : null;
       if (driverFallback && driverFallback.stream && driverFallback.stream.getAudioTracks().length) {
         stopStreamTracksSafe(baseStream);
         baseStream = driverFallback.stream;
@@ -5453,6 +5502,7 @@ const mapStartError = (err, mode) => {
   if (message.includes("diagnostics_failed")) return "err_diagnostics_failed";
   if (message.includes("work_mode_realtime_only")) return "err_work_mode_realtime_only";
   if (message.includes("mic_same_as_system")) return "err_mic_same_as_system";
+  if (message.includes("link_mode_url_missing")) return "err_link_mode_url_missing";
   if (name === "NotSupportedError" || name === "TypeError") return "err_recorder_init";
   if (message.includes("MediaRecorder")) return "err_recorder_init";
   if (mode === "screen" && message.includes("no audio track")) return "err_screen_audio_missing";
@@ -6407,6 +6457,21 @@ const runCapturePreflight = async (mode) => {
   validateSystemSourceSelection();
 };
 
+const getLinkModeMeetingUrl = () => String((els.quickRecordUrl && els.quickRecordUrl.value) || "").trim();
+
+const isHttpMeetingUrl = (url) =>
+  typeof url === "string" && (url.startsWith("http://") || url.startsWith("https://"));
+
+const openMeetingUrlInBrowser = (url) => {
+  if (!isHttpMeetingUrl(url)) return false;
+  try {
+    const ref = window.open(url, "_blank", "noopener,noreferrer");
+    return Boolean(ref);
+  } catch (_err) {
+    return false;
+  }
+};
+
 const buildCaptureTargets = (captureMode) => {
   const targets = [];
   const hasInputStreams = Array.isArray(state.inputStreams) && state.inputStreams.length > 0;
@@ -6574,9 +6639,22 @@ const startRecording = async () => {
   resetSessionState();
   els.countdownValue.textContent = "9s";
   const captureMode = getCaptureMode();
+  const linkModeActive = workCfg.id === "link_fallback";
+  const linkMeetingUrl = linkModeActive ? getLinkModeMeetingUrl() : "";
   let interviewMeta = null;
 
   try {
+    if (linkModeActive) {
+      if (!isHttpMeetingUrl(linkMeetingUrl)) {
+        throw new Error("link_mode_url_missing");
+      }
+      setStatusHint("link_mode_opening", "muted");
+      const opened = openMeetingUrlInBrowser(linkMeetingUrl);
+      if (!opened) {
+        setStatusHint("link_mode_open_failed_popup", "muted");
+      }
+      await sleepMs(220);
+    }
     interviewMeta = validateInterviewMetadata();
     if (captureMode === "system" && !els.deviceSelect.value) {
       throw new Error("no_device_selected");
@@ -6680,9 +6758,9 @@ const startRecording = async () => {
     if (captureMode === "screen" && state.screenAudioDriverFallback) {
       setSignal("signal_low");
       setStatusHint("warn_screen_audio_driver_fallback", "muted");
-    } else if (captureMode === "screen" && state.screenAudioMissing && state.micAdded) {
-      setSignal("signal_low");
-      setStatusHint("warn_screen_audio_mic_only", "bad");
+    } else if (captureMode === "screen" && state.screenAudioMissing) {
+      setSignal(state.micAdded ? "signal_low" : "signal_no_audio");
+      setStatusHint(state.micAdded ? "warn_screen_audio_mic_only" : "err_screen_audio_missing", "bad");
     } else if (els.includeMic && els.includeMic.checked && !state.micAdded) {
       setStatusHint("warn_mic_not_added", "bad");
     } else {
@@ -6834,9 +6912,102 @@ const emergencyReleaseOnUnload = () => {
   }
 };
 
+const runQuickAudioProbe = async (options = {}) => {
+  const { forStart = false } = options;
+  const dict = i18n[state.lang] || {};
+  if (els.runDiagnostics) {
+    els.runDiagnostics.disabled = true;
+  }
+  setCheckSignalBusy(true);
+  _diagMarkAllMuted();
+  setDiagItemStatus(els.diagAudio, "running");
+  setDiagItemStatus(els.diagSystem, "running");
+  setDiagItemStatus(els.diagMic, "muted", dict.diag_skip_not_required || "not required");
+  setDiagItemStatus(els.diagStt, "running");
+  setDiagItemStatus(els.diagLlm, "muted", dict.diag_skip_not_required || "not required");
+  setDiagHint("diag_hint_running", "muted");
+  try {
+    const res = await fetch(`/v1/quick-record/probe?duration_sec=${QUICK_PROBE_DURATION_SEC}`, {
+      headers: buildHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`quick_probe_failed_${res.status}`);
+    }
+    const body = await res.json();
+    const probe = body && body.probe ? body.probe : {};
+    const signalOk = Boolean(probe.signal_ok);
+    const detail = String(probe.detail || "").trim();
+    const accessOk = !detail;
+    const peak = Number(probe.peak || 0);
+    const peakPercent = Number.isFinite(Number(probe.peak_percent))
+      ? Number(probe.peak_percent)
+      : Math.round(Math.max(0, Math.min(1, peak)) * 100);
+    const device = String(probe.device || "—");
+    setDiagItemStatus(els.diagAudio, accessOk ? "good" : "bad");
+    setDiagItemStatus(els.diagStt, accessOk ? "good" : "bad");
+    if (signalOk && accessOk) {
+      setDiagItemStatus(els.diagSystem, "good");
+      setDiagHint("diag_hint_ok", "good");
+      setSignal(peak >= 0.02 ? "signal_ok" : "signal_low");
+      setStatusHint(
+        formatText(dict.quick_probe_signal_ok || "Signal detected ({peak}%). Device: {device}.", {
+          peak: String(Math.round(peakPercent)),
+          device,
+        }),
+        "good",
+        true
+      );
+    } else {
+      setDiagItemStatus(els.diagSystem, "bad");
+      setDiagHint(accessOk ? "diag_hint_levels_low" : "diag_hint_fail", accessOk ? "muted" : "bad");
+      setSignal("signal_no_audio");
+      if (detail) {
+        setStatusHint(
+          formatText(dict.quick_probe_failed || "Quick capture probe failed: {detail}", { detail }),
+          "bad",
+          true
+        );
+      } else {
+        setStatusHint(
+          formatText(dict.quick_probe_no_signal || "No signal detected. Device: {device}.", { device }),
+          "bad",
+          true
+        );
+      }
+    }
+    const criticalPassed = Boolean(signalOk);
+    state.diagnosticsLast = {
+      criticalPassed,
+      systemOk: signalOk,
+      micOk: false,
+      micSkipped: true,
+      mp3Ready: signalOk,
+      ts: Date.now(),
+    };
+    if (forStart && !criticalPassed) {
+      throw new Error("diagnostics_failed");
+    }
+    return { criticalPassed, mp3Ready: signalOk, peak };
+  } finally {
+    if (els.runDiagnostics) {
+      els.runDiagnostics.disabled = false;
+    }
+    setCheckSignalBusy(false);
+  }
+};
+
 const checkSignal = async () => {
   if (state.signalCheckInProgress) return;
-  if (!getWorkModeConfig().supportsRealtime) {
+  const workCfg = getWorkModeConfig();
+  if (!workCfg.supportsRealtime) {
+    if (workCfg.supportsQuick) {
+      try {
+        await runQuickAudioProbe({ forStart: false });
+      } catch (err) {
+        console.warn("quick signal check failed", err);
+      }
+      return;
+    }
     setStatusHint("err_work_mode_realtime_only", "bad");
     return;
   }
@@ -6993,7 +7164,11 @@ const _diagMarkAllMuted = () => {
 
 const runDiagnostics = async (options = {}) => {
   const { forStart = false } = options;
-  if (!getWorkModeConfig().supportsRealtime) {
+  const workCfg = getWorkModeConfig();
+  if (!workCfg.supportsRealtime) {
+    if (workCfg.supportsQuick) {
+      return await runQuickAudioProbe({ forStart });
+    }
     if (forStart) {
       throw new Error("work_mode_realtime_only");
     }
@@ -7161,14 +7336,10 @@ const setQuickButtonsByStatus = (status) => {
     els.quickRecordStop.disabled = !quickEnabled || !busy;
   }
   const quickControls = getQuickControlSet(workCfg);
-  [quickControls.url, quickControls.duration, quickControls.transcribe, quickControls.upload].forEach((el) => {
+  [quickControls.url, quickControls.duration].forEach((el) => {
     if (!el) return;
     el.disabled = !quickEnabled || busy;
   });
-  if (els.quickRecordTranscribe) {
-    els.quickRecordTranscribe.checked = false;
-    els.quickRecordTranscribe.disabled = true;
-  }
   if (els.apiKey) {
     els.apiKey.disabled = workCfg.id === "api_upload" ? busy : false;
   }
@@ -7190,7 +7361,9 @@ const applyQuickJobStatus = (job) => {
   const currentMode = getWorkModeConfig();
   const quickPrimaryMode = Boolean(currentMode.supportsQuick) && !Boolean(currentMode.supportsRealtime);
   const apiMode = currentMode.id === "api_upload";
+  const dict = i18n[state.lang] || {};
   if (!job) {
+    hideQuickStopOverlay();
     state.quickJobId = null;
     setQuickStatus("quick_record_state_idle", "muted");
     setQuickButtonsByStatus("idle");
@@ -7211,16 +7384,67 @@ const applyQuickJobStatus = (job) => {
   }
 
   state.quickJobId = String(job.job_id || "");
+  const jobId = String(job.job_id || "").trim();
   const status = String(job.status || "").trim().toLowerCase();
   if (status === "queued" || status === "running") {
+    hideQuickStopOverlay();
     setQuickStatus("quick_record_state_running", "good");
     setQuickButtonsByStatus(status);
     setTranscriptUiState("recording");
+    const elapsed = Number(job.elapsed_sec || 0);
+    const peak = Number(job.audio_peak || 0);
+    const device = String(job.input_device || "").trim() || "—";
+    const peakPercent = Math.round(Math.max(0, Math.min(1, peak)) * 100);
+    if (elapsed < QUICK_PROBE_DURATION_SEC) {
+      const left = Math.max(0, QUICK_PROBE_DURATION_SEC - elapsed);
+      setQuickHint("quick_record_hint_running_probe_wait", "muted", false, {
+        seconds: String(left),
+      });
+      if (quickPrimaryMode && !apiMode) {
+        setStatusHint(
+          formatText(
+            dict.quick_record_hint_running_probe_wait ||
+              "Recording is in progress. Initial signal probe in {seconds} sec.",
+            { seconds: String(left) }
+          ),
+          "muted",
+          true
+        );
+      }
+    } else if (peak >= QUICK_SIGNAL_MIN_PEAK) {
+      setQuickHint("quick_record_hint_running_probe_ok", "good", false, {
+        peak: String(peakPercent),
+        device,
+      });
+      if (quickPrimaryMode && !apiMode) {
+        setStatusHint(
+          formatText(
+            dict.quick_record_hint_running_probe_ok ||
+              "Recording is in progress: signal detected ({peak}%). Device: {device}.",
+            { peak: String(peakPercent), device }
+          ),
+          "good",
+          true
+        );
+      }
+    } else {
+      setQuickHint("quick_record_hint_running_probe_fail", "bad");
+      if (quickPrimaryMode && !apiMode) {
+        setStatusHint(
+          dict.quick_record_hint_running_probe_fail ||
+            "Recording is in progress, but signal is still low. Check audio routing/meeting output.",
+          "bad",
+          true
+        );
+      }
+    }
     if (quickPrimaryMode) {
       clearCaptureLockConflict();
       setStatus("status_recording", "recording");
       if (apiMode) {
         setStatusHint("api_record_started", "good");
+      } else if (state.statusHintKey === "api_record_failed") {
+        setStatusHint("");
       }
     }
     if (!state.quickPollTimer) {
@@ -7232,6 +7456,7 @@ const applyQuickJobStatus = (job) => {
   }
 
   if (status === "stopping") {
+    showQuickStopOverlay();
     setQuickStatus("quick_record_state_stopping", "muted");
     setQuickButtonsByStatus(status);
     setTranscriptUiState("recording");
@@ -7239,6 +7464,8 @@ const applyQuickJobStatus = (job) => {
       setStatus("status_recording", "recording");
       if (apiMode) {
         setStatusHint("api_record_stopped", "muted");
+      } else {
+        setStatusHint("quick_record_state_stopping", "muted");
       }
     }
     if (!state.quickPollTimer) {
@@ -7251,6 +7478,7 @@ const applyQuickJobStatus = (job) => {
 
   clearQuickPollTimer();
   if (status === "completed") {
+    hideQuickStopOverlay();
     setQuickStatus("quick_record_state_completed", "good");
     setQuickButtonsByStatus(status);
     setTranscriptUiState(hasTranscriptContent() ? "ready" : "empty");
@@ -7258,15 +7486,45 @@ const applyQuickJobStatus = (job) => {
       setStatus("status_idle", "idle");
       if (apiMode) {
         setStatusHint("api_record_completed", "good");
+      } else {
+        setStatusHint(
+          formatText(dict.quick_record_hint_completed || "Quick recording completed. MP3: {path}", {
+            path: String(job.mp3_path || "—"),
+          }),
+          "good",
+          true
+        );
       }
     }
     setQuickHint("quick_record_hint_completed", "good", false, {
       path: String(job.mp3_path || "—"),
     });
+    const firstCompletedEvent = Boolean(jobId) && state.quickCompletedHandledJobId !== jobId;
+    if (firstCompletedEvent) {
+      state.quickCompletedHandledJobId = jobId;
+      const completionMeetingId = String(
+        (job && (job.local_meeting_id || job.agent_meeting_id)) || ""
+      ).trim();
+      void (async () => {
+        await fetchRecords();
+        if (!completionMeetingId || !els.recordsSelect) return;
+        const hasOption = Array.from(els.recordsSelect.options || []).some(
+          (opt) => String((opt && opt.value) || "").trim() === completionMeetingId
+        );
+        if (!hasOption) return;
+        els.recordsSelect.value = completionMeetingId;
+        state.meetingId = completionMeetingId;
+        state.reportMeetingSelection.raw = completionMeetingId;
+        state.reportMeetingSelection.clean = completionMeetingId;
+        syncResultsState();
+        await saveMeetingMp3(completionMeetingId, { askUser: true, syncRecordName: true });
+      })();
+    }
     return;
   }
 
   if (status === "failed") {
+    hideQuickStopOverlay();
     setQuickStatus("quick_record_state_failed", "bad");
     setQuickButtonsByStatus(status);
     setTranscriptUiState("empty");
@@ -7274,6 +7532,14 @@ const applyQuickJobStatus = (job) => {
       setStatus("status_error", "error");
       if (apiMode) {
         setStatusHint("api_record_failed", "bad");
+      } else {
+        setStatusHint(
+          formatText(dict.quick_record_hint_failed || "Quick recording failed: {error}", {
+            error: String(job.error || "unknown"),
+          }),
+          "bad",
+          true
+        );
       }
     }
     setQuickHint("quick_record_hint_failed", "bad", false, {
@@ -7282,6 +7548,7 @@ const applyQuickJobStatus = (job) => {
     return;
   }
 
+  hideQuickStopOverlay();
   setQuickStatus("quick_record_state_idle", "muted");
   setQuickButtonsByStatus(status);
   setTranscriptUiState(hasTranscriptContent() ? "ready" : "waiting");
@@ -7301,6 +7568,7 @@ const fetchQuickRecordStatus = async (options = {}) => {
     applyQuickJobStatus(body.job || null);
   } catch (err) {
     console.warn("quick record status failed", err);
+    hideQuickStopOverlay();
     clearQuickPollTimer();
     if (!silentErrors) {
       setQuickHint("quick_record_hint_start_failed", "bad");
@@ -7310,6 +7578,7 @@ const fetchQuickRecordStatus = async (options = {}) => {
 
 const startQuickRecord = async () => {
   const workCfg = getWorkModeConfig();
+  hideQuickStopOverlay();
   clearCaptureLockConflict();
   logUiEvent(
     "quick_record_start_click",
@@ -7340,9 +7609,7 @@ const startQuickRecord = async () => {
   }
 
   const transcribe = false;
-  const uploadToAgent = apiMode
-    ? true
-    : Boolean(quickControls.upload && quickControls.upload.checked);
+  const uploadToAgent = apiMode ? true : false;
   const agentApiKey = String((els.apiKey && els.apiKey.value) || "").trim();
 
   if (els.quickRecordStart) {
@@ -7367,7 +7634,14 @@ const startQuickRecord = async () => {
       return;
     }
     if (!res.ok) {
-      throw new Error(`quick_start_failed_${res.status}`);
+      let detail = "";
+      try {
+        const payload = await res.json();
+        detail = String((payload && payload.detail) || "").trim();
+      } catch (_err) {
+        detail = "";
+      }
+      throw new Error(detail ? `quick_start_failed_${res.status}_${detail}` : `quick_start_failed_${res.status}`);
     }
     const body = await res.json();
     setQuickHint("quick_record_hint_started", "good");
@@ -7386,6 +7660,10 @@ const startQuickRecord = async () => {
   } catch (err) {
     console.warn("quick record start failed", err);
     setQuickHint("quick_record_hint_start_failed", "bad");
+    const raw = String((err && err.message) || "").trim();
+    if (raw) {
+      setQuickHint(`${(i18n[state.lang] || {}).quick_record_hint_start_failed || "Failed to start quick recorder."} (${raw})`, "bad", true);
+    }
     logUiEvent(
       "quick_record_start_failed",
       { error_name: String((err && err.name) || ""), error_message: String((err && err.message) || err || "") },
@@ -7410,6 +7688,7 @@ const stopQuickRecord = async () => {
     return;
   }
   try {
+    showQuickStopOverlay();
     const res = await fetch("/v1/quick-record/stop", {
       method: "POST",
       headers: buildHeaders(),
@@ -7424,6 +7703,7 @@ const stopQuickRecord = async () => {
     }
     applyQuickJobStatus(body.job || null);
   } catch (err) {
+    hideQuickStopOverlay();
     console.warn("quick record stop failed", err);
     setQuickHint("quick_record_hint_stop_failed", "bad");
     if (apiMode) {
@@ -7464,7 +7744,7 @@ const updateCaptureUi = () => {
     btn.disabled = sttControlsLocked;
   });
   if (els.runDiagnostics && !state.signalCheckInProgress) {
-    els.runDiagnostics.disabled = !realtimeEnabled;
+    els.runDiagnostics.disabled = !(realtimeEnabled || Boolean(cfg.supportsQuick));
   }
   if (els.captureMethodChip) {
     const dict = i18n[state.lang] || {};
@@ -7716,7 +7996,7 @@ const _stripFileExt = (value, ext = "") => {
 };
 
 const ensureNamedReportInput = (inputEl, source = "raw") => {
-  const fallbackBase = source === "clean" ? "report_clean" : "report_raw";
+  const fallbackBase = source === "clean" ? "clean_transcript" : "raw_transcript";
   const current = String((inputEl && inputEl.value) || "").trim();
   if (current) return current;
   const dict = i18n[state.lang] || {};
@@ -8068,23 +8348,15 @@ const downloadCurrentReportTxt = async () => {
       return;
     }
   }
-  const fallback = source === "raw" ? "report_raw" : "report_clean";
+  const fallback = source === "raw" ? "raw_transcript" : "clean_transcript";
   const filename = normalizeFilenameWithExt(inputValue, fallback, "txt");
-  const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
-  let result = await downloadArtifact(url, filename, { preferPicker: true });
-  if (result && result.status === 404) {
-    let generated = false;
-    showBusyOverlay("busy_report_title", "busy_report_text");
-    try {
-      generated = await generateReportForMeeting(meetingId, source);
-    } finally {
-      hideBusyOverlay();
-    }
-    if (!generated) {
-      setStatusHint("hint_report_missing", "bad");
-      return;
-    }
+  const url = `/v1/meetings/${meetingId}/artifact?kind=${source}&fmt=txt`;
+  showBusyOverlay("busy_report_title", "busy_report_text");
+  let result = null;
+  try {
     result = await downloadArtifact(url, filename, { preferPicker: true });
+  } finally {
+    hideBusyOverlay();
   }
   if (!result || !result.ok) {
     setStatusHint("hint_report_missing", "bad");
@@ -8110,20 +8382,16 @@ const generateAndSaveCurrentReport = async () => {
     setStatusHint("hint_report_name_missing", "bad");
     return;
   }
-  let generated = false;
   let result = null;
   showBusyOverlay("busy_report_title", "busy_report_text");
   try {
-    generated = await generateReportForMeeting(meetingId, source);
-    if (generated) {
-      const filename = normalizeFilenameWithExt(
-        inputValue,
-        source === "raw" ? "report_raw" : "report_clean",
-        "txt"
-      );
-      const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${source}&fmt=txt`;
-      result = await downloadArtifact(url, filename, { preferPicker: true });
-    }
+    const filename = normalizeFilenameWithExt(
+      inputValue,
+      source === "raw" ? "raw_transcript" : "clean_transcript",
+      "txt"
+    );
+    const url = `/v1/meetings/${meetingId}/artifact?kind=${source}&fmt=txt`;
+    result = await downloadArtifact(url, filename, { preferPicker: true });
   } finally {
     hideBusyOverlay();
   }
@@ -8153,62 +8421,23 @@ const exportReportLane = async (source = "raw", exportKind = "report_txt") => {
     }
   }
 
-  if (exportKind === "report_txt") {
-    let ok = false;
-    let result = null;
-    showBusyOverlay("busy_report_title", "busy_report_text");
-    try {
-      ok = await generateReportForMeeting(meetingId, src);
-      if (ok) {
-        const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${src}&fmt=txt`;
-        const filename = normalizeFilenameWithExt(rawName, `report_${src}`, "txt");
-        result = await downloadArtifact(url, filename, { preferPicker: true });
-      }
-    } finally {
-      hideBusyOverlay();
-    }
-    if (!ok) return;
-    if (!result || !result.ok) {
-      setStatusHint("hint_report_missing", "bad");
-      return;
-    }
-  } else if (exportKind === "report_json") {
-    let ok = false;
-    let result = null;
-    showBusyOverlay("busy_report_title", "busy_report_text");
-    try {
-      ok = await generateReportForMeeting(meetingId, src);
-      if (ok) {
-        const url = `/v1/meetings/${meetingId}/artifact?kind=report&source=${src}&fmt=json`;
-        const filename = normalizeFilenameWithExt(rawName, `report_${src}`, "json");
-        result = await downloadArtifact(url, filename, { preferPicker: true });
-      }
-    } finally {
-      hideBusyOverlay();
-    }
-    if (!ok) return;
-    if (!result || !result.ok) {
-      setStatusHint("hint_report_missing", "bad");
-      return;
-    }
-  } else if (exportKind === "structured_csv") {
-    const ok = await generateStructuredForMeeting(meetingId, src);
-    if (!ok) return;
-    const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${src}&fmt=csv`;
-    const filename = normalizeFilenameWithExt(rawName, `structured_${src}`, "csv");
-    await downloadArtifact(url, filename, { preferPicker: true });
-  } else if (exportKind === "structured_json") {
-    const ok = await generateStructuredForMeeting(meetingId, src);
-    if (!ok) return;
-    const url = `/v1/meetings/${meetingId}/artifact?kind=structured&source=${src}&fmt=json`;
-    const filename = normalizeFilenameWithExt(rawName, `structured_${src}`, "json");
-    await downloadArtifact(url, filename, { preferPicker: true });
-  } else if (exportKind === "senior_brief") {
-    const ok = await generateSeniorBriefForMeeting(meetingId, src);
-    if (!ok) return;
-    const url = `/v1/meetings/${meetingId}/artifact?kind=senior_brief&source=${src}&fmt=txt`;
-    const filename = normalizeFilenameWithExt(rawName, `senior_brief_${src}`, "txt");
-    await downloadArtifact(url, filename, { preferPicker: true });
+  if (exportKind !== "report_txt") {
+    setStatusHint("hint_report_missing", "bad");
+    return;
+  }
+
+  let result = null;
+  showBusyOverlay("busy_report_title", "busy_report_text");
+  try {
+    const url = `/v1/meetings/${meetingId}/artifact?kind=${src}&fmt=txt`;
+    const filename = normalizeFilenameWithExt(rawName, `${src}_transcript`, "txt");
+    result = await downloadArtifact(url, filename, { preferPicker: true });
+  } finally {
+    hideBusyOverlay();
+  }
+  if (!result || !result.ok) {
+    setStatusHint("hint_report_missing", "bad");
+    return;
   }
   await fetchRecords();
   await fetchComparison();

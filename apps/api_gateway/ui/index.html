@@ -248,10 +248,6 @@
                 </label>
                 <input id="apiRecordDuration" type="number" min="5" step="5" value="900" />
               </div>
-              <label class="checkbox">
-                <input id="apiRecordUpload" type="checkbox" checked disabled />
-                <span data-i18n="api_record_upload_label">Отправить запись в пайплайн агента</span>
-              </label>
               <div id="apiRecordHint" class="hint" data-i18n="api_record_hint">
                 Запуск и остановка выполняются кнопками «Старт/Стоп» в блоке «Запись».
               </div>
@@ -276,28 +272,6 @@
                   placeholder="https://..."
                   data-i18n-placeholder="quick_record_url_placeholder"
                 />
-              </div>
-              <div class="field">
-                <label for="quickRecordDuration">
-                  <span data-i18n="quick_record_duration_label">Длительность (сек)</span>
-                  <span class="help-tip" data-help-i18n="help_quick_duration" aria-label="help">?</span>
-                </label>
-                <input id="quickRecordDuration" type="number" min="5" step="5" value="900" />
-              </div>
-              <div class="row">
-                <label class="checkbox">
-                  <input id="quickRecordTranscribe" type="checkbox" />
-                  <span data-i18n="quick_record_transcribe_label">Сделать локальную транскрибацию</span>
-                </label>
-                <label class="checkbox">
-                  <input id="quickRecordUpload" type="checkbox" />
-                  <span data-i18n="quick_record_upload_label">Отправить запись в пайплайн агента</span>
-                </label>
-              </div>
-              <div class="row">
-                <span id="quickRecordState" class="pill muted" data-i18n="quick_record_state_idle"
-                  >Не запущено</span
-                >
               </div>
               <div id="quickRecordHint" class="hint" data-i18n="quick_record_hint_ready">
                 Fallback запись готова к запуску.
@@ -553,112 +527,125 @@
 
         <div class="results-block results-block-convert">
           <div class="results-block-head">
-            <strong data-i18n="results_convert_title">2) Конвертация готовых отчётов</strong>
+            <strong data-i18n="results_convert_title">2) TXT транскрипты и LLM-чат</strong>
           </div>
-          <div class="results-stt-settings">
-            <div class="file-title" data-i18n="results_stt_title">Настройки STT для отчётов</div>
-            <div class="field language-profile-picker">
-              <label for="languageProfileSelect">
-                <span data-i18n="language_profile_label">Язык интервью</span>
-                <span class="help-tip" data-help-i18n="help_language_profile" aria-label="help">?</span>
-              </label>
-              <select id="languageProfileSelect">
-                <option value="mixed" data-i18n="language_profile_mixed">Mixed (RU + EN)</option>
-                <option value="ru" data-i18n="language_profile_ru">Русский</option>
-                <option value="en" data-i18n="language_profile_en">English</option>
-              </select>
-              <div class="hint" data-i18n="language_profile_hint">
-                Влияет на языковую подсказку STT и точность распознавания терминов.
+          <details class="convert-settings-collapse">
+            <summary data-i18n="results_convert_settings_toggle">Настройки STT и моделей</summary>
+            <div class="convert-settings-body">
+              <div class="results-stt-settings">
+                <div class="file-title" data-i18n="results_stt_title">Настройки STT для транскриптов</div>
+                <div class="field language-profile-picker">
+                  <label for="languageProfileSelect">
+                    <span data-i18n="language_profile_label">Язык интервью</span>
+                    <span class="help-tip" data-help-i18n="help_language_profile" aria-label="help">?</span>
+                  </label>
+                  <select id="languageProfileSelect">
+                    <option value="mixed" data-i18n="language_profile_mixed">Mixed (RU + EN)</option>
+                    <option value="ru" data-i18n="language_profile_ru">Русский</option>
+                    <option value="en" data-i18n="language_profile_en">English</option>
+                  </select>
+                  <div class="hint" data-i18n="language_profile_hint">
+                    Влияет на языковую подсказку STT и точность распознавания терминов.
+                  </div>
+                </div>
+                <div class="field quality-picker">
+                  <label>
+                    <span data-i18n="quality_profile_label">Профиль качества</span>
+                    <span class="help-tip" data-help-i18n="help_quality_profile" aria-label="help">?</span>
+                  </label>
+                  <div class="segmented">
+                    <button id="qualityFast" class="ghost" data-quality="fast" data-i18n="quality_fast">
+                      Fast
+                    </button>
+                    <button
+                      id="qualityBalanced"
+                      class="ghost active"
+                      data-quality="balanced"
+                      data-i18n="quality_balanced"
+                    >
+                      Balanced
+                    </button>
+                    <button
+                      id="qualityAccurate"
+                      class="ghost"
+                      data-quality="accurate"
+                      data-i18n="quality_accurate"
+                    >
+                      Accurate
+                    </button>
+                  </div>
+                  <div id="qualityHint" class="hint" data-i18n="quality_balanced_desc">
+                    Баланс точности и задержки.
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="field quality-picker">
-              <label>
-                <span data-i18n="quality_profile_label">Профиль качества</span>
-                <span class="help-tip" data-help-i18n="help_quality_profile" aria-label="help">?</span>
-              </label>
-              <div class="segmented">
-                <button id="qualityFast" class="ghost" data-quality="fast" data-i18n="quality_fast">
-                  Fast
-                </button>
-                <button
-                  id="qualityBalanced"
-                  class="ghost active"
-                  data-quality="balanced"
-                  data-i18n="quality_balanced"
+              <div class="field">
+                <label for="llmModelSelect">
+                  <span data-i18n="llm_model_label">LLM модель</span>
+                  <span class="help-tip" data-help-i18n="help_llm" aria-label="help">?</span>
+                </label>
+                <div class="row llm-row">
+                  <select id="llmModelSelect"></select>
+                  <button id="scanLlmModels" class="ghost" data-i18n="llm_scan_btn">
+                    Сканировать
+                  </button>
+                  <button id="applyLlmModel" class="ghost" data-i18n="llm_apply_btn">
+                    Сменить модель
+                  </button>
+                </div>
+                <div id="llmStatusText" class="hint llm-status" data-i18n="llm_status_loading">
+                  Загружаем настройки LLM...
+                </div>
+              </div>
+              <div class="field">
+                <label for="embeddingModelSelect">
+                  <span data-i18n="embedding_model_label">Embeddings модель</span>
+                  <span class="help-tip" data-help-i18n="help_embeddings_model" aria-label="help">?</span>
+                </label>
+                <div class="row llm-row">
+                  <select id="embeddingModelSelect"></select>
+                  <button id="scanEmbeddingModels" class="ghost" data-i18n="embedding_scan_btn">
+                    Сканировать
+                  </button>
+                  <button id="applyEmbeddingModel" class="ghost" data-i18n="embedding_apply_btn">
+                    Сменить модель
+                  </button>
+                </div>
+                <div
+                  id="embeddingStatusText"
+                  class="hint llm-status"
+                  data-i18n="embedding_status_loading"
                 >
-                  Balanced
-                </button>
-                <button
-                  id="qualityAccurate"
-                  class="ghost"
-                  data-quality="accurate"
-                  data-i18n="quality_accurate"
-                >
-                  Accurate
-                </button>
+                  Загружаем настройки embeddings...
+                </div>
               </div>
-              <div id="qualityHint" class="hint" data-i18n="quality_balanced_desc">
-                Баланс точности и задержки.
+              <div class="hint" data-i18n="results_convert_hint">
+                Для каждого типа отчёта выберите запись и формат выгрузки.
               </div>
             </div>
-          </div>
-          <div class="field">
-            <label for="llmModelSelect">
-              <span data-i18n="llm_model_label">LLM модель</span>
-              <span class="help-tip" data-help-i18n="help_llm" aria-label="help">?</span>
-            </label>
-            <div class="row llm-row">
-              <select id="llmModelSelect"></select>
-              <button id="scanLlmModels" class="ghost" data-i18n="llm_scan_btn">
-                Сканировать
-              </button>
-              <button id="applyLlmModel" class="ghost" data-i18n="llm_apply_btn">
-                Сменить модель
-              </button>
-            </div>
-            <div id="llmStatusText" class="hint llm-status" data-i18n="llm_status_loading">
-              Загружаем настройки LLM...
-            </div>
-          </div>
-          <div class="field">
-            <label for="embeddingModelSelect">
-              <span data-i18n="embedding_model_label">Embeddings модель</span>
-              <span class="help-tip" data-help-i18n="help_embeddings_model" aria-label="help">?</span>
-            </label>
-            <div class="row llm-row">
-              <select id="embeddingModelSelect"></select>
-              <button id="scanEmbeddingModels" class="ghost" data-i18n="embedding_scan_btn">
-                Сканировать
-              </button>
-              <button id="applyEmbeddingModel" class="ghost" data-i18n="embedding_apply_btn">
-                Сменить модель
-              </button>
-            </div>
-            <div
-              id="embeddingStatusText"
-              class="hint llm-status"
-              data-i18n="embedding_status_loading"
-            >
-              Загружаем настройки embeddings...
-            </div>
-          </div>
-          <div class="hint" data-i18n="results_convert_hint">
-            Для каждого типа отчёта выберите запись и формат выгрузки.
-          </div>
+          </details>
           <div class="report-lane-grid">
             <div class="report-lane">
               <div class="row row-wrap lane-title-row">
-                <div class="file-title" data-i18n="results_raw_lane_title">Грязный отчёт (Raw)</div>
+                <div class="file-title" data-i18n="results_raw_lane_title">Грязный транскрипт (Raw)</div>
                 <span class="help-tip" data-help-i18n="help_transcript_raw" aria-label="help">?</span>
               </div>
               <div class="row">
                 <select id="rawReportSelect"></select>
-                <input
-                  id="rawReportNameInput"
-                  type="text"
-                  placeholder="raw_report_export"
-                  data-i18n-placeholder="results_raw_report_name_placeholder"
-                />
+                <div class="report-name-field">
+                  <label for="rawReportNameInput" data-i18n="results_transcript_name_label"
+                    >Имя TXT файла</label
+                  >
+                  <input
+                    id="rawReportNameInput"
+                    type="text"
+                    placeholder="raw_transcript"
+                    data-i18n-placeholder="results_raw_report_name_placeholder"
+                  />
+                  <div class="hint" data-i18n="results_transcript_name_hint">
+                    Введите имя файла (без .txt)
+                  </div>
+                </div>
               </div>
               <div class="file-actions report-actions">
                 <button
@@ -668,47 +655,31 @@
                   data-i18n="results_export_txt"
                 >
                   TXT
-                </button>
-                <button
-                  class="ghost report-action-btn"
-                  data-export-kind="report_json"
-                  data-export-source="raw"
-                  data-i18n="results_export_json"
-                >
-                  JSON
-                </button>
-                <button
-                  class="ghost report-action-btn"
-                  data-export-kind="structured_csv"
-                  data-export-source="raw"
-                  data-i18n="results_export_csv"
-                >
-                  CSV
-                </button>
-                <button
-                  class="ghost report-action-btn"
-                  data-export-kind="structured_json"
-                  data-export-source="raw"
-                  data-i18n="results_export_table_json"
-                >
-                  Таблица JSON
                 </button>
               </div>
             </div>
 
             <div class="report-lane">
               <div class="row row-wrap lane-title-row">
-                <div class="file-title" data-i18n="results_clean_lane_title">Чистый отчёт (Clean)</div>
+                <div class="file-title" data-i18n="results_clean_lane_title">Чистый транскрипт (Clean)</div>
                 <span class="help-tip" data-help-i18n="help_transcript_clean" aria-label="help">?</span>
               </div>
               <div class="row">
                 <select id="cleanReportSelect"></select>
-                <input
-                  id="cleanReportNameInput"
-                  type="text"
-                  placeholder="clean_report_export"
-                  data-i18n-placeholder="results_clean_report_name_placeholder"
-                />
+                <div class="report-name-field">
+                  <label for="cleanReportNameInput" data-i18n="results_transcript_name_label"
+                    >Имя TXT файла</label
+                  >
+                  <input
+                    id="cleanReportNameInput"
+                    type="text"
+                    placeholder="clean_transcript"
+                    data-i18n-placeholder="results_clean_report_name_placeholder"
+                  />
+                  <div class="hint" data-i18n="results_transcript_name_hint">
+                    Введите имя файла (без .txt)
+                  </div>
+                </div>
               </div>
               <div class="file-actions report-actions">
                 <button
@@ -718,30 +689,6 @@
                   data-i18n="results_export_txt"
                 >
                   TXT
-                </button>
-                <button
-                  class="ghost report-action-btn"
-                  data-export-kind="report_json"
-                  data-export-source="clean"
-                  data-i18n="results_export_json"
-                >
-                  JSON
-                </button>
-                <button
-                  class="ghost report-action-btn"
-                  data-export-kind="structured_csv"
-                  data-export-source="clean"
-                  data-i18n="results_export_csv"
-                >
-                  CSV
-                </button>
-                <button
-                  class="ghost report-action-btn"
-                  data-export-kind="structured_json"
-                  data-export-source="clean"
-                  data-i18n="results_export_table_json"
-                >
-                  Таблица JSON
                 </button>
               </div>
             </div>
@@ -782,190 +729,9 @@
               <button id="llmChatPresetJson" class="ghost" data-i18n="llm_chat_preset_json">JSON</button>
               <button id="llmChatPresetCsv" class="ghost" data-i18n="llm_chat_preset_csv">CSV</button>
             </div>
+            <div class="llm-chat-files-head" data-i18n="llm_chat_files_title">Файлы результата</div>
+            <div id="llmArtifactFiles" class="llm-artifact-files"></div>
           </div>
-        </div>
-
-        <div class="comparison-grid">
-        <div class="compare-block">
-          <div class="row compare-header">
-            <strong data-i18n="compare_title">Сравнение интервью</strong>
-            <button id="refreshCompare" class="ghost" data-i18n="compare_refresh">
-              Обновить
-            </button>
-          </div>
-          <div id="compareHint" class="hint" data-i18n="compare_hint_idle">
-            Сводка покажет сравнение кандидатов после генерации отчётов.
-          </div>
-          <div class="row compare-actions">
-            <button id="downloadCompareCsv" class="ghost" data-i18n="compare_export_csv">
-              Экспорт CSV
-            </button>
-            <button id="downloadCompareJson" class="ghost" data-i18n="compare_export_json">
-              Экспорт JSON
-            </button>
-          </div>
-          <div class="compare-table-wrap">
-            <table id="compareTable" class="compare-table">
-              <thead>
-                <tr>
-                  <th data-i18n="compare_col_candidate">Кандидат</th>
-                  <th data-i18n="compare_col_vacancy">Вакансия</th>
-                  <th data-i18n="compare_col_level">Уровень</th>
-                  <th data-i18n="compare_col_score">Score</th>
-                  <th data-i18n="compare_col_decision">Решение</th>
-                  <th data-i18n="compare_col_quality">Качество</th>
-                </tr>
-              </thead>
-              <tbody id="compareTableBody"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="rag-workspace">
-          <div class="row compare-header">
-            <strong data-i18n="rag_title">RAG чат / сравнение интервью</strong>
-            <div class="row row-wrap rag-header-actions">
-              <button id="ragRefreshMeetingsBtn" class="ghost" data-i18n="rag_refresh_meetings">
-                Обновить список
-              </button>
-              <button id="ragIndexSelectedBtn" class="ghost" data-i18n="rag_index_selected">
-                Индексировать выбранные
-              </button>
-              <button id="ragRunBtn" class="ghost" data-i18n="rag_run_btn">
-                Выполнить запрос
-              </button>
-            </div>
-          </div>
-          <div id="ragHint" class="hint" data-i18n="rag_hint_idle">
-            Выберите интервью, задайте запрос и получите ответ с цитатами из транскриптов.
-          </div>
-
-          <div class="rag-layout">
-            <div class="rag-panel">
-              <div class="file-title" data-i18n="rag_meeting_picker_title">Интервью для сравнения</div>
-              <div class="row row-wrap rag-picker-actions">
-                <button id="ragSelectCurrentBtn" class="ghost" data-i18n="rag_select_current">
-                  Текущая запись
-                </button>
-                <button id="ragSelectAllBtn" class="ghost" data-i18n="rag_select_all">
-                  Выбрать все
-                </button>
-                <button id="ragClearSelectionBtn" class="ghost" data-i18n="rag_clear_selection">
-                  Очистить
-                </button>
-              </div>
-              <div class="rag-saved-set-row">
-                <select id="ragSavedSetSelect">
-                  <option value="" data-i18n="rag_saved_set_none">Сохраненные наборы</option>
-                </select>
-                <button id="ragSaveSetBtn" class="ghost" data-i18n="rag_saved_set_save">Сохранить набор</button>
-                <button id="ragLoadSetBtn" class="ghost" data-i18n="rag_saved_set_load">Загрузить</button>
-                <button id="ragDeleteSetBtn" class="ghost" data-i18n="rag_saved_set_delete">Удалить</button>
-              </div>
-              <div class="hint" data-i18n="rag_meeting_picker_hint">
-                Если ничего не выбрано, поиск пойдет по последним записям.
-              </div>
-              <div id="ragMeetingPicker" class="rag-meeting-picker"></div>
-            </div>
-
-            <div class="rag-panel">
-              <div class="row compare-header">
-                <div class="chat-title-with-help">
-                  <div class="file-title" data-i18n="rag_query_title">Запрос по выбранным интервью (compare)</div>
-                  <span class="help-tip" data-help-i18n="help_rag_chat_any_format" aria-label="help">?</span>
-                </div>
-                <button id="ragChatSendBtn" class="ghost" data-i18n="rag_chat_send_btn">Отправить</button>
-              </div>
-              <div id="ragChatHint" class="hint" data-i18n="rag_chat_hint_idle">
-                RAG-чат сравнивает выбранные интервью и отвечает с цитатами.
-              </div>
-              <div id="ragChatHistory" class="llm-chat-history rag-chat-history"></div>
-              <div class="rag-query-grid">
-                <div class="field">
-                  <label for="ragSourceSelect">
-                    <span data-i18n="rag_source_label">Источник транскрипта</span>
-                    <span class="help-tip" data-help-i18n="help_transcript_sources" aria-label="help">?</span>
-                  </label>
-                  <select id="ragSourceSelect">
-                    <option value="clean" data-i18n="rag_source_clean">Clean</option>
-                    <option value="normalized" data-i18n="rag_source_normalized">Normalized</option>
-                    <option value="raw" data-i18n="rag_source_raw">Raw</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="ragTopKInput">
-                    <span data-i18n="rag_topk_label">Top-K цитат</span>
-                  </label>
-                  <input id="ragTopKInput" type="number" min="1" max="50" value="8" />
-                </div>
-              </div>
-              <div class="rag-query-options">
-                <label class="checkbox-line">
-                  <input id="ragUseLlmAnswer" type="checkbox" checked />
-                  <span data-i18n="rag_use_llm_answer">Сгенерировать ответ LLM по найденным цитатам</span>
-                </label>
-                <label class="checkbox-line">
-                  <input id="ragAutoIndex" type="checkbox" checked />
-                  <span data-i18n="rag_auto_index">Автоиндексация выбранных интервью перед запросом</span>
-                </label>
-                <label class="checkbox-line">
-                  <input id="ragForceReindex" type="checkbox" />
-                  <span data-i18n="rag_force_reindex">Принудительно пересобрать индекс</span>
-                </label>
-              </div>
-              <div class="field">
-                <label for="ragQueryInput">
-                  <span data-i18n="rag_query_input_label">Вопрос / задача</span>
-                </label>
-                <textarea
-                  id="ragQueryInput"
-                  rows="4"
-                  placeholder="Сравни кандидатов по backend/system design и собери таблицу с сильными и слабыми сторонами."
-                  data-i18n-placeholder="rag_query_input_placeholder"
-                ></textarea>
-              </div>
-              <div class="row row-wrap chat-attach-row">
-                <button id="ragChatAttachBtn" class="ghost clip-btn" data-i18n="chat_attach_btn">
-                  📎 Прикрепить файлы
-                </button>
-                <input id="ragChatAttachInput" type="file" multiple class="hidden-file-input" />
-                <div id="ragChatAttachments" class="chat-attachments"></div>
-              </div>
-              <div class="field">
-                <label for="ragAnswerPromptInput">
-                  <span data-i18n="rag_answer_prompt_label">Доп. инструкция для ответа (опционально)</span>
-                </label>
-                <textarea
-                  id="ragAnswerPromptInput"
-                  rows="2"
-                  placeholder="Ответь кратко, затем перечисли доказательства с ссылками [n]."
-                  data-i18n-placeholder="rag_answer_prompt_placeholder"
-                ></textarea>
-              </div>
-              <div class="row row-wrap rag-export-actions">
-                <button id="ragExportJsonBtn" class="ghost" data-i18n="rag_export_json">Экспорт JSON</button>
-                <button id="ragExportCsvBtn" class="ghost" data-i18n="rag_export_csv">Экспорт CSV цитат</button>
-                <button id="ragExportTxtBtn" class="ghost" data-i18n="rag_export_txt">Экспорт TXT ответа</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="rag-output">
-            <div class="rag-answer-block">
-              <div class="row compare-header">
-                <strong data-i18n="rag_answer_title">Ответ (LLM/RAG)</strong>
-                <span id="ragResultMeta" class="pill muted">—</span>
-              </div>
-              <pre id="ragAnswerText" class="rag-answer-text"></pre>
-            </div>
-            <div class="rag-hits-block">
-              <div class="row compare-header">
-                <strong data-i18n="rag_hits_title">Цитаты / найденные фрагменты</strong>
-              </div>
-              <div id="ragHitsList" class="rag-hits-list"></div>
-            </div>
-          </div>
-        </div>
         </div>
         </div>
       </section>
@@ -990,6 +756,6 @@
       </span>
     </footer>
 
-    <script src="/ui/app.js?v=20260227_phase4i_compact_chats"></script>
+    <script src="/ui/app.js?v=20260227_phase4k_txt_transcript_only"></script>
   </body>
 </html>

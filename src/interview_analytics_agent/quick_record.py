@@ -3,14 +3,15 @@ Quick recorder for video meetings.
 
 Combines script-like usability (one-command recording) with production agent features:
 - segmented loopback recording with overlap
-- mp3 conversion and optional local whisper transcription
-- optional upload into Interview Analytics Agent pipeline
+- mp3 conversion (record-first)
+- optional upload into Interview Analytics Agent pipeline (API mode)
 - optional summary email via existing SMTP delivery provider
 """
 
 from __future__ import annotations
 
 import base64
+import shutil
 import subprocess
 import threading
 import time
@@ -19,15 +20,33 @@ import webbrowser
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
 from interview_analytics_agent.common.logging import get_project_logger
 from interview_analytics_agent.delivery.base import DeliveryResult
 from interview_analytics_agent.delivery.email.sender import SMTPEmailProvider
+from interview_analytics_agent.domain.enums import ConsentStatus, PipelineStatus
+from interview_analytics_agent.services.audio_artifact_service import materialize_meeting_audio_mp3
+from interview_analytics_agent.services.meeting_service import create_meeting
+from interview_analytics_agent.storage import records
+from interview_analytics_agent.storage.db import db_session
+from interview_analytics_agent.storage.repositories import MeetingRepository
 
 log = get_project_logger()
+
+_QUICK_CAPTURE_DEVICE_HINTS = (
+    "blackhole",
+    "vb-cable",
+    "cable",
+    "loopback",
+    "monitor",
+    "virtual",
+    "aggregate",
+    "multi-output",
+)
+_QUICK_SIGNAL_MIN_PEAK = 0.001
 
 
 @dataclass
@@ -54,6 +73,7 @@ class QuickRecordConfig:
 
     email_to: list[str] | None = None
     external_stop_event: threading.Event | None = None
+    progress_callback: Callable[[dict[str, Any]], None] | None = None
 
 
 @dataclass
@@ -70,6 +90,7 @@ class QuickRecordResult:
     transcript_path: Path | None
     agent_upload: AgentUploadResult | None
     email_result: DeliveryResult | None
+    local_meeting_id: str | None = None
 
 
 @dataclass
@@ -83,6 +104,11 @@ class QuickRecordJobStatus:
     mp3_path: str | None = None
     transcript_path: str | None = None
     agent_meeting_id: str | None = None
+    local_meeting_id: str | None = None
+    elapsed_sec: int = 0
+    segment_count: int = 0
+    audio_peak: float = 0.0
+    input_device: str | None = None
 
 
 @dataclass
@@ -96,6 +122,10 @@ class _QuickRecordJob:
     finished_at: str | None = None
     error: str | None = None
     result: QuickRecordResult | None = None
+    elapsed_sec: int = 0
+    segment_count: int = 0
+    audio_peak: float = 0.0
+    input_device: str | None = None
 
 
 def segment_step_seconds(segment_length_sec: int, overlap_sec: int) -> int:
@@ -147,6 +177,88 @@ def build_chunk_payload(
     }
 
 
+def _safe_device_name(device: Any) -> str:
+    for attr in ("name", "id"):
+        try:
+            value = getattr(device, attr, None)
+            if value:
+                return str(value)
+        except Exception:
+            continue
+    try:
+        return str(device)
+    except Exception:
+        return "unknown_device"
+
+
+def _select_capture_device(sc_module: Any) -> tuple[Any, str]:
+    devices: list[Any] = []
+    seen: set[str] = set()
+    for getter in (
+        lambda: list(sc_module.all_microphones(include_loopback=True)),
+        lambda: list(sc_module.all_microphones()),
+        lambda: [sc_module.default_microphone()],
+    ):
+        try:
+            items = [d for d in getter() if d is not None]
+        except Exception:
+            items = []
+        for dev in items:
+            key = _safe_device_name(dev).strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            devices.append(dev)
+    if not devices:
+        raise RuntimeError(
+            "Не найдено устройств захвата. Проверьте микрофон/виртуальный драйвер и разрешения аудио."
+        )
+
+    def score(dev: Any) -> tuple[int, int]:
+        name = _safe_device_name(dev).lower()
+        has_hint = 1 if any(h in name for h in _QUICK_CAPTURE_DEVICE_HINTS) else 0
+        is_loopback = 1 if bool(getattr(dev, "is_loopback", False)) else 0
+        return (has_hint, is_loopback)
+
+    selected = max(devices, key=score)
+    return selected, _safe_device_name(selected)
+
+
+def probe_quick_capture(
+    *,
+    duration_sec: int = 5,
+    sample_rate: int = 44100,
+    block_size: int = 512,
+) -> dict[str, Any]:
+    duration = max(1, int(duration_sec))
+    try:
+        import soundcard as sc
+    except ImportError as exc:
+        raise RuntimeError("Для quick-захвата нужен пакет soundcard.") from exc
+
+    device, device_name = _select_capture_device(sc)
+    peak_abs = 0.0
+    start = time.monotonic()
+    with device.recorder(samplerate=int(sample_rate), blocksize=max(64, int(block_size))) as recorder:
+        while (time.monotonic() - start) < float(duration):
+            chunk = recorder.record(numframes=max(64, int(block_size)))
+            if chunk is None:
+                continue
+            try:
+                chunk_peak = float(abs(chunk).max())
+            except Exception:
+                chunk_peak = 0.0
+            if chunk_peak > peak_abs:
+                peak_abs = chunk_peak
+    return {
+        "signal_ok": bool(peak_abs >= _QUICK_SIGNAL_MIN_PEAK),
+        "peak": float(peak_abs),
+        "peak_percent": round(max(0.0, min(1.0, float(peak_abs))) * 100.0, 2),
+        "device": device_name,
+        "duration_sec": duration,
+    }
+
+
 class SegmentedLoopbackRecorder:
     def __init__(
         self,
@@ -156,26 +268,40 @@ class SegmentedLoopbackRecorder:
         block_size: int,
         segment_length_sec: int,
         overlap_sec: int,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.base_path = base_path
         self.sample_rate = sample_rate
         self.block_size = block_size
         self.segment_length_sec = segment_length_sec
         self.overlap_sec = overlap_sec
+        self.progress_callback = progress_callback
         self.step_sec = segment_step_seconds(segment_length_sec, overlap_sec)
         self.stop_event = threading.Event()
         self.segment_paths: list[Path] = []
         self._active: list[dict[str, Any]] = []
         self.error: Exception | None = None
+        self.input_device_name: str = ""
+        self.elapsed_sec: int = 0
+        self.audio_peak: float = 0.0
+        self._last_progress_emit_sec: int = -1
 
-    def _select_loopback(self, sc_module: Any):
-        mics = list(sc_module.all_microphones())
-        loopback = next((m for m in mics if getattr(m, "is_loopback", False)), None)
-        if loopback is None:
-            loopback = sc_module.default_microphone()
-        if loopback is None:
-            raise RuntimeError("No microphone/loopback device available")
-        return loopback
+    def _emit_progress(self, elapsed_sec: int) -> None:
+        if not self.progress_callback:
+            return
+        if elapsed_sec == self._last_progress_emit_sec:
+            return
+        self._last_progress_emit_sec = elapsed_sec
+        payload = {
+            "elapsed_sec": int(max(0, elapsed_sec)),
+            "segment_count": int(len(self.segment_paths)),
+            "audio_peak": float(max(0.0, self.audio_peak)),
+            "input_device": self.input_device_name or "",
+        }
+        try:
+            self.progress_callback(payload)
+        except Exception:
+            pass
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -190,17 +316,53 @@ class SegmentedLoopbackRecorder:
                     "quick recorder requires soundcard + soundfile (pip install -r requirements.txt)"
                 ) from exc
 
-            loopback = self._select_loopback(sc)
+            loopback, device_name = _select_capture_device(sc)
+            self.input_device_name = device_name
+            log.info(
+                "quick_record_input_device_selected",
+                extra={"payload": {"device": device_name}},
+            )
             next_start = 0.0
             index = 0
             started_at = time.monotonic()
 
-            with loopback.recorder(samplerate=self.sample_rate, blocksize=self.block_size) as recorder:
-                channels = len(recorder.channelmap)
+            recorder_cm = None
+            open_error: Exception | None = None
+            candidate_sizes: list[int] = []
+            for candidate in [int(self.block_size), 512, 256, 128, 64]:
+                if candidate <= 0:
+                    continue
+                if candidate in candidate_sizes:
+                    continue
+                candidate_sizes.append(candidate)
+            for candidate in candidate_sizes:
+                try:
+                    recorder_cm = loopback.recorder(samplerate=self.sample_rate, blocksize=candidate)
+                    self.block_size = candidate
+                    break
+                except Exception as exc:
+                    open_error = exc
+                    msg = str(exc).lower()
+                    if "blocksize" in msg:
+                        continue
+                    raise
+            if recorder_cm is None:
+                raise RuntimeError(f"Recording failed: {open_error or 'unable to open loopback recorder'}")
 
+            with recorder_cm as recorder:
                 while not self.stop_event.is_set():
                     data = recorder.record(numframes=self.block_size)
+                    if hasattr(data, "ndim") and int(getattr(data, "ndim", 1)) == 1:
+                        data = data.reshape((-1, 1))
+                    channels = int(getattr(data, "shape", [0, 1])[1]) if hasattr(data, "shape") else 1
                     elapsed = time.monotonic() - started_at
+                    self.elapsed_sec = int(max(0.0, elapsed))
+                    try:
+                        chunk_peak = float(abs(data).max())
+                    except Exception:
+                        chunk_peak = 0.0
+                    if chunk_peak > self.audio_peak:
+                        self.audio_peak = chunk_peak
 
                     if elapsed >= next_start:
                         index += 1
@@ -220,12 +382,14 @@ class SegmentedLoopbackRecorder:
                         if elapsed - float(seg["start"]) >= self.segment_length_sec:
                             seg["file"].close()
                             self._active.remove(seg)
+                    self._emit_progress(self.elapsed_sec)
         except Exception as exc:
             self.error = exc
         finally:
             for seg in self._active:
                 seg["file"].close()
             self._active.clear()
+            self._emit_progress(self.elapsed_sec)
 
 
 def merge_segments_to_wav(
@@ -290,15 +454,12 @@ def transcribe_with_local_whisper(
 
 
 def upload_recording_to_agent(*, recording_path: Path, cfg: QuickRecordConfig) -> AgentUploadResult:
-    if not cfg.agent_api_key:
-        raise ValueError("agent_api_key is required for upload")
-
+    api_key = (cfg.agent_api_key or "").strip()
     meeting_id = cfg.meeting_id or f"quick-{int(time.time())}-{uuid.uuid4().hex[:8]}"
     base_url = normalize_agent_base_url(cfg.agent_base_url)
-    headers = {
-        "X-API-Key": cfg.agent_api_key,
-        "Content-Type": "application/json",
-    }
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
 
     start_payload = build_start_payload(
         meeting_id=meeting_id,
@@ -329,10 +490,11 @@ def upload_recording_to_agent(*, recording_path: Path, cfg: QuickRecordConfig) -
     chunk_resp.raise_for_status()
 
     with recording_path.open("rb") as fp:
+        backup_headers: dict[str, str] | None = {"X-API-Key": api_key} if api_key else None
         backup_resp = requests.post(
             f"{base_url}/v1/meetings/{meeting_id}/backup-audio",
             files={"file": (recording_path.name, fp, "audio/mpeg")},
-            headers={"X-API-Key": cfg.agent_api_key},
+            headers=backup_headers,
             timeout=90,
         )
     backup_resp.raise_for_status()
@@ -473,6 +635,7 @@ def run_quick_record(cfg: QuickRecordConfig) -> QuickRecordResult:
         block_size=cfg.block_size,
         segment_length_sec=cfg.segment_length_sec,
         overlap_sec=cfg.overlap_sec,
+        progress_callback=cfg.progress_callback,
     )
 
     thread = threading.Thread(target=recorder.record, daemon=True)
@@ -494,6 +657,12 @@ def run_quick_record(cfg: QuickRecordConfig) -> QuickRecordResult:
     merge_segments_to_wav(segment_paths=recorder.segment_paths, output_wav=wav_path)
     convert_wav_to_mp3(wav_path=wav_path, mp3_path=mp3_path)
     wav_path.unlink(missing_ok=True)
+    if recorder.elapsed_sec >= 5 and recorder.audio_peak < _QUICK_SIGNAL_MIN_PEAK:
+        device_name = (recorder.input_device_name or "источник захвата").strip()
+        raise RuntimeError(
+            f"Не найден слышимый аудиосигнал в источнике захвата ({device_name}). "
+            "Проверьте, что в самой встрече есть звук и он реально воспроизводится на системный выход."
+        )
 
     transcript_path: Path | None = None
     if cfg.transcribe:
@@ -504,6 +673,22 @@ def run_quick_record(cfg: QuickRecordConfig) -> QuickRecordResult:
         )
         txt_path.write_text(text, encoding="utf-8")
         transcript_path = txt_path
+
+    local_meeting_id: str | None = None
+    # Quick fallback должен без ручного импорта появляться в Results:
+    # создаём локальную meeting-запись с source_upload.mp3.
+    if not cfg.upload_to_agent:
+        try:
+            local_meeting_id = _import_quick_mp3_to_local_results(mp3_path=mp3_path, cfg=cfg)
+            if local_meeting_id:
+                canonical = records.artifact_path(local_meeting_id, "meeting_audio.mp3")
+                if canonical.exists() and canonical.stat().st_size > 1024:
+                    mp3_path = canonical
+        except Exception as exc:
+            log.warning(
+                "quick_record_local_import_failed",
+                extra={"payload": {"error": str(exc)[:240], "mp3_path": str(mp3_path)}},
+            )
 
     upload_result: AgentUploadResult | None = None
     if cfg.upload_to_agent:
@@ -524,6 +709,7 @@ def run_quick_record(cfg: QuickRecordConfig) -> QuickRecordResult:
                 "transcript_path": str(transcript_path) if transcript_path else None,
                 "uploaded": bool(upload_result),
                 "email_sent": bool(email_result and email_result.ok),
+                "local_meeting_id": local_meeting_id,
             }
         },
     )
@@ -533,6 +719,7 @@ def run_quick_record(cfg: QuickRecordConfig) -> QuickRecordResult:
         transcript_path=transcript_path,
         agent_upload=upload_result,
         email_result=email_result,
+        local_meeting_id=local_meeting_id,
     )
 
 
@@ -540,6 +727,7 @@ class QuickRecordManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._active_job_id: str | None = None
+        self._latest_job_id: str | None = None
         self._jobs: dict[str, _QuickRecordJob] = {}
 
     def _as_status(self, job: _QuickRecordJob) -> QuickRecordJobStatus:
@@ -557,7 +745,33 @@ class QuickRecordManager:
                 if job.result and job.result.agent_upload
                 else None
             ),
+            local_meeting_id=(job.result.local_meeting_id if job.result else None),
+            elapsed_sec=int(max(0, job.elapsed_sec)),
+            segment_count=int(max(0, job.segment_count)),
+            audio_peak=float(max(0.0, job.audio_peak)),
+            input_device=(job.input_device or None),
         )
+
+    def _update_progress(self, job_id: str, payload: dict[str, Any]) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return
+            try:
+                job.elapsed_sec = int(max(0, int(payload.get("elapsed_sec", 0))))
+            except Exception:
+                pass
+            try:
+                job.segment_count = int(max(0, int(payload.get("segment_count", 0))))
+            except Exception:
+                pass
+            try:
+                job.audio_peak = float(max(0.0, float(payload.get("audio_peak", 0.0))))
+            except Exception:
+                pass
+            device = str(payload.get("input_device") or "").strip()
+            if device:
+                job.input_device = device
 
     def _run_job(self, job_id: str) -> None:
         with self._lock:
@@ -594,6 +808,7 @@ class QuickRecordManager:
             job_id = f"qr-{int(time.time())}-{uuid.uuid4().hex[:8]}"
             stop_event = threading.Event()
             cfg.external_stop_event = stop_event
+            cfg.progress_callback = lambda payload, _job_id=job_id: self._update_progress(_job_id, payload)
             job = _QuickRecordJob(
                 job_id=job_id,
                 config=cfg,
@@ -603,6 +818,7 @@ class QuickRecordManager:
             )
             self._jobs[job_id] = job
             self._active_job_id = job_id
+            self._latest_job_id = job_id
 
             thread = threading.Thread(target=self._run_job, args=(job_id,), daemon=True)
             thread.start()
@@ -610,7 +826,7 @@ class QuickRecordManager:
 
     def get_status(self, job_id: str | None = None) -> QuickRecordJobStatus | None:
         with self._lock:
-            target_id = job_id or self._active_job_id
+            target_id = job_id or self._active_job_id or self._latest_job_id
             if not target_id:
                 return None
             job = self._jobs.get(target_id)
@@ -638,3 +854,46 @@ _MANAGER = QuickRecordManager()
 
 def get_quick_record_manager() -> QuickRecordManager:
     return _MANAGER
+
+
+def _import_quick_mp3_to_local_results(*, mp3_path: Path, cfg: QuickRecordConfig) -> str | None:
+    if not mp3_path.exists() or not mp3_path.is_file():
+        return None
+    size_bytes = int(mp3_path.stat().st_size)
+    if size_bytes <= 1024:
+        return None
+
+    context = {
+        "source": "quick_record",
+        "source_mode": "link_fallback",
+        "work_mode": "link_fallback",
+        "filename": "source_upload.mp3",
+        "meeting_url": cfg.meeting_url,
+    }
+    with db_session() as session:
+        repo = MeetingRepository(session)
+        meeting = create_meeting(meeting_id=None, context=context, consent=ConsentStatus.unknown)
+        meeting.status = PipelineStatus.done
+        meeting.finished_at = datetime.utcnow()
+        repo.save(meeting)
+        meeting_id = meeting.id
+
+    source_path = records.artifact_path(meeting_id, "source_upload.mp3")
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(mp3_path), str(source_path))
+    except Exception:
+        records.write_bytes(meeting_id, "source_upload.mp3", mp3_path.read_bytes())
+    records.ensure_meeting_metadata(meeting_id)
+    materialize_meeting_audio_mp3(meeting_id=meeting_id, preferred_filename="source_upload.mp3")
+    log.info(
+        "quick_record_local_import_done",
+        extra={
+            "payload": {
+                "meeting_id": meeting_id,
+                "mp3_path": str(mp3_path),
+                "size_bytes": size_bytes,
+            }
+        },
+    )
+    return meeting_id

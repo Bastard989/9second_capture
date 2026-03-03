@@ -987,6 +987,45 @@ button:disabled {
   gap: 12px;
 }
 
+.convert-settings-collapse {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--card-soft) 88%, var(--card) 12%);
+}
+
+.convert-settings-collapse > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-1);
+  user-select: none;
+}
+
+.convert-settings-collapse > summary::-webkit-details-marker {
+  display: none;
+}
+
+.convert-settings-collapse > summary::before {
+  content: "▾";
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--ink-2);
+  transition: transform 0.2s ease;
+}
+
+.convert-settings-collapse:not([open]) > summary::before {
+  transform: rotate(-90deg);
+}
+
+.convert-settings-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .results-stt-settings {
   border: 1px dashed var(--border);
   border-radius: 12px;
@@ -1059,6 +1098,24 @@ button:disabled {
 
 .report-actions {
   gap: 8px;
+}
+
+.report-name-field {
+  flex: 1 1 230px;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.report-name-field label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.report-name-field .hint {
+  margin-top: -2px;
 }
 
 .hidden-file-input {
@@ -1227,6 +1284,12 @@ button:disabled {
 
 .llm-chat-presets {
   justify-content: flex-start;
+}
+
+.llm-chat-files-head {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
 }
 
 .chat-attach-row {

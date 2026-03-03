@@ -761,14 +761,32 @@ def _generate_llm_artifact(meeting_id: str, req: LLMArtifactGenerateRequest) -> 
                         f"Запрос:\n{user_prompt}\n\n"
                         f"Schema guide:\n{json.dumps(req.schema_guide, ensure_ascii=False)}"
                     )
-                    data = orch.complete_json(system=system, user=user)
+                    try:
+                        data = orch.complete_json(system=system, user=user)
+                    except Exception as exc:
+                        detail = _safe_text(exc, limit=220)
+                        if not detail.lower().startswith("llm_provider_error:"):
+                            detail = f"llm_provider_error:{detail}"
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=detail,
+                        ) from exc
                     _save_json_result(data)
                     _save_txt_result(json.dumps(data, ensure_ascii=False, indent=2))
                 else:
                     result_kind = "text"
                     system = "Сформируй результат строго на основе транскрипта. Не добавляй выдуманных фактов."
                     user = f"Транскрипт (source={req.transcript_variant}):\n{transcript_text}\n\nЗапрос:\n{user_prompt}"
-                    text = orch.complete_text(system=system, user=user).text
+                    try:
+                        text = orch.complete_text(system=system, user=user).text
+                    except Exception as exc:
+                        detail = _safe_text(exc, limit=220)
+                        if not detail.lower().startswith("llm_provider_error:"):
+                            detail = f"llm_provider_error:{detail}"
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=detail,
+                        ) from exc
                     _save_txt_result(text)
                     _save_json_result({"text": text})
     else:
@@ -2691,8 +2709,27 @@ def generate_llm_artifact(
     req: LLMArtifactGenerateRequest,
     _=Depends(auth_dep),
 ) -> LLMArtifactResponse:
-    meta, cached = _generate_llm_artifact(meeting_id=meeting_id, req=req)
-    return _artifact_response_from_meta(meta, cached=cached)
+    try:
+        meta, cached = _generate_llm_artifact(meeting_id=meeting_id, req=req)
+        return _artifact_response_from_meta(meta, cached=cached)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception(
+            "llm_artifact_generate_unhandled",
+            extra={
+                "payload": {
+                    "meeting_id": meeting_id,
+                    "mode": str(req.mode or ""),
+                    "source": str(req.transcript_variant or ""),
+                    "error": _safe_text(exc, limit=280),
+                }
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="llm_artifact_generate_failed",
+        ) from exc
 
 
 @router.get(

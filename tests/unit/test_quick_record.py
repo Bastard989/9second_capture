@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 from interview_analytics_agent.quick_record import (
     QuickRecordConfig,
+    QuickRecordManager,
+    QuickRecordResult,
     build_chunk_payload,
     normalize_agent_base_url,
     segment_step_seconds,
@@ -97,3 +100,79 @@ def test_upload_recording_to_agent(monkeypatch, tmp_path: Path) -> None:
     assert calls["post"][1][0] == "http://127.0.0.1:8010/v1/meetings/quick-123/chunks"
     assert calls["post"][2][0] == "http://127.0.0.1:8010/v1/meetings/quick-123/backup-audio"
     assert calls["get"][0][0] == "http://127.0.0.1:8010/v1/meetings/quick-123"
+
+
+def test_upload_recording_to_agent_without_api_key(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    def _fake_post(url, json=None, headers=None, timeout=None, files=None):
+        calls.append((url, dict(headers or {})))
+        return _FakeResponse({"ok": True})
+
+    def _fake_get(url, headers=None, timeout=None):
+        return _FakeResponse(
+            {
+                "meeting_id": "quick-234",
+                "status": "completed",
+                "enhanced_transcript": "",
+                "report": {"summary": "ok"},
+            }
+        )
+
+    monkeypatch.setattr("interview_analytics_agent.quick_record.requests.post", _fake_post)
+    monkeypatch.setattr("interview_analytics_agent.quick_record.requests.get", _fake_get)
+
+    recording = tmp_path / "meeting.mp3"
+    recording.write_bytes(b"audio-bytes")
+
+    cfg = QuickRecordConfig(
+        meeting_url="https://telemost.yandex.ru/j/123",
+        upload_to_agent=True,
+        agent_base_url="http://127.0.0.1:8010",
+        agent_api_key=None,
+        meeting_id="quick-234",
+        wait_report_sec=1,
+        poll_interval_sec=0.01,
+    )
+
+    result = upload_recording_to_agent(recording_path=recording, cfg=cfg)
+    assert result.meeting_id == "quick-234"
+    assert result.status == "completed"
+    assert len(calls) == 3
+    for _, headers in calls:
+        assert "X-API-Key" not in headers
+
+
+def test_quick_record_manager_returns_latest_job_status(monkeypatch, tmp_path: Path) -> None:
+    mp3_path = tmp_path / "job.mp3"
+    mp3_path.write_bytes(b"fake")
+
+    def _fake_run(_cfg: QuickRecordConfig) -> QuickRecordResult:
+        return QuickRecordResult(
+            mp3_path=mp3_path,
+            transcript_path=None,
+            agent_upload=None,
+            email_result=None,
+            local_meeting_id="mtg_quick_1",
+        )
+
+    monkeypatch.setattr("interview_analytics_agent.quick_record.run_quick_record", _fake_run)
+
+    manager = QuickRecordManager()
+    started = manager.start(QuickRecordConfig(meeting_url="https://meet.example/ok", max_duration_sec=5))
+
+    deadline = time.time() + 2.0
+    last = None
+    while time.time() < deadline:
+        last = manager.get_status(job_id=started.job_id)
+        if last and last.status in {"completed", "failed"}:
+            break
+        time.sleep(0.02)
+
+    assert last is not None
+    assert last.status == "completed"
+    latest = manager.get_status()
+    assert latest is not None
+    assert latest.job_id == started.job_id
+    assert latest.status == "completed"
+    assert latest.local_meeting_id == "mtg_quick_1"

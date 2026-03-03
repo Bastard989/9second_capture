@@ -282,6 +282,20 @@ def test_start_meeting_rejects_incompatible_work_mode(monkeypatch, auth_settings
     detail = resp.json().get("detail") or {}
     assert detail.get("code") == "invalid_work_mode_for_mode"
 
+    resp_link = client.post(
+        "/v1/meetings/start",
+        headers={"X-API-Key": "user-1"},
+        json={
+            "meeting_id": "m-link-postmeeting",
+            "mode": "postmeeting",
+            "consent": "unknown",
+            "context": {"work_mode": "link_fallback"},
+        },
+    )
+    assert resp_link.status_code == 422
+    detail_link = resp_link.json().get("detail") or {}
+    assert detail_link.get("code") == "invalid_work_mode_for_mode"
+
 
 def test_start_meeting_normalizes_browser_work_mode_context(monkeypatch, auth_settings) -> None:
     captured = {"context": None}
@@ -315,3 +329,39 @@ def test_start_meeting_normalizes_browser_work_mode_context(monkeypatch, auth_se
     assert normalized.get("work_mode") == "browser_screen_audio"
     assert normalized.get("source_mode") == "browser_screen_audio"
     assert normalized.get("capture_mode") == "screen"
+
+
+def test_start_meeting_normalizes_link_work_mode_as_realtime_screen(monkeypatch, auth_settings) -> None:
+    captured = {"context": None}
+
+    def _create_meeting(meeting_id, context, consent):
+        captured["context"] = dict(context or {})
+        return SimpleNamespace(
+            id=meeting_id or "m-auto",
+            status="queued",
+            context=context,
+            consent=consent,
+        )
+
+    client = _client(monkeypatch, create_meeting_fn=_create_meeting)
+    resp = client.post(
+        "/v1/meetings/start",
+        headers={"X-API-Key": "user-1"},
+        json={
+            "meeting_id": "m-link-realtime",
+            "mode": "realtime",
+            "consent": "unknown",
+            "context": {
+                "source": "local_ui",
+                "work_mode": "link_fallback",
+                "capture_mode": "system",
+                "filename": "source_upload.mp3",
+            },
+        },
+    )
+    assert resp.status_code == 200
+    normalized = captured["context"] or {}
+    assert normalized.get("work_mode") == "link_fallback"
+    assert normalized.get("source_mode") == "link_fallback"
+    assert normalized.get("capture_mode") == "screen"
+    assert "filename" not in normalized

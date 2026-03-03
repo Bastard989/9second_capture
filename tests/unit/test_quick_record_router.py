@@ -138,3 +138,29 @@ def test_quick_record_start_rejects_missing_agent_key_when_upload_auth_required(
         s.api_keys = snapshot_api_keys
         s.quick_record_enabled = snapshot_quick
         s.quick_record_agent_api_key = snapshot_key
+
+
+def test_quick_record_probe(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "apps.api_gateway.routers.quick_record.probe_quick_capture",
+        lambda duration_sec, sample_rate, block_size: {
+            "signal_ok": True,
+            "peak": 0.12,
+            "peak_percent": 12.0,
+            "duration_sec": duration_sec,
+            "device": "BlackHole 2ch",
+        },
+    )
+    s = get_settings()
+    snapshot_auth = s.auth_mode
+    try:
+        s.auth_mode = "none"
+        client = TestClient(app)
+        resp = client.get("/v1/quick-record/probe?duration_sec=5")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["probe"]["signal_ok"] is True
+        assert body["probe"]["peak"] == 0.12
+    finally:
+        s.auth_mode = snapshot_auth

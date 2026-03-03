@@ -36,8 +36,8 @@ log = get_project_logger()
 
 router = APIRouter()
 
-_WORK_MODE_REALTIME = {"driver_audio", "browser_screen_audio"}
-_WORK_MODE_POSTMEETING = {"api_upload", "link_fallback"}
+_WORK_MODE_REALTIME = {"driver_audio", "browser_screen_audio", "link_fallback"}
+_WORK_MODE_POSTMEETING = {"api_upload"}
 _KNOWN_WORK_MODES = _WORK_MODE_REALTIME | _WORK_MODE_POSTMEETING
 
 
@@ -86,7 +86,10 @@ def _normalize_context_for_work_mode(
     elif raw_work_mode == "browser_screen_audio":
         payload["capture_mode"] = "screen"
         payload.pop("filename", None)
-    elif raw_work_mode in {"api_upload", "link_fallback"}:
+    elif raw_work_mode == "link_fallback":
+        payload["capture_mode"] = "screen"
+        payload.pop("filename", None)
+    elif raw_work_mode == "api_upload":
         payload.pop("capture_mode", None)
         payload.pop("include_mic", None)
         payload.pop("mic_device_id", None)
