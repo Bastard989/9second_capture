@@ -6,6 +6,7 @@ import time
 import pytest
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi import Response
 from fastapi.testclient import TestClient
 
 from apps.api_gateway.routers import artifacts as artifacts_router
@@ -96,6 +97,63 @@ def test_compare_export_csv(monkeypatch, auth_none_settings) -> None:
 
     client = _client()
     resp = client.get("/v1/meetings/compare/export?source=clean&fmt=csv")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment; filename=" in resp.headers.get("content-disposition", "")
+    assert resp.content.startswith(b"\xef\xbb\xbf")
+
+
+def test_compare_interviewers_endpoint_returns_items(monkeypatch, auth_none_settings) -> None:
+    payload = artifacts_router.CompareInterviewersResponse(
+        generated_at="2026-02-12T12:40:00Z",
+        source="clean",
+        filters={"vacancy": "Backend"},
+        items=[
+            artifacts_router.CompareInterviewerItem(
+                interviewer="Bob",
+                interviews_total=3,
+                comparable_total=2,
+                avg_score=4.1,
+                avg_confidence=0.72,
+                top_topics=["System design", "Ownership"],
+                top_risks=["Low coverage"],
+                decision_breakdown={"yes": 2, "lean_no": 1},
+                vacancy_breakdown={"Backend Engineer": 3},
+                level_breakdown={"Senior": 2, "Middle": 1},
+            )
+        ],
+    )
+    monkeypatch.setattr(artifacts_router, "_build_compare_interviewers_response", lambda **kwargs: payload)
+
+    client = _client()
+    resp = client.get("/v1/meetings/compare/interviewers?source=clean&limit=10")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "clean"
+    assert body["filters"]["vacancy"] == "Backend"
+    assert len(body["items"]) == 1
+    assert body["items"][0]["interviewer"] == "Bob"
+
+
+def test_compare_interviewers_export_csv(monkeypatch, auth_none_settings) -> None:
+    payload = artifacts_router.CompareInterviewersResponse(
+        generated_at="2026-02-12T12:40:00Z",
+        source="clean",
+        filters={},
+        items=[
+            artifacts_router.CompareInterviewerItem(
+                interviewer="Bob",
+                interviews_total=2,
+                comparable_total=2,
+                avg_score=4.0,
+                avg_confidence=0.7,
+            )
+        ],
+    )
+    monkeypatch.setattr(artifacts_router, "_build_compare_interviewers_response", lambda **kwargs: payload)
+
+    client = _client()
+    resp = client.get("/v1/meetings/compare/interviewers/export?source=clean&fmt=csv")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/csv")
     assert "attachment; filename=" in resp.headers.get("content-disposition", "")
@@ -994,7 +1052,7 @@ def test_rag_rank_hits_supports_vector_score_without_keyword_overlap(monkeypatch
     monkeypatch.setattr(artifacts_router, "_rag_hybrid_weights", lambda **kwargs: (0.5, 0.5))
     monkeypatch.setattr(artifacts_router, "_rag_embed_text", lambda text, **kwargs: [1.0, 0.0])
 
-    hits, total_chunks, retrieval_mode = artifacts_router._rag_rank_hits(
+    hits, total_chunks, retrieval_mode, _ = artifacts_router._rag_rank_hits(
         query="python",
         indexes=[
             {
@@ -1042,13 +1100,13 @@ def test_rag_rank_hits_keyword_score_respects_query_term_repetition(monkeypatch,
         }
     ]
 
-    hits1, _, _ = artifacts_router._rag_rank_hits(
+    hits1, _, _, _ = artifacts_router._rag_rank_hits(
         query="backend python sql",
         indexes=indexes,
         transcript_variant="clean",
         top_k=5,
     )
-    hits2, _, _ = artifacts_router._rag_rank_hits(
+    hits2, _, _, _ = artifacts_router._rag_rank_hits(
         query="backend python python sql",
         indexes=indexes,
         transcript_variant="clean",
@@ -1062,7 +1120,7 @@ def test_rag_rank_hits_keyword_score_respects_query_term_repetition(monkeypatch,
 def test_rag_rank_hits_prefers_query_order_when_keyword_overlap_is_same(monkeypatch, auth_none_settings) -> None:
     monkeypatch.setattr(artifacts_router, "_rag_vector_config", lambda: {"enabled": False})
 
-    hits, total_chunks, retrieval_mode = artifacts_router._rag_rank_hits(
+    hits, total_chunks, retrieval_mode, _ = artifacts_router._rag_rank_hits(
         query="python sql kafka",
         indexes=[
             {
@@ -1226,6 +1284,30 @@ def test_rag_query_endpoint_returns_hits(monkeypatch, auth_none_settings) -> Non
     assert body["ok"] is True
     assert body["query"] == "python sql"
     assert body["hits"][0]["chunk_id"] == "c1"
+
+
+def test_rag_query_export_endpoint_returns_file(monkeypatch, auth_none_settings) -> None:
+    monkeypatch.setattr(
+        artifacts_router,
+        "_rag_query_export_file",
+        lambda request_id, fmt: ("/tmp/rag_query_result.json", "rag_query_result.json"),
+    )
+    monkeypatch.setattr(
+        artifacts_router,
+        "FileResponse",
+        lambda path, media_type=None, filename=None: Response(
+            content=f"{path}|{media_type}|{filename}",
+            media_type="text/plain",
+        ),
+    )
+
+    client = _client()
+    resp = client.get("/v1/rag/query/export?request_id=req123&fmt=json")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "/tmp/rag_query_result.json" in body
+    assert "application/json" in body
+    assert "rag_query_result.json" in body
 
 
 def test_rag_index_job_manager_completes_and_reports_progress(monkeypatch, auth_none_settings) -> None:

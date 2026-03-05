@@ -530,43 +530,209 @@
           </div>
 
           <div class="tab-content" data-results-pane="llm">
-            <div class="llm-chat-panel llm-chat-inline">
-              <div class="row compare-header">
-                <div class="chat-title-with-help">
-                  <strong data-i18n="llm_chat_title">LLM чат по файлам</strong>
-                  <span class="help-tip" data-help-i18n="help_llm_chat_any_format" aria-label="help">?</span>
+            <div class="llm-chat-mode-switch">
+              <button
+                id="llmSourceModeFiles"
+                class="ghost active"
+                type="button"
+                data-llm-source-mode="files"
+                data-i18n="llm_mode_files_only"
+              >
+                Files only
+              </button>
+              <button
+                id="llmSourceModeRag"
+                class="ghost"
+                type="button"
+                data-llm-source-mode="rag"
+                data-i18n="llm_mode_rag"
+              >
+                RAG
+              </button>
+            </div>
+            <div id="llmModeHint" class="hint" data-i18n="llm_mode_hint_files">
+              Режим Files only: LLM обрабатывает только прикрепленные файлы.
+            </div>
+
+            <div id="llmFilesModePanel" class="llm-source-panel active">
+              <div class="llm-chat-panel llm-chat-inline">
+                <div class="row compare-header">
+                  <div class="chat-title-with-help">
+                    <strong data-i18n="llm_chat_title">LLM чат по файлам</strong>
+                    <span class="help-tip" data-help-i18n="help_llm_chat_any_format" aria-label="help">?</span>
+                  </div>
+                  <div class="row llm-chat-head-actions">
+                    <button id="llmChatClearBtn" class="ghost" data-i18n="llm_chat_clear_btn">Очистить</button>
+                    <button id="llmChatSendBtn" class="ghost" data-i18n="llm_chat_send_btn">Отправить</button>
+                  </div>
                 </div>
-                <div class="row llm-chat-head-actions">
-                  <button id="llmChatClearBtn" class="ghost" data-i18n="llm_chat_clear_btn">Очистить</button>
-                  <button id="llmChatSendBtn" class="ghost" data-i18n="llm_chat_send_btn">Отправить</button>
+                <div id="llmChatHint" class="hint" data-i18n="llm_chat_hint_idle">
+                  Прикрепите TXT/CSV/JSON/MD файлы и опишите нужный формат.
                 </div>
+                <div id="llmChatHistory" class="llm-chat-history"></div>
+                <div class="field">
+                  <label for="llmChatInput"><span data-i18n="llm_chat_input_label">Запрос в LLM</span></label>
+                  <textarea
+                    id="llmChatInput"
+                    rows="3"
+                    placeholder="Сделай таблицу по прикрепленным файлам: тема, решение, действие, ответственный, срок, риск."
+                    data-i18n-placeholder="llm_chat_input_placeholder"
+                  ></textarea>
+                </div>
+                <div class="row row-wrap chat-attach-row">
+                  <button id="llmChatAttachBtn" class="ghost clip-btn" data-i18n="chat_attach_btn">Attach files</button>
+                  <input id="llmChatAttachInput" type="file" multiple class="hidden-file-input" />
+                  <div id="llmChatAttachments" class="chat-attachments"></div>
+                </div>
+                <div class="row row-wrap llm-chat-presets">
+                  <button id="llmChatPresetSummary" class="ghost" data-i18n="llm_chat_preset_summary">Summary</button>
+                  <button id="llmChatPresetTable" class="ghost" data-i18n="llm_chat_preset_table">Таблица</button>
+                  <button id="llmChatPresetJson" class="ghost" data-i18n="llm_chat_preset_json">JSON</button>
+                  <button id="llmChatPresetCsv" class="ghost" data-i18n="llm_chat_preset_csv">CSV</button>
+                </div>
+                <div class="llm-chat-files-head" data-i18n="llm_chat_files_title">Файлы результата</div>
+                <div id="llmArtifactFiles" class="llm-artifact-files"></div>
               </div>
-              <div id="llmChatHint" class="hint" data-i18n="llm_chat_hint_idle">
-                Прикрепите TXT/CSV/JSON/MD файлы и опишите нужный формат.
+            </div>
+
+            <div id="llmRagModePanel" class="llm-source-panel hidden">
+              <div class="rag-workspace">
+                <div class="row compare-header">
+                  <strong data-i18n="rag_title">RAG чат / сравнение интервью</strong>
+                  <div class="row row-wrap rag-header-actions">
+                    <button id="ragRefreshMeetingsBtn" class="ghost" data-i18n="rag_refresh_meetings">
+                      Обновить список
+                    </button>
+                    <button id="ragIndexSelectedBtn" class="ghost" data-i18n="rag_index_selected">
+                      Индексировать выбранные
+                    </button>
+                    <button id="ragRunBtn" class="ghost" data-i18n="rag_run_btn">Выполнить запрос</button>
+                  </div>
+                </div>
+                <div id="ragHint" class="hint" data-i18n="rag_hint_idle">
+                  Выберите интервью, задайте запрос и получите ответ с цитатами из транскриптов.
+                </div>
+
+                <div class="rag-layout">
+                  <div class="rag-panel">
+                    <div class="file-title" data-i18n="rag_meeting_picker_title">Интервью для сравнения</div>
+                    <div class="row row-wrap rag-picker-actions">
+                      <button id="ragSelectCurrentBtn" class="ghost" data-i18n="rag_select_current">Текущая запись</button>
+                      <button id="ragSelectAllBtn" class="ghost" data-i18n="rag_select_all">Выбрать все</button>
+                      <button id="ragClearSelectionBtn" class="ghost" data-i18n="rag_clear_selection">Очистить</button>
+                    </div>
+                    <div class="rag-saved-set-row">
+                      <select id="ragSavedSetSelect">
+                        <option value="" data-i18n="rag_saved_set_none">Сохраненные наборы</option>
+                      </select>
+                      <button id="ragSaveSetBtn" class="ghost" data-i18n="rag_saved_set_save">Сохранить набор</button>
+                      <button id="ragLoadSetBtn" class="ghost" data-i18n="rag_saved_set_load">Загрузить</button>
+                      <button id="ragDeleteSetBtn" class="ghost" data-i18n="rag_saved_set_delete">Удалить</button>
+                    </div>
+                    <div class="hint" data-i18n="rag_meeting_picker_hint">
+                      Если ничего не выбрано, поиск пойдет по последним записям.
+                    </div>
+                    <div id="ragMeetingPicker" class="rag-meeting-picker"></div>
+                  </div>
+
+                  <div class="rag-panel">
+                    <div class="row compare-header">
+                      <div class="chat-title-with-help">
+                        <div class="file-title" data-i18n="rag_query_title">Запрос по выбранным интервью (compare)</div>
+                        <span class="help-tip" data-help-i18n="help_rag_chat_any_format" aria-label="help">?</span>
+                      </div>
+                      <button id="ragChatSendBtn" class="ghost" data-i18n="rag_chat_send_btn">Отправить</button>
+                    </div>
+                    <div id="ragChatHint" class="hint" data-i18n="rag_chat_hint_idle">
+                      RAG-чат сравнивает выбранные интервью и отвечает с цитатами.
+                    </div>
+                    <div id="ragChatHistory" class="llm-chat-history rag-chat-history"></div>
+                    <div class="rag-query-grid">
+                      <div class="field">
+                        <label for="ragSourceSelect">
+                          <span data-i18n="rag_source_label">Источник транскрипта</span>
+                          <span class="help-tip" data-help-i18n="help_transcript_sources" aria-label="help">?</span>
+                        </label>
+                        <select id="ragSourceSelect">
+                          <option value="clean" data-i18n="rag_source_clean">Clean</option>
+                          <option value="normalized" data-i18n="rag_source_normalized">Normalized</option>
+                          <option value="raw" data-i18n="rag_source_raw">Raw</option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label for="ragTopKInput">
+                          <span data-i18n="rag_topk_label">Top-K цитат</span>
+                        </label>
+                        <input id="ragTopKInput" type="number" min="1" max="50" value="8" />
+                      </div>
+                    </div>
+                    <div class="rag-query-options">
+                      <label class="checkbox-line">
+                        <input id="ragUseLlmAnswer" type="checkbox" checked />
+                        <span data-i18n="rag_use_llm_answer">Сгенерировать ответ LLM по найденным цитатам</span>
+                      </label>
+                      <label class="checkbox-line">
+                        <input id="ragAutoIndex" type="checkbox" checked />
+                        <span data-i18n="rag_auto_index">Автоиндексация выбранных интервью перед запросом</span>
+                      </label>
+                      <label class="checkbox-line">
+                        <input id="ragForceReindex" type="checkbox" />
+                        <span data-i18n="rag_force_reindex">Принудительно пересобрать индекс</span>
+                      </label>
+                    </div>
+                    <div class="field">
+                      <label for="ragQueryInput">
+                        <span data-i18n="rag_query_input_label">Вопрос / задача</span>
+                      </label>
+                      <textarea
+                        id="ragQueryInput"
+                        rows="4"
+                        placeholder="Сравни кандидатов по backend/system design и собери таблицу с сильными и слабыми сторонами."
+                        data-i18n-placeholder="rag_query_input_placeholder"
+                      ></textarea>
+                    </div>
+                    <div class="row row-wrap chat-attach-row">
+                      <button id="ragChatAttachBtn" class="ghost clip-btn" data-i18n="chat_attach_btn">📎 Прикрепить файлы</button>
+                      <input id="ragChatAttachInput" type="file" multiple class="hidden-file-input" />
+                      <div id="ragChatAttachments" class="chat-attachments"></div>
+                    </div>
+                    <div class="field">
+                      <label for="ragAnswerPromptInput">
+                        <span data-i18n="rag_answer_prompt_label">Доп. инструкция для ответа (опционально)</span>
+                      </label>
+                      <textarea
+                        id="ragAnswerPromptInput"
+                        rows="2"
+                        placeholder="Ответь кратко, затем перечисли доказательства с ссылками [n]."
+                        data-i18n-placeholder="rag_answer_prompt_placeholder"
+                      ></textarea>
+                    </div>
+                    <div class="row row-wrap rag-export-actions">
+                      <button id="ragExportJsonBtn" class="ghost" data-i18n="rag_export_json">Экспорт JSON</button>
+                      <button id="ragExportCsvBtn" class="ghost" data-i18n="rag_export_csv">Экспорт CSV цитат</button>
+                      <button id="ragExportTxtBtn" class="ghost" data-i18n="rag_export_txt">Экспорт TXT ответа</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="rag-output">
+                  <div class="rag-answer-block">
+                    <div class="row compare-header">
+                      <strong data-i18n="rag_answer_title">Ответ (LLM/RAG)</strong>
+                      <span id="ragResultMeta" class="pill muted">—</span>
+                    </div>
+                    <pre id="ragAnswerText" class="rag-answer-text"></pre>
+                  </div>
+                  <div class="rag-hits-block">
+                    <div class="row compare-header">
+                      <strong data-i18n="rag_hits_title">Цитаты / найденные фрагменты</strong>
+                    </div>
+                    <div id="ragHitsList" class="rag-hits-list"></div>
+                  </div>
+                </div>
+                <div class="llm-chat-files-head" data-i18n="rag_result_files_title">Файлы результата RAG</div>
+                <div id="ragResultFiles" class="llm-artifact-files"></div>
               </div>
-              <div id="llmChatHistory" class="llm-chat-history"></div>
-              <div class="field">
-                <label for="llmChatInput"><span data-i18n="llm_chat_input_label">Запрос в LLM</span></label>
-                <textarea
-                  id="llmChatInput"
-                  rows="3"
-                  placeholder="Сделай таблицу по прикрепленным файлам: тема, решение, действие, ответственный, срок, риск."
-                  data-i18n-placeholder="llm_chat_input_placeholder"
-                ></textarea>
-              </div>
-              <div class="row row-wrap chat-attach-row">
-                <button id="llmChatAttachBtn" class="ghost clip-btn" data-i18n="chat_attach_btn">Attach files</button>
-                <input id="llmChatAttachInput" type="file" multiple class="hidden-file-input" />
-                <div id="llmChatAttachments" class="chat-attachments"></div>
-              </div>
-              <div class="row row-wrap llm-chat-presets">
-                <button id="llmChatPresetSummary" class="ghost" data-i18n="llm_chat_preset_summary">Summary</button>
-                <button id="llmChatPresetTable" class="ghost" data-i18n="llm_chat_preset_table">Таблица</button>
-                <button id="llmChatPresetJson" class="ghost" data-i18n="llm_chat_preset_json">JSON</button>
-                <button id="llmChatPresetCsv" class="ghost" data-i18n="llm_chat_preset_csv">CSV</button>
-              </div>
-              <div class="llm-chat-files-head" data-i18n="llm_chat_files_title">Файлы результата</div>
-              <div id="llmArtifactFiles" class="llm-artifact-files"></div>
             </div>
           </div>
         </section>

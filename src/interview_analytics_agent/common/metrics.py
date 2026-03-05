@@ -164,6 +164,69 @@ SBERJAZZ_LIVE_PULL_LAST_INVALID_CHUNKS = Gauge(
     "Количество некорректных chunk'ов в последнем live-pull",
 )
 
+RAG_INDEX_LATENCY_MS = Histogram(
+    "agent_rag_index_latency_ms",
+    "Задержка индексации RAG (мс)",
+    ["service"],
+    buckets=(10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000),
+)
+
+RAG_QUERY_LATENCY_MS = Histogram(
+    "agent_rag_query_latency_ms",
+    "Задержка RAG запроса (мс)",
+    ["service"],
+    buckets=(10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000),
+)
+
+RAG_LLM_LATENCY_MS = Histogram(
+    "agent_rag_llm_latency_ms",
+    "Задержка LLM-ответа в RAG (мс)",
+    ["service"],
+    buckets=(10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000),
+)
+
+RAG_QUERY_ERRORS_TOTAL = Counter(
+    "agent_rag_query_errors_total",
+    "Ошибки RAG-запросов",
+    ["reason"],
+)
+
+RAG_NO_HITS_TOTAL = Counter(
+    "agent_rag_no_hits_total",
+    "Количество RAG-запросов без найденных цитат",
+)
+
+RAG_EXPORT_ERRORS_TOTAL = Counter(
+    "agent_rag_export_errors_total",
+    "Ошибки экспорта результатов RAG",
+    ["reason"],
+)
+
+RAG_CITATION_COVERAGE_AVG = Gauge(
+    "agent_rag_citation_coverage_avg",
+    "Текущая средняя оценка citation coverage (0..1)",
+)
+
+RAG_ANSWER_QUALITY_SCORE_AVG = Gauge(
+    "agent_rag_answer_quality_score_avg",
+    "Текущая оценка качества ответа RAG (0..1)",
+)
+
+RAG_RECALL_AT_K = Gauge(
+    "agent_rag_recall_at_k",
+    "Текущая прокси-оценка Recall@K для retrieval (0..1)",
+)
+
+RAG_MRR = Gauge(
+    "agent_rag_mrr",
+    "Текущая прокси-оценка MRR для retrieval (0..1)",
+)
+
+RAG_NDCG_AT_K = Gauge(
+    "agent_rag_ndcg_at_k",
+    "Текущая прокси-оценка nDCG@K для retrieval (0..1)",
+)
+
 
 _QUEUE_GROUPS = {
     "q:stt": "g:stt",
@@ -253,6 +316,48 @@ def record_sberjazz_reconcile_result(
 
 def record_sberjazz_cb_reset(*, source: str, reason: str) -> None:
     SBERJAZZ_CIRCUIT_BREAKER_RESETS_TOTAL.labels(source=source, reason=reason).inc()
+
+
+def record_rag_index_latency_ms(*, service: str, elapsed_ms: float) -> None:
+    RAG_INDEX_LATENCY_MS.labels(service=service).observe(max(0.0, float(elapsed_ms)))
+
+
+def record_rag_query_latency_ms(*, service: str, elapsed_ms: float) -> None:
+    RAG_QUERY_LATENCY_MS.labels(service=service).observe(max(0.0, float(elapsed_ms)))
+
+
+def record_rag_llm_latency_ms(*, service: str, elapsed_ms: float) -> None:
+    RAG_LLM_LATENCY_MS.labels(service=service).observe(max(0.0, float(elapsed_ms)))
+
+
+def record_rag_query_error(*, reason: str) -> None:
+    RAG_QUERY_ERRORS_TOTAL.labels(reason=str(reason or "unknown")).inc()
+
+
+def record_rag_no_hits() -> None:
+    RAG_NO_HITS_TOTAL.inc()
+
+
+def record_rag_export_error(*, reason: str) -> None:
+    RAG_EXPORT_ERRORS_TOTAL.labels(reason=str(reason or "unknown")).inc()
+
+
+def record_rag_answer_quality(
+    *,
+    citation_coverage: float,
+    answer_quality_score: float,
+    recall_at_k: float | None = None,
+    mrr: float | None = None,
+    ndcg_at_k: float | None = None,
+) -> None:
+    RAG_CITATION_COVERAGE_AVG.set(max(0.0, min(1.0, float(citation_coverage))))
+    RAG_ANSWER_QUALITY_SCORE_AVG.set(max(0.0, min(1.0, float(answer_quality_score))))
+    if recall_at_k is not None:
+        RAG_RECALL_AT_K.set(max(0.0, min(1.0, float(recall_at_k))))
+    if mrr is not None:
+        RAG_MRR.set(max(0.0, min(1.0, float(mrr))))
+    if ndcg_at_k is not None:
+        RAG_NDCG_AT_K.set(max(0.0, min(1.0, float(ndcg_at_k))))
 
 
 def record_sberjazz_live_pull_result(

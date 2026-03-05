@@ -6,6 +6,7 @@ import json
 import math
 import re
 import threading
+import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -21,6 +22,15 @@ from apps.api_gateway.deps import auth_dep
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.logging import get_project_logger
 from interview_analytics_agent.common.utils import sha256_hex
+from interview_analytics_agent.common.metrics import (
+    record_rag_answer_quality,
+    record_rag_export_error,
+    record_rag_index_latency_ms,
+    record_rag_llm_latency_ms,
+    record_rag_no_hits,
+    record_rag_query_error,
+    record_rag_query_latency_ms,
+)
 from interview_analytics_agent.domain.enums import PipelineStatus
 from interview_analytics_agent.processing.aggregation import (
     build_raw_transcript,
@@ -228,6 +238,20 @@ class RAGHit(BaseModel):
     interviewer: str = ""
 
 
+class RAGResultFileRef(BaseModel):
+    fmt: Literal["txt", "csv", "json"]
+    filename: str
+    bytes: int = 0
+    download_url: str = ""
+
+
+class RAGRetrievalMetrics(BaseModel):
+    recall_at_k: float = 0.0
+    mrr: float = 0.0
+    ndcg_at_k: float = 0.0
+    total_relevant_candidates: int = 0
+
+
 class RAGQueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
     transcript_variant: TranscriptVariant = "clean"
@@ -242,16 +266,29 @@ class RAGQueryRequest(BaseModel):
 
 class RAGQueryResponse(BaseModel):
     ok: bool = True
+    request_id: str = ""
+    generated_at: str = ""
     query: str
     transcript_variant: TranscriptVariant
+    meeting_ids: list[str] = Field(default_factory=list)
+    top_k: int = 0
     retrieval_mode: str = "hybrid_lite"
+    index_version: str = ""
+    vector_provider: str = ""
+    embedding_model: str = ""
     searched_meetings: int = 0
     indexed_meetings: int = 0
     total_chunks_scanned: int = 0
     hits: list[RAGHit] = Field(default_factory=list)
+    retrieval_metrics: RAGRetrievalMetrics = Field(default_factory=RAGRetrievalMetrics)
     answer: str = ""
     llm_used: bool = False
+    answer_quality: str = "unknown"
+    citation_coverage: float = 0.0
+    unsupported_claim_rate: float = 0.0
+    hallucination_rate: float = 0.0
     warnings: list[str] = Field(default_factory=list)
+    files: list[RAGResultFileRef] = Field(default_factory=list)
 
 
 class ReportRequest(BaseModel):
@@ -291,6 +328,26 @@ class CompareMeetingsResponse(BaseModel):
     generated_at: str
     source: TranscriptVariant
     items: list[CompareMeetingItem] = Field(default_factory=list)
+
+
+class CompareInterviewerItem(BaseModel):
+    interviewer: str = ""
+    interviews_total: int = 0
+    comparable_total: int = 0
+    avg_score: float = 0.0
+    avg_confidence: float = 0.0
+    top_topics: list[str] = Field(default_factory=list)
+    top_risks: list[str] = Field(default_factory=list)
+    decision_breakdown: dict[str, int] = Field(default_factory=dict)
+    vacancy_breakdown: dict[str, int] = Field(default_factory=dict)
+    level_breakdown: dict[str, int] = Field(default_factory=dict)
+
+
+class CompareInterviewersResponse(BaseModel):
+    generated_at: str
+    source: TranscriptVariant
+    filters: dict[str, Any] = Field(default_factory=dict)
+    items: list[CompareInterviewerItem] = Field(default_factory=list)
 
 
 def _segments_have_text(segs: list) -> bool:
@@ -2184,87 +2241,91 @@ def _ensure_rag_index(
     overlap_lines: int = 1,
     max_chars_per_chunk: int = 1200,
 ) -> tuple[dict[str, Any], bool]:
-    transcript_text = _transcript_for_source(meeting_id=meeting_id, source=source)
-    transcript_sha = sha256_hex(transcript_text.encode("utf-8"))
-    vector_cfg = _rag_vector_config()
-    chunking = {
-        "max_lines_per_chunk": int(max_lines_per_chunk),
-        "overlap_lines": int(overlap_lines),
-        "max_chars_per_chunk": int(max_chars_per_chunk),
-    }
-    if not force_rebuild:
-        try:
-            current = _rag_read_index(meeting_id, source)
-            same_sha = str(current.get("transcript_sha256") or "") == transcript_sha
-            same_chunking = isinstance(current.get("chunking"), dict) and current.get("chunking") == chunking
-            same_vector = _rag_index_has_compatible_vector_config(current, vector_cfg)
-            if same_sha and same_chunking and same_vector:
-                return current, True
-        except HTTPException as exc:
-            if exc.status_code != 404:
-                raise
+    started = time.perf_counter()
+    try:
+        transcript_text = _transcript_for_source(meeting_id=meeting_id, source=source)
+        transcript_sha = sha256_hex(transcript_text.encode("utf-8"))
+        vector_cfg = _rag_vector_config()
+        chunking = {
+            "max_lines_per_chunk": int(max_lines_per_chunk),
+            "overlap_lines": int(overlap_lines),
+            "max_chars_per_chunk": int(max_chars_per_chunk),
+        }
+        if not force_rebuild:
+            try:
+                current = _rag_read_index(meeting_id, source)
+                same_sha = str(current.get("transcript_sha256") or "") == transcript_sha
+                same_chunking = isinstance(current.get("chunking"), dict) and current.get("chunking") == chunking
+                same_vector = _rag_index_has_compatible_vector_config(current, vector_cfg)
+                if same_sha and same_chunking and same_vector:
+                    return current, True
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
 
-    seg_meta = _rag_segment_line_metadata(meeting_id)
-    line_items = _rag_build_line_items(transcript_text=transcript_text, seg_meta=seg_meta)
-    meeting_meta = _rag_meeting_meta(meeting_id)
-    chunks = _rag_chunk_line_items(
-        line_items,
-        meeting_id=meeting_id,
-        source=source,
-        max_lines_per_chunk=max_lines_per_chunk,
-        overlap_lines=overlap_lines,
-        max_chars_per_chunk=max_chars_per_chunk,
-        meeting_meta=meeting_meta,
-    )
-    active_vector_cfg = dict(vector_cfg)
-    if bool(active_vector_cfg.get("enabled", False)):
-        try:
-            chunk_embeddings = _rag_embed_texts(
-                [str(chunk.get("text") or "") for chunk in chunks],
-                vector_cfg=active_vector_cfg,
-            )
-            for chunk, emb in zip(chunks, chunk_embeddings):
-                chunk["embedding"] = emb
-        except Exception as exc:
-            if str(active_vector_cfg.get("provider") or "") == "openai_compat":
-                log.warning(
-                    "rag_embeddings_fallback_hashing",
-                    extra={
-                        "payload": {
-                            "meeting_id": meeting_id,
-                            "source": source,
-                            "provider": str(active_vector_cfg.get("provider_label") or "openai_compat"),
-                            "model": str(active_vector_cfg.get("model") or ""),
-                            "err": str(exc),
-                        }
-                    },
-                )
-                active_vector_cfg = _rag_hashing_fallback_vector_config(
-                    active_vector_cfg, reason="index_embed_failed"
-                )
+        seg_meta = _rag_segment_line_metadata(meeting_id)
+        line_items = _rag_build_line_items(transcript_text=transcript_text, seg_meta=seg_meta)
+        meeting_meta = _rag_meeting_meta(meeting_id)
+        chunks = _rag_chunk_line_items(
+            line_items,
+            meeting_id=meeting_id,
+            source=source,
+            max_lines_per_chunk=max_lines_per_chunk,
+            overlap_lines=overlap_lines,
+            max_chars_per_chunk=max_chars_per_chunk,
+            meeting_meta=meeting_meta,
+        )
+        active_vector_cfg = dict(vector_cfg)
+        if bool(active_vector_cfg.get("enabled", False)):
+            try:
                 chunk_embeddings = _rag_embed_texts(
                     [str(chunk.get("text") or "") for chunk in chunks],
                     vector_cfg=active_vector_cfg,
                 )
                 for chunk, emb in zip(chunks, chunk_embeddings):
                     chunk["embedding"] = emb
-            else:
-                raise
-    payload = {
-        "schema_version": "rag_index_v2",
-        "meeting_id": meeting_id,
-        "transcript_variant": source,
-        "transcript_chars": len(transcript_text),
-        "transcript_sha256": transcript_sha,
-        "chunking": chunking,
-        "chunk_count": len(chunks),
-        "indexed_at": _utc_now_iso(),
-        "meeting_meta": meeting_meta,
-        "vector": active_vector_cfg,
-        "chunks": chunks,
-    }
-    _rag_write_index(meeting_id, source, payload)
-    return payload, False
+            except Exception as exc:
+                if str(active_vector_cfg.get("provider") or "") == "openai_compat":
+                    log.warning(
+                        "rag_embeddings_fallback_hashing",
+                        extra={
+                            "payload": {
+                                "meeting_id": meeting_id,
+                                "source": source,
+                                "provider": str(active_vector_cfg.get("provider_label") or "openai_compat"),
+                                "model": str(active_vector_cfg.get("model") or ""),
+                                "err": str(exc),
+                            }
+                        },
+                    )
+                    active_vector_cfg = _rag_hashing_fallback_vector_config(
+                        active_vector_cfg, reason="index_embed_failed"
+                    )
+                    chunk_embeddings = _rag_embed_texts(
+                        [str(chunk.get("text") or "") for chunk in chunks],
+                        vector_cfg=active_vector_cfg,
+                    )
+                    for chunk, emb in zip(chunks, chunk_embeddings):
+                        chunk["embedding"] = emb
+                else:
+                    raise
+        payload = {
+            "schema_version": "rag_index_v2",
+            "meeting_id": meeting_id,
+            "transcript_variant": source,
+            "transcript_chars": len(transcript_text),
+            "transcript_sha256": transcript_sha,
+            "chunking": chunking,
+            "chunk_count": len(chunks),
+            "indexed_at": _utc_now_iso(),
+            "meeting_meta": meeting_meta,
+            "vector": active_vector_cfg,
+            "chunks": chunks,
+        }
+        _rag_write_index(meeting_id, source, payload)
+        return payload, False
+    finally:
+        record_rag_index_latency_ms(service="api_gateway", elapsed_ms=(time.perf_counter() - started) * 1000.0)
 
 
 def _safe_meeting_ids(values: list[str] | None) -> list[str]:
@@ -2293,17 +2354,360 @@ def _rag_select_meeting_ids(*, explicit_ids: list[str], recent_limit: int) -> li
     return [str(m.id) for m in meetings if str(getattr(m, "id", "") or "").strip()]
 
 
+def _rag_clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _rag_relevance_grade(*, chunk_text: str, query_terms: list[str]) -> int:
+    if not query_terms:
+        return 0
+    tokens = _rag_tokenize(chunk_text)
+    if not tokens:
+        return 0
+    token_set = set(tokens)
+    matched = sum(1 for t in query_terms if t in token_set)
+    coverage = matched / max(1, len(query_terms))
+    if coverage >= 0.95:
+        return 3
+    if coverage >= 0.60:
+        return 2
+    if coverage >= 0.35:
+        return 1
+    return 0
+
+
+def _rag_compute_retrieval_metrics(
+    *,
+    ranked_rows: list[tuple[float, float, float, dict[str, Any]]],
+    query_terms: list[str],
+    top_k: int,
+) -> RAGRetrievalMetrics:
+    if not ranked_rows:
+        return RAGRetrievalMetrics()
+    grades_all: list[int] = []
+    for _score, _kw, _sem, chunk in ranked_rows:
+        grades_all.append(_rag_relevance_grade(chunk_text=str(chunk.get("text") or ""), query_terms=query_terms))
+    relevant_total = sum(1 for g in grades_all if g > 0)
+    if relevant_total <= 0:
+        return RAGRetrievalMetrics(total_relevant_candidates=0)
+
+    k = max(1, min(int(top_k), len(ranked_rows)))
+    top_grades = grades_all[:k]
+    relevant_in_top = sum(1 for g in top_grades if g > 0)
+    recall_at_k = relevant_in_top / max(1, relevant_total)
+
+    mrr = 0.0
+    for idx, g in enumerate(grades_all, start=1):
+        if g > 0:
+            mrr = 1.0 / float(idx)
+            break
+
+    dcg = 0.0
+    for idx, g in enumerate(top_grades, start=1):
+        dcg += (2**g - 1) / math.log2(idx + 1)
+    ideal = sorted(grades_all, reverse=True)[:k]
+    idcg = 0.0
+    for idx, g in enumerate(ideal, start=1):
+        idcg += (2**g - 1) / math.log2(idx + 1)
+    ndcg_at_k = dcg / idcg if idcg > 0 else 0.0
+
+    return RAGRetrievalMetrics(
+        recall_at_k=round(_rag_clamp01(recall_at_k), 6),
+        mrr=round(_rag_clamp01(mrr), 6),
+        ndcg_at_k=round(_rag_clamp01(ndcg_at_k), 6),
+        total_relevant_candidates=int(relevant_total),
+    )
+
+
+def _rag_reranker_enabled() -> bool:
+    return bool(getattr(get_settings(), "rag_reranker_enabled", True))
+
+
+def _rag_reranker_top_n() -> int:
+    raw = int(getattr(get_settings(), "rag_reranker_top_n", 20) or 20)
+    return max(2, min(100, raw))
+
+
+def _rag_reranker_alpha() -> float:
+    raw = float(getattr(get_settings(), "rag_reranker_alpha", 0.35) or 0.35)
+    return max(0.0, min(1.0, raw))
+
+
+def _rag_apply_reranker(
+    *,
+    ranked_rows: list[tuple[float, float, float, dict[str, Any]]],
+    query_text: str,
+    query_terms: list[str],
+    max_semantic_score: float,
+) -> list[tuple[float, float, float, dict[str, Any]]]:
+    if not ranked_rows or not _rag_reranker_enabled():
+        return ranked_rows
+    top_n = min(_rag_reranker_top_n(), len(ranked_rows))
+    alpha = _rag_reranker_alpha()
+    if top_n <= 1 or alpha <= 0.0:
+        return ranked_rows
+
+    head = ranked_rows[:top_n]
+    tail = ranked_rows[top_n:]
+    q_lower = str(query_text or "").strip().lower()
+    reranked: list[tuple[float, float, float, dict[str, Any]]] = []
+    for base_score, keyword_score, semantic_score, chunk in head:
+        text = str(chunk.get("text") or "")
+        lower = text.lower()
+        tokens = _rag_tokenize(text)
+        token_set = set(tokens)
+        coverage = sum(1 for t in query_terms if t in token_set) / max(1, len(query_terms))
+        phrase_bonus = 1.0 if q_lower and q_lower in lower else 0.0
+        semantic_norm = (float(semantic_score) / max_semantic_score) if max_semantic_score > 0 else 0.0
+        rerank_signal = (coverage * 0.65) + (phrase_bonus * 0.25) + (semantic_norm * 0.10)
+        final = ((1.0 - alpha) * float(base_score)) + (alpha * rerank_signal)
+        reranked.append((final, keyword_score, semantic_score, chunk))
+    reranked.sort(key=lambda item: item[0], reverse=True)
+    return reranked + tail
+
+
+def _rag_vector_meta_from_indexes(indexes: list[dict[str, Any]]) -> tuple[str, str, str]:
+    # Returns: index_version, vector_provider, embedding_model
+    index_version = "rag_index_v2"
+    vector_provider = "keyword_only"
+    embedding_model = "none"
+    if not indexes:
+        return index_version, vector_provider, embedding_model
+
+    versions = [str(idx.get("schema_version") or "").strip() for idx in indexes if isinstance(idx, dict)]
+    versions = [v for v in versions if v]
+    if versions:
+        uniq = list(dict.fromkeys(versions))
+        index_version = uniq[0] if len(uniq) == 1 else "mixed"
+
+    vector_cfg = _rag_primary_index_vector_config(indexes) if _rag_indexes_have_vectors(indexes) else None
+    if vector_cfg:
+        vector_provider = str(vector_cfg.get("provider_label") or vector_cfg.get("provider") or "vector").strip() or "vector"
+        embedding_model = str(vector_cfg.get("model") or "").strip() or "unknown"
+        return index_version, vector_provider, embedding_model
+
+    runtime_cfg = _rag_vector_config()
+    if bool(runtime_cfg.get("enabled", False)):
+        vector_provider = str(runtime_cfg.get("provider_label") or runtime_cfg.get("provider") or "vector").strip() or "vector"
+        embedding_model = str(runtime_cfg.get("model") or "").strip() or "unknown"
+    return index_version, vector_provider, embedding_model
+
+
+def _rag_answer_quality(
+    *,
+    answer_text: str,
+    llm_used: bool,
+    hits_count: int,
+) -> tuple[str, float, float, float, list[str]]:
+    warnings: list[str] = []
+    if hits_count <= 0:
+        return "no_hits", 0.0, 1.0, 1.0, warnings
+    if not llm_used:
+        return "retrieval_only", 1.0, 0.0, 0.0, warnings
+    answer = str(answer_text or "").strip()
+    if not answer:
+        warnings.append("answer_empty")
+        return "low_confidence", 0.0, 1.0, 1.0, warnings
+
+    cites = re.findall(r"\[(\d+)\]", answer)
+    unique_cites = {c for c in cites if str(c).strip().isdigit()}
+    has_cites = bool(unique_cites)
+    citation_coverage = 1.0 if has_cites else 0.0
+    unsupported_claim_rate = 0.0 if has_cites else 1.0
+    hallucination_rate = unsupported_claim_rate
+    quality = "ok" if has_cites else "low_confidence"
+    if not has_cites:
+        warnings.append("missing_citations")
+    return quality, citation_coverage, unsupported_claim_rate, hallucination_rate, warnings
+
+
+def _rag_query_output_relpath(request_id: str, filename: str) -> str:
+    rid = _safe_artifact_id(request_id)
+    return f"artifacts/rag_queries/{rid}/{filename}"
+
+
+def _rag_query_manifest_relpath(request_id: str) -> str:
+    return _rag_query_output_relpath(request_id, "manifest.json")
+
+
+def _rag_hits_to_csv_bytes(hits: list[RAGHit]) -> bytes:
+    output = io.StringIO()
+    fieldnames = [
+        "rank",
+        "score",
+        "keyword_score",
+        "semantic_score",
+        "meeting_id",
+        "candidate_name",
+        "interviewer",
+        "line_start",
+        "line_end",
+        "timestamp_start",
+        "timestamp_end",
+        "text",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for idx, hit in enumerate(hits, start=1):
+        writer.writerow(
+            {
+                "rank": idx,
+                "score": hit.score,
+                "keyword_score": hit.keyword_score,
+                "semantic_score": hit.semantic_score,
+                "meeting_id": hit.meeting_id,
+                "candidate_name": hit.candidate_name,
+                "interviewer": hit.interviewer,
+                "line_start": hit.line_start if hit.line_start is not None else "",
+                "line_end": hit.line_end if hit.line_end is not None else "",
+                "timestamp_start": hit.timestamp_start,
+                "timestamp_end": hit.timestamp_end,
+                "text": hit.text,
+            }
+        )
+    return ("\ufeff" + output.getvalue()).encode("utf-8")
+
+
+def _rag_answer_text_file(*, query: str, answer: str, hits: list[RAGHit]) -> str:
+    lines: list[str] = []
+    lines.append(f"Query: {str(query or '').strip()}")
+    lines.append("")
+    lines.append("Answer:")
+    lines.append(str(answer or "").strip() or "—")
+    lines.append("")
+    lines.append("Citations:")
+    if not hits:
+        lines.append("no_hits")
+    else:
+        for idx, hit in enumerate(hits, start=1):
+            line_span = (
+                f"lines={hit.line_start}-{hit.line_end}"
+                if hit.line_start is not None and hit.line_end is not None
+                else "lines=?-?"
+            )
+            time_span = f"time={hit.timestamp_start or '?'}..{hit.timestamp_end or '?'}"
+            lines.append(f"[{idx}] meeting={hit.meeting_id} chunk={hit.chunk_id} {line_span} {time_span}")
+            lines.append(hit.text)
+            lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def _rag_store_query_result_files(
+    *,
+    request_id: str,
+    generated_at: str,
+    query_resp: RAGQueryResponse,
+) -> list[RAGResultFileRef]:
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    answer_filename = f"rag_answer_{timestamp}.txt"
+    hits_csv_filename = f"rag_hits_topk_{timestamp}.csv"
+    hits_json_filename = f"rag_hits_topk_{timestamp}.json"
+    files_payload = [
+        ("txt", answer_filename, _rag_answer_text_file(query=query_resp.query, answer=query_resp.answer, hits=query_resp.hits).encode("utf-8")),
+        ("csv", hits_csv_filename, _rag_hits_to_csv_bytes(query_resp.hits)),
+        (
+            "json",
+            hits_json_filename,
+            json.dumps(
+                {
+                    "query": query_resp.query,
+                    "meeting_ids": query_resp.meeting_ids,
+                    "top_k": query_resp.top_k,
+                    "retrieval_mode": query_resp.retrieval_mode,
+                    "hits": [item.model_dump(mode="json") for item in query_resp.hits],
+                    "warnings": query_resp.warnings,
+                    "llm_used": query_resp.llm_used,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ).encode("utf-8"),
+        ),
+    ]
+    out_refs: list[RAGResultFileRef] = []
+    for fmt, filename, payload in files_payload:
+        rel = _rag_query_output_relpath(request_id, filename)
+        path = records.artifact_path(LLM_FILES_WORKSPACE_ID, rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        out_refs.append(
+            RAGResultFileRef(
+                fmt=fmt,  # type: ignore[arg-type]
+                filename=filename,
+                bytes=int(path.stat().st_size),
+                download_url=f"/v1/rag/query/export?request_id={request_id}&fmt={fmt}",
+            )
+        )
+
+    manifest_rel = _rag_query_manifest_relpath(request_id)
+    manifest_path = records.artifact_path(LLM_FILES_WORKSPACE_ID, manifest_rel)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "rag_query_export_v1",
+                "request_id": request_id,
+                "generated_at": generated_at,
+                "files": [item.model_dump(mode="json") for item in out_refs],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return out_refs
+
+
+def _rag_read_query_manifest(request_id: str) -> dict[str, Any]:
+    try:
+        path = records.artifact_path(LLM_FILES_WORKSPACE_ID, _rag_query_manifest_relpath(request_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid_request_id") from exc
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="rag_query_export_not_found")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="rag_query_export_manifest_invalid") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="rag_query_export_manifest_invalid")
+    return payload
+
+
+def _rag_query_export_file(
+    *,
+    request_id: str,
+    fmt: Literal["txt", "csv", "json"],
+) -> tuple[Path, str]:
+    manifest = _rag_read_query_manifest(request_id)
+    files = list(manifest.get("files") or [])
+    target_name = ""
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("fmt") or "").strip().lower() == str(fmt).strip().lower():
+            target_name = str(item.get("filename") or "").strip()
+            break
+    if not target_name:
+        raise HTTPException(status_code=404, detail="rag_query_export_format_not_found")
+    try:
+        path = records.artifact_path(LLM_FILES_WORKSPACE_ID, _rag_query_output_relpath(request_id, target_name))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid_request_id") from exc
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="rag_query_export_not_found")
+    return path, target_name
+
 def _rag_rank_hits(
     *,
     query: str,
     indexes: list[dict[str, Any]],
     transcript_variant: TranscriptVariant,
     top_k: int,
-) -> tuple[list[RAGHit], int, str]:
+) -> tuple[list[RAGHit], int, str, RAGRetrievalMetrics]:
     q_text = str(query or "").strip()
     q_terms_all = _rag_tokenize(q_text)
     if not q_terms_all:
-        return [], 0, "keyword_only"
+        return [], 0, "keyword_only", RAGRetrievalMetrics()
     q_terms_unique = list(dict.fromkeys(q_terms_all))
     q_term_qtf = Counter(q_terms_all)
 
@@ -2314,7 +2718,7 @@ def _rag_rank_hits(
                 all_chunks.append(chunk)
     total_chunks = len(all_chunks)
     if total_chunks == 0:
-        return [], 0, "keyword_only"
+        return [], 0, "keyword_only", RAGRetrievalMetrics()
 
     indexes_have_vectors = _rag_indexes_have_vectors(indexes)
     runtime_vector_cfg = _rag_vector_config()
@@ -2477,7 +2881,7 @@ def _rag_rank_hits(
             if vector_runtime_enabled
             else "keyword_only"
         )
-        return [], total_chunks, retrieval_mode
+        return [], total_chunks, retrieval_mode, RAGRetrievalMetrics()
 
     hybrid_vector_enabled = bool(vector_runtime_enabled and max_semantic > 0.0)
     kw_weight, vec_weight = _rag_hybrid_weights(vector_enabled=hybrid_vector_enabled)
@@ -2501,6 +2905,17 @@ def _rag_rank_hits(
         ranked.append((final_score, keyword_score, semantic_score, chunk))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
+    ranked = _rag_apply_reranker(
+        ranked_rows=ranked,
+        query_text=q_text,
+        query_terms=q_terms_unique,
+        max_semantic_score=max_semantic,
+    )
+    retrieval_metrics = _rag_compute_retrieval_metrics(
+        ranked_rows=ranked,
+        query_terms=q_terms_unique,
+        top_k=top_k,
+    )
     hits: list[RAGHit] = []
     for final_score, keyword_score, semantic_score, chunk in ranked[: max(1, min(top_k, 50))]:
         meeting_meta = chunk.get("meeting_meta") if isinstance(chunk.get("meeting_meta"), dict) else {}
@@ -2536,7 +2951,7 @@ def _rag_rank_hits(
         if hybrid_vector_enabled
         else "keyword_only"
     )
-    return hits, total_chunks, retrieval_mode
+    return hits, total_chunks, retrieval_mode, retrieval_metrics
 
 
 def _rag_answer_from_hits(
@@ -2582,63 +2997,114 @@ def _rag_answer_from_hits(
 
 
 def _rag_query(req: RAGQueryRequest) -> RAGQueryResponse:
+    started = time.perf_counter()
+    request_id = f"ragq_{uuid.uuid4().hex[:16]}"
+    generated_at = _utc_now_iso()
+    warnings: list[str] = []
     meeting_ids = _rag_select_meeting_ids(explicit_ids=req.meeting_ids, recent_limit=req.recent_limit)
-    if not meeting_ids:
-        return RAGQueryResponse(
+    try:
+        indexes: list[dict[str, Any]] = []
+        if not meeting_ids:
+            warnings.append("no_meetings_selected")
+        else:
+            for meeting_id in meeting_ids:
+                try:
+                    if req.auto_index:
+                        index, _cached = _ensure_rag_index(
+                            meeting_id,
+                            source=req.transcript_variant,
+                            force_rebuild=bool(req.force_reindex),
+                        )
+                    else:
+                        index = _rag_read_index(meeting_id, req.transcript_variant)
+                    indexes.append(index)
+                except Exception:
+                    warnings.append(f"index_failed:{meeting_id}")
+                    record_rag_query_error(reason="index_failed")
+                    continue
+
+        index_version, vector_provider, embedding_model = _rag_vector_meta_from_indexes(indexes)
+        hits, total_chunks, retrieval_mode, retrieval_metrics = _rag_rank_hits(
+            query=req.query,
+            indexes=indexes,
+            transcript_variant=req.transcript_variant,
+            top_k=req.top_k,
+        )
+        if not hits:
+            record_rag_no_hits()
+
+        answer = ""
+        llm_used = False
+        if req.answer_mode == "llm":
+            llm_started = time.perf_counter()
+            answer, llm_used, answer_warnings = _rag_answer_from_hits(
+                query=req.query,
+                hits=hits,
+                prompt_override=req.answer_prompt,
+            )
+            record_rag_llm_latency_ms(service="api_gateway", elapsed_ms=(time.perf_counter() - llm_started) * 1000.0)
+            warnings.extend(answer_warnings)
+
+        answer_quality, citation_coverage, unsupported_claim_rate, hallucination_rate, quality_warnings = _rag_answer_quality(
+            answer_text=answer,
+            llm_used=llm_used,
+            hits_count=len(hits),
+        )
+        warnings.extend(quality_warnings)
+        quality_score = 1.0 - max(unsupported_claim_rate, hallucination_rate)
+        record_rag_answer_quality(
+            citation_coverage=citation_coverage,
+            answer_quality_score=quality_score,
+            recall_at_k=retrieval_metrics.recall_at_k,
+            mrr=retrieval_metrics.mrr,
+            ndcg_at_k=retrieval_metrics.ndcg_at_k,
+        )
+
+        response = RAGQueryResponse(
+            request_id=request_id,
+            generated_at=generated_at,
             query=req.query,
             transcript_variant=req.transcript_variant,
-            searched_meetings=0,
-            indexed_meetings=0,
-            total_chunks_scanned=0,
-            hits=[],
-            warnings=["no_meetings_selected"],
-        )
-
-    indexes: list[dict[str, Any]] = []
-    warnings: list[str] = []
-    for meeting_id in meeting_ids:
-        try:
-            if req.auto_index:
-                index, _cached = _ensure_rag_index(
-                    meeting_id,
-                    source=req.transcript_variant,
-                    force_rebuild=bool(req.force_reindex),
-                )
-            else:
-                index = _rag_read_index(meeting_id, req.transcript_variant)
-            indexes.append(index)
-        except Exception:
-            warnings.append(f"index_failed:{meeting_id}")
-            continue
-
-    hits, total_chunks, retrieval_mode = _rag_rank_hits(
-        query=req.query,
-        indexes=indexes,
-        transcript_variant=req.transcript_variant,
-        top_k=req.top_k,
-    )
-    answer = ""
-    llm_used = False
-    if req.answer_mode == "llm":
-        answer, llm_used, answer_warnings = _rag_answer_from_hits(
-            query=req.query,
+            meeting_ids=list(meeting_ids),
+            top_k=int(req.top_k),
+            retrieval_mode=retrieval_mode,
+            index_version=index_version,
+            vector_provider=vector_provider,
+            embedding_model=embedding_model,
+            searched_meetings=len(meeting_ids),
+            indexed_meetings=len(indexes),
+            total_chunks_scanned=total_chunks,
             hits=hits,
-            prompt_override=req.answer_prompt,
+            retrieval_metrics=retrieval_metrics,
+            answer=answer,
+            llm_used=llm_used,
+            answer_quality=answer_quality,
+            citation_coverage=round(_rag_clamp01(citation_coverage), 6),
+            unsupported_claim_rate=round(_rag_clamp01(unsupported_claim_rate), 6),
+            hallucination_rate=round(_rag_clamp01(hallucination_rate), 6),
+            warnings=warnings,
+            files=[],
         )
-        warnings.extend(answer_warnings)
 
-    return RAGQueryResponse(
-        query=req.query,
-        transcript_variant=req.transcript_variant,
-        retrieval_mode=retrieval_mode,
-        searched_meetings=len(meeting_ids),
-        indexed_meetings=len(indexes),
-        total_chunks_scanned=total_chunks,
-        hits=hits,
-        answer=answer,
-        llm_used=llm_used,
-        warnings=warnings,
-    )
+        try:
+            files = _rag_store_query_result_files(
+                request_id=request_id,
+                generated_at=generated_at,
+                query_resp=response,
+            )
+            response.files = files
+        except Exception:
+            record_rag_export_error(reason="write_failed")
+            response.warnings.append("export_write_failed")
+        return response
+    except HTTPException as exc:
+        record_rag_query_error(reason=str(exc.detail or "http_error"))
+        raise
+    except Exception:
+        record_rag_query_error(reason="unhandled_error")
+        raise
+    finally:
+        record_rag_query_latency_ms(service="api_gateway", elapsed_ms=(time.perf_counter() - started) * 1000.0)
 
 
 @dataclass
@@ -2867,12 +3333,16 @@ def _load_or_build_report(*, meeting_id: str, source: TranscriptVariant) -> dict
     return report
 
 
-def _compare_item_from_meeting(*, meeting, source: TranscriptVariant) -> CompareMeetingItem:
+def _compare_item_and_report_from_meeting(
+    *,
+    meeting,
+    source: TranscriptVariant,
+) -> tuple[CompareMeetingItem, dict[str, Any]]:
     report = _load_or_build_report(meeting_id=meeting.id, source=source)
     meta = _extract_compare_meta(getattr(meeting, "context", None))
     decision = report.get("decision") if isinstance(report.get("decision"), dict) else {}
     data_quality = report.get("data_quality") if isinstance(report.get("data_quality"), dict) else {}
-    return CompareMeetingItem(
+    item = CompareMeetingItem(
         meeting_id=meeting.id,
         created_at=meeting.created_at,
         source=source,
@@ -2888,6 +3358,12 @@ def _compare_item_from_meeting(*, meeting, source: TranscriptVariant) -> Compare
         comparable=bool(data_quality.get("comparable", False)),
         summary=_safe_text(report.get("summary"), limit=300),
     )
+    return item, report
+
+
+def _compare_item_from_meeting(*, meeting, source: TranscriptVariant) -> CompareMeetingItem:
+    item, _ = _compare_item_and_report_from_meeting(meeting=meeting, source=source)
+    return item
 
 
 def _comparison_sort_key(item: CompareMeetingItem) -> tuple[int, float, float, float]:
@@ -2960,6 +3436,311 @@ def _comparison_to_csv(rows: list[CompareMeetingItem]) -> bytes:
             }
         )
     return ("\ufeff" + output.getvalue()).encode("utf-8")
+
+
+def _safe_list_texts(value: Any, *, limit: int = 8, item_limit: int = 180) -> list[str]:
+    out: list[str] = []
+    if not isinstance(value, list):
+        return out
+    seen: set[str] = set()
+    for item in value:
+        text = _safe_text(item, limit=item_limit)
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _report_topics_and_risks(report: dict[str, Any]) -> tuple[list[str], list[str]]:
+    topics: list[str] = []
+    topic_seen: set[str] = set()
+    risks: list[str] = []
+    risk_seen: set[str] = set()
+
+    def _push_topic(value: Any) -> None:
+        text = _safe_text(value, limit=180)
+        if not text:
+            return
+        key = text.lower()
+        if key in topic_seen:
+            return
+        topic_seen.add(key)
+        topics.append(text)
+
+    def _push_risk(value: Any) -> None:
+        text = _safe_text(value, limit=180)
+        if not text:
+            return
+        key = text.lower()
+        if key in risk_seen:
+            return
+        risk_seen.add(key)
+        risks.append(text)
+
+    _push_topic(report.get("summary"))
+    for item in _safe_list_texts(report.get("bullets"), limit=12, item_limit=180):
+        _push_topic(item)
+
+    highlights = report.get("highlights") if isinstance(report.get("highlights"), dict) else {}
+    for item in _safe_list_texts(highlights.get("strengths"), limit=8, item_limit=180):
+        _push_topic(item)
+    for item in _safe_list_texts(highlights.get("concerns"), limit=8, item_limit=180):
+        _push_risk(item)
+
+    for item in _safe_list_texts(report.get("risk_flags"), limit=12, item_limit=180):
+        _push_risk(item)
+    for item in _safe_list_texts(highlights.get("follow_up_questions"), limit=8, item_limit=180):
+        _push_risk(item)
+
+    return topics[:8], risks[:8]
+
+
+def _parse_optional_date(value: str | None, *, is_end: bool = False) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
+            dt = datetime.strptime(raw, "%Y-%m-%d")
+            if is_end:
+                return dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return dt
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if getattr(dt, "tzinfo", None) is not None:
+            return dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _matches_optional_filter(value: str, expected: str | None) -> bool:
+    expected_norm = str(expected or "").strip().lower()
+    if not expected_norm:
+        return True
+    value_norm = str(value or "").strip().lower()
+    return expected_norm in value_norm
+
+
+def _compare_interviewer_sort_key(item: CompareInterviewerItem) -> tuple[int, int, float, float, str]:
+    return (
+        int(item.comparable_total or 0),
+        int(item.interviews_total or 0),
+        float(item.avg_score or 0.0),
+        float(item.avg_confidence or 0.0),
+        str(item.interviewer or "").lower(),
+    )
+
+
+def _build_compare_interviewers_response(
+    *,
+    source: TranscriptVariant,
+    limit: int,
+    vacancy: str | None = None,
+    level: str | None = None,
+    interviewer: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    min_comparable_ratio: float = 0.0,
+    min_interviews: int = 1,
+) -> CompareInterviewersResponse:
+    start_dt = _parse_optional_date(date_from, is_end=False)
+    end_dt = _parse_optional_date(date_to, is_end=True)
+    if start_dt and end_dt and start_dt > end_dt:
+        start_dt, end_dt = end_dt, start_dt
+
+    with db_session() as session:
+        repo = MeetingRepository(session)
+        meetings = repo.list_recent(limit=max(1, min(limit, 500)))
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for meeting in meetings:
+        created_at = getattr(meeting, "created_at", None)
+        if start_dt and created_at and created_at < start_dt:
+            continue
+        if end_dt and created_at and created_at > end_dt:
+            continue
+        try:
+            item, report = _compare_item_and_report_from_meeting(meeting=meeting, source=source)
+        except Exception:
+            continue
+
+        if not _matches_optional_filter(item.vacancy, vacancy):
+            continue
+        if not _matches_optional_filter(item.level, level):
+            continue
+        if not _matches_optional_filter(item.interviewer, interviewer):
+            continue
+
+        interviewer_name = _safe_text(item.interviewer, limit=120) or "unknown"
+        bucket = grouped.setdefault(
+            interviewer_name,
+            {
+                "items": [],
+                "topic_counter": Counter(),
+                "risk_counter": Counter(),
+                "decision_counter": Counter(),
+                "vacancy_counter": Counter(),
+                "level_counter": Counter(),
+            },
+        )
+        bucket["items"].append(item)
+        bucket["decision_counter"][str(item.decision_status or "insufficient_data")] += 1
+        bucket["vacancy_counter"][_safe_text(item.vacancy, limit=120) or "unknown"] += 1
+        bucket["level_counter"][_safe_text(item.level, limit=80) or "unknown"] += 1
+
+        topics, risks = _report_topics_and_risks(report)
+        for topic in topics:
+            bucket["topic_counter"][topic] += 1
+        for risk in risks:
+            bucket["risk_counter"][risk] += 1
+
+    rows: list[CompareInterviewerItem] = []
+    for interviewer_name, bucket in grouped.items():
+        items = list(bucket.get("items") or [])
+        if not items:
+            continue
+        interviews_total = len(items)
+        comparable_items = [it for it in items if bool(it.comparable)]
+        comparable_total = len(comparable_items)
+        comparable_ratio = (float(comparable_total) / float(interviews_total)) if interviews_total else 0.0
+        if comparable_ratio < float(min_comparable_ratio or 0.0):
+            continue
+        if interviews_total < int(min_interviews or 1):
+            continue
+
+        score_source = comparable_items or items
+        score_values = [float(it.overall_score or 0.0) for it in score_source if float(it.overall_score or 0.0) > 0.0]
+        conf_values = [
+            float(it.decision_confidence or 0.0)
+            for it in score_source
+            if float(it.decision_confidence or 0.0) > 0.0
+        ]
+        avg_score = round(sum(score_values) / len(score_values), 2) if score_values else 0.0
+        avg_conf = round(sum(conf_values) / len(conf_values), 3) if conf_values else 0.0
+
+        topic_counter = bucket.get("topic_counter") or Counter()
+        risk_counter = bucket.get("risk_counter") or Counter()
+        decision_counter = bucket.get("decision_counter") or Counter()
+        vacancy_counter = bucket.get("vacancy_counter") or Counter()
+        level_counter = bucket.get("level_counter") or Counter()
+
+        rows.append(
+            CompareInterviewerItem(
+                interviewer=interviewer_name,
+                interviews_total=interviews_total,
+                comparable_total=comparable_total,
+                avg_score=avg_score,
+                avg_confidence=avg_conf,
+                top_topics=[key for key, _ in topic_counter.most_common(5)],
+                top_risks=[key for key, _ in risk_counter.most_common(5)],
+                decision_breakdown={str(k): int(v) for k, v in decision_counter.items()},
+                vacancy_breakdown={str(k): int(v) for k, v in vacancy_counter.items()},
+                level_breakdown={str(k): int(v) for k, v in level_counter.items()},
+            )
+        )
+
+    rows.sort(key=_compare_interviewer_sort_key, reverse=True)
+    return CompareInterviewersResponse(
+        generated_at=datetime.utcnow().isoformat() + "Z",
+        source=source,
+        filters={
+            "vacancy": _safe_text(vacancy, limit=120),
+            "level": _safe_text(level, limit=80),
+            "interviewer": _safe_text(interviewer, limit=120),
+            "date_from": _safe_text(date_from, limit=40),
+            "date_to": _safe_text(date_to, limit=40),
+            "min_comparable_ratio": float(min_comparable_ratio or 0.0),
+            "min_interviews": int(min_interviews or 1),
+        },
+        items=rows,
+    )
+
+
+def _compare_interviewers_to_csv(rows: list[CompareInterviewerItem]) -> bytes:
+    output = io.StringIO()
+    fieldnames = [
+        "interviewer",
+        "interviews_total",
+        "comparable_total",
+        "avg_score",
+        "avg_confidence",
+        "top_topics",
+        "top_risks",
+        "decision_breakdown",
+        "vacancy_breakdown",
+        "level_breakdown",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for item in rows:
+        writer.writerow(
+            {
+                "interviewer": item.interviewer,
+                "interviews_total": item.interviews_total,
+                "comparable_total": item.comparable_total,
+                "avg_score": item.avg_score,
+                "avg_confidence": item.avg_confidence,
+                "top_topics": " | ".join(item.top_topics),
+                "top_risks": " | ".join(item.top_risks),
+                "decision_breakdown": json.dumps(item.decision_breakdown, ensure_ascii=False),
+                "vacancy_breakdown": json.dumps(item.vacancy_breakdown, ensure_ascii=False),
+                "level_breakdown": json.dumps(item.level_breakdown, ensure_ascii=False),
+            }
+        )
+    return ("\ufeff" + output.getvalue()).encode("utf-8")
+
+
+def _compare_interviewers_to_text(payload: CompareInterviewersResponse) -> str:
+    lines: list[str] = [
+        "Interviewers compare",
+        f"Generated at: {payload.generated_at}",
+        f"Source: {payload.source}",
+        "",
+    ]
+    if payload.filters:
+        lines.append("Filters:")
+        for key in (
+            "vacancy",
+            "level",
+            "interviewer",
+            "date_from",
+            "date_to",
+            "min_comparable_ratio",
+            "min_interviews",
+        ):
+            value = payload.filters.get(key)
+            if value in (None, "", 0, 0.0):
+                continue
+            lines.append(f"- {key}: {value}")
+        lines.append("")
+    if not payload.items:
+        lines.append("No data.")
+        return "\n".join(lines).strip() + "\n"
+    for idx, item in enumerate(payload.items, start=1):
+        lines.append(f"{idx}. {item.interviewer}")
+        lines.append(
+            f"   interviews={item.interviews_total}, comparable={item.comparable_total}, "
+            f"avg_score={item.avg_score:.2f}, avg_confidence={item.avg_confidence:.3f}"
+        )
+        if item.top_topics:
+            lines.append(f"   top_topics: {', '.join(item.top_topics)}")
+        if item.top_risks:
+            lines.append(f"   top_risks: {', '.join(item.top_risks)}")
+        if item.decision_breakdown:
+            lines.append(
+                "   decisions: "
+                + ", ".join(f"{k}={v}" for k, v in sorted(item.decision_breakdown.items(), key=lambda kv: kv[0]))
+            )
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
 
 
 def _senior_brief_text(*, meeting_id: str, source: TranscriptVariant, report: dict[str, Any]) -> str:
@@ -3208,6 +3989,30 @@ def rag_query(
     return _rag_query(req)
 
 
+@router.get("/rag/query/export")
+def rag_query_export(
+    request_id: str = Query(..., min_length=4, max_length=80),
+    fmt: Literal["txt", "csv", "json"] = Query(default="json"),
+    _=Depends(auth_dep),
+) -> Response:
+    try:
+        path, filename = _rag_query_export_file(request_id=request_id, fmt=fmt)
+    except HTTPException as exc:
+        record_rag_export_error(reason=str(exc.detail or "not_found"))
+        raise
+    except Exception:
+        record_rag_export_error(reason="unexpected_error")
+        raise
+    media_type = (
+        "application/json"
+        if fmt == "json"
+        else "text/csv; charset=utf-8"
+        if fmt == "csv"
+        else "text/plain; charset=utf-8"
+    )
+    return FileResponse(path, media_type=media_type, filename=filename)
+
+
 @router.post("/meetings/{meeting_id}/rename")
 def rename_meeting(
     meeting_id: str,
@@ -3311,6 +4116,86 @@ def compare_meetings_export(
         media_type="text/csv",
         headers={
             "Content-Disposition": f'attachment; filename="compare_{source}_{ts}.csv"',
+        },
+    )
+
+
+@router.get("/meetings/compare/interviewers", response_model=CompareInterviewersResponse)
+def compare_interviewers(
+    source: TranscriptVariant = Query(default="clean"),
+    limit: int = Query(default=100, ge=1, le=500),
+    vacancy: str | None = Query(default=None),
+    level: str | None = Query(default=None),
+    interviewer: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    min_comparable_ratio: float = Query(default=0.0, ge=0.0, le=1.0),
+    min_interviews: int = Query(default=1, ge=1, le=100),
+    _=Depends(auth_dep),
+) -> CompareInterviewersResponse:
+    return _build_compare_interviewers_response(
+        source=source,
+        limit=limit,
+        vacancy=vacancy,
+        level=level,
+        interviewer=interviewer,
+        date_from=date_from,
+        date_to=date_to,
+        min_comparable_ratio=min_comparable_ratio,
+        min_interviews=min_interviews,
+    )
+
+
+@router.get("/meetings/compare/interviewers/export")
+def compare_interviewers_export(
+    source: TranscriptVariant = Query(default="clean"),
+    limit: int = Query(default=100, ge=1, le=500),
+    vacancy: str | None = Query(default=None),
+    level: str | None = Query(default=None),
+    interviewer: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    min_comparable_ratio: float = Query(default=0.0, ge=0.0, le=1.0),
+    min_interviews: int = Query(default=1, ge=1, le=100),
+    fmt: Literal["csv", "json", "txt"] = Query(default="csv"),
+    _=Depends(auth_dep),
+) -> Response:
+    payload = _build_compare_interviewers_response(
+        source=source,
+        limit=limit,
+        vacancy=vacancy,
+        level=level,
+        interviewer=interviewer,
+        date_from=date_from,
+        date_to=date_to,
+        min_comparable_ratio=min_comparable_ratio,
+        min_interviews=min_interviews,
+    )
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    if fmt == "json":
+        body = payload.model_dump_json(indent=2).encode("utf-8")
+        return Response(
+            content=body,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="compare_interviewers_{source}_{ts}.json"',
+            },
+        )
+    if fmt == "txt":
+        body = _compare_interviewers_to_text(payload).encode("utf-8")
+        return Response(
+            content=body,
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="compare_interviewers_{source}_{ts}.txt"',
+            },
+        )
+    body = _compare_interviewers_to_csv(payload.items)
+    return Response(
+        content=body,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="compare_interviewers_{source}_{ts}.csv"',
         },
     )
 

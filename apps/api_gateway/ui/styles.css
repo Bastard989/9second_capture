@@ -830,6 +830,28 @@ button:active {
   margin-left: auto;
 }
 
+.llm-chat-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.llm-chat-mode-switch .ghost.active {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(120deg, var(--accent), var(--accent-2));
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.llm-source-panel {
+  margin-top: 8px;
+}
+
+.llm-source-panel.active {
+  display: block;
+}
+
 .llm-chat-history {
   min-height: 70px;
   max-height: 220px;
@@ -859,6 +881,228 @@ button:active {
 .file-title {
   font-size: 14px;
   font-weight: 700;
+}
+
+.rag-workspace {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--card-soft) 90%, var(--card) 10%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rag-header-actions {
+  justify-content: flex-end;
+}
+
+.rag-layout {
+  display: grid;
+  grid-template-columns: 1.05fr 1.3fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.rag-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--card) 93%, var(--card-soft) 7%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rag-picker-actions {
+  gap: 6px;
+}
+
+.rag-meeting-picker {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  min-height: 120px;
+  max-height: 240px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: color-mix(in srgb, var(--card-soft) 88%, var(--card) 12%);
+}
+
+.rag-meeting-picker-empty {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.rag-meeting-option {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--card) 95%, var(--card-soft) 5%);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.rag-meeting-option input[type="checkbox"] {
+  margin-top: 3px;
+}
+
+.rag-saved-set-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+  gap: 8px;
+  align-items: center;
+}
+
+.rag-meeting-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rag-meeting-sub {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.rag-meeting-sub.good {
+  color: var(--ok-ink);
+}
+
+.rag-meeting-sub.bad {
+  color: var(--bad-ink);
+}
+
+.rag-query-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 140px;
+  gap: 8px;
+}
+
+.rag-query-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.checkbox-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-1);
+}
+
+.checkbox-line input[type="checkbox"] {
+  margin-top: 2px;
+}
+
+.rag-query-options .checkbox-line {
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card-soft) 86%, var(--card) 14%);
+}
+
+.rag-export-actions {
+  justify-content: flex-end;
+}
+
+.rag-output {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rag-answer-block,
+.rag-hits-block {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--card) 93%, var(--card-soft) 7%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rag-answer-text {
+  margin: 0;
+  min-height: 72px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card-soft) 90%, var(--card) 10%);
+}
+
+.rag-hits-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.rag-hit-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--card-soft) 88%, var(--card) 12%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rag-hit-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+}
+
+.rag-hit-title {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.rag-hit-meta {
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.rag-hit-cite {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rag-hit-cite .pill {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.rag-hit-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.42;
+  color: var(--ink-1);
+}
+
+.rag-hit-empty {
+  color: var(--ink-2);
+  font-size: 13px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--card-soft) 88%, var(--card) 12%);
 }
 
 .llm-status {
@@ -1051,6 +1295,22 @@ button:active {
 
   .flow-progress {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rag-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-query-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-output {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-saved-set-row {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -287,6 +287,9 @@ class Settings(BaseSettings):
     rag_embedding_char_ngrams: bool = Field(default=True, alias="RAG_EMBEDDING_CHAR_NGRAMS")
     rag_keyword_weight: float = Field(default=0.6, alias="RAG_KEYWORD_WEIGHT")
     rag_vector_weight: float = Field(default=0.4, alias="RAG_VECTOR_WEIGHT")
+    rag_reranker_enabled: bool = Field(default=True, alias="RAG_RERANKER_ENABLED")
+    rag_reranker_top_n: int = Field(default=20, alias="RAG_RERANKER_TOP_N")
+    rag_reranker_alpha: float = Field(default=0.35, alias="RAG_RERANKER_ALPHA")
 
     # -------------------------------------------------------------------------
     # Speaker inference

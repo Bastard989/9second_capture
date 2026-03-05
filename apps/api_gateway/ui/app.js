@@ -120,6 +120,7 @@ const state = {
     hintText: "",
     hintStyle: "muted",
   },
+  llmSourceMode: "files",
   rag: {
     selectedMeetingIds: new Set(),
     savedSets: {},
@@ -644,6 +645,10 @@ const i18n = {
     llm_artifact_busy_text:
       "Генерируем артефакт из прикрепленных файлов. Для custom/table и LLM может потребоваться больше времени.",
     llm_chat_title: "LLM чат по файлам",
+    llm_mode_files_only: "Files only",
+    llm_mode_rag: "RAG",
+    llm_mode_hint_files: "Режим Files only: LLM обрабатывает только прикрепленные файлы.",
+    llm_mode_hint_rag: "Режим RAG: поиск по интервью через векторы/цитаты + ответ LLM по найденным фрагментам.",
     llm_chat_clear_btn: "Очистить",
     llm_chat_send_btn: "Отправить",
     llm_chat_hint_idle: "Прикрепите TXT/CSV/JSON/MD файлы и опишите нужный формат. LLM обработает только вложения.",
@@ -753,6 +758,8 @@ const i18n = {
     rag_hit_meta_time: "Время",
     rag_hit_meta_speakers: "Спикеры",
     rag_hits_empty: "Здесь появятся найденные фрагменты с цитатами.",
+    rag_result_files_title: "Файлы результата RAG",
+    rag_result_file_download: "Скачать {fmt}",
     busy_rag_query_title: "RAG запрос",
     busy_rag_query_text: "Ищем фрагменты по выбранным интервью и готовим ответ с цитатами.",
     busy_rag_index_title: "Индексация RAG",
@@ -1298,6 +1305,10 @@ const i18n = {
     llm_artifact_busy_text:
       "Generating artifact from attached files. Custom/table modes may take longer with LLM.",
     llm_chat_title: "LLM chat over files",
+    llm_mode_files_only: "Files only",
+    llm_mode_rag: "RAG",
+    llm_mode_hint_files: "Files only mode: LLM uses only attached files.",
+    llm_mode_hint_rag: "RAG mode: semantic retrieval over interviews + optional LLM answer with citations.",
     llm_chat_clear_btn: "Clear",
     llm_chat_send_btn: "Send",
     llm_chat_hint_idle: "Attach TXT/CSV/JSON/MD files and describe target format. LLM will use attachments only.",
@@ -1407,6 +1418,8 @@ const i18n = {
     rag_hit_meta_time: "Time",
     rag_hit_meta_speakers: "Speakers",
     rag_hits_empty: "Retrieved chunks with citations will appear here.",
+    rag_result_files_title: "RAG result files",
+    rag_result_file_download: "Download {fmt}",
     busy_rag_query_title: "RAG query",
     busy_rag_query_text: "Searching selected interviews and preparing an answer with citations.",
     busy_rag_index_title: "RAG indexing",
@@ -1700,6 +1713,11 @@ const els = {
   llmArtifactForceRebuild: document.getElementById("llmArtifactForceRebuild"),
   llmChatClearBtn: document.getElementById("llmChatClearBtn"),
   llmChatSendBtn: document.getElementById("llmChatSendBtn"),
+  llmSourceModeFiles: document.getElementById("llmSourceModeFiles"),
+  llmSourceModeRag: document.getElementById("llmSourceModeRag"),
+  llmModeHint: document.getElementById("llmModeHint"),
+  llmFilesModePanel: document.getElementById("llmFilesModePanel"),
+  llmRagModePanel: document.getElementById("llmRagModePanel"),
   llmChatHint: document.getElementById("llmChatHint"),
   llmChatHistory: document.getElementById("llmChatHistory"),
   llmChatInput: document.getElementById("llmChatInput"),
@@ -1744,6 +1762,7 @@ const els = {
   ragResultMeta: document.getElementById("ragResultMeta"),
   ragAnswerText: document.getElementById("ragAnswerText"),
   ragHitsList: document.getElementById("ragHitsList"),
+  ragResultFiles: document.getElementById("ragResultFiles"),
   chooseFolder: document.getElementById("chooseFolder"),
   folderStatus: document.getElementById("folderStatus"),
   busyOverlay: document.getElementById("busyOverlay"),
@@ -1771,6 +1790,7 @@ const els = {
   modeSettingsPanels: Array.from(document.querySelectorAll("[data-mode-panel]")),
   workModeButtons: Array.from(document.querySelectorAll("[data-work-mode]")),
   captureModeInputs: Array.from(document.querySelectorAll('input[name="captureMode"]')),
+  llmSourceModeButtons: Array.from(document.querySelectorAll("[data-llm-source-mode]")),
 };
 
 function renderTranscriptModeUi() {
@@ -2087,6 +2107,7 @@ const updateI18n = () => {
     setQuickHint(state.quickHintText, state.quickHintStyle || "muted", true);
   }
   applyWorkModeUi();
+  setLlmSourceMode(state.llmSourceMode || "files");
   renderComparisonTable();
   if (Array.isArray(state.compareItems) && state.compareItems.length) {
     setCompareHint("compare_hint_idle", "good");
@@ -2654,6 +2675,38 @@ const setRagChatHint = (hintKeyOrText = "", style = "muted", isRaw = false, para
   els.ragChatHint.className = `hint ${style || "muted"}`;
 };
 
+const _normalizeLlmSourceMode = (mode) => {
+  const raw = String(mode || "").trim().toLowerCase();
+  return raw === "rag" ? "rag" : "files";
+};
+
+const setLlmSourceMode = (mode) => {
+  const dict = i18n[state.lang] || {};
+  const normalized = _normalizeLlmSourceMode(mode || state.llmSourceMode || "files");
+  state.llmSourceMode = normalized;
+  (els.llmSourceModeButtons || []).forEach((btn) => {
+    if (!btn || !btn.dataset) return;
+    const btnMode = _normalizeLlmSourceMode(btn.dataset.llmSourceMode || "");
+    btn.classList.toggle("active", btnMode === normalized);
+  });
+  if (els.llmFilesModePanel) {
+    const isActive = normalized === "files";
+    els.llmFilesModePanel.classList.toggle("active", isActive);
+    els.llmFilesModePanel.classList.toggle("hidden", !isActive);
+  }
+  if (els.llmRagModePanel) {
+    const isActive = normalized === "rag";
+    els.llmRagModePanel.classList.toggle("active", isActive);
+    els.llmRagModePanel.classList.toggle("hidden", !isActive);
+  }
+  if (els.llmModeHint) {
+    const key = normalized === "rag" ? "llm_mode_hint_rag" : "llm_mode_hint_files";
+    const text = String(dict[key] || "");
+    els.llmModeHint.textContent = text;
+    els.llmModeHint.className = "hint muted";
+  }
+};
+
 const _attachmentFilesFromInput = (inputEl) =>
   Array.from((inputEl && inputEl.files) || [])
     .filter(Boolean)
@@ -3054,6 +3107,7 @@ const renderRagChatHistory = () => {
 
 const _applyLlmChatPreset = (presetId) => {
   setResultsTab("llm", { setFlow: true });
+  setLlmSourceMode("files");
   const prompt = _llmChatPresetPrompt(presetId);
   if (!prompt || !els.llmChatInput) return;
   els.llmChatInput.value = prompt;
@@ -3284,6 +3338,7 @@ const clearLlmChatResults = () => {
 
 const sendLlmChatPrompt = async () => {
   setResultsTab("llm", { setFlow: true });
+  setLlmSourceMode("files");
   _syncLlmArtifactControlsToState();
   const dict = i18n[state.lang] || {};
   const meetingId = LLM_FILES_WORKSPACE_ID;
@@ -3917,6 +3972,42 @@ const renderRagResults = () => {
     if (!btn) return;
     btn.disabled = !hasResponse;
   });
+
+  if (els.ragResultFiles) {
+    els.ragResultFiles.innerHTML = "";
+    const files = resp && Array.isArray(resp.files) ? resp.files : [];
+    if (!files.length) {
+      const empty = document.createElement("div");
+      empty.className = "rag-hit-empty";
+      empty.textContent = dict.llm_artifact_result_none || dict.rag_result_meta_none || "No results";
+      els.ragResultFiles.appendChild(empty);
+    } else {
+      files.forEach((fileRef) => {
+        const fmt = String((fileRef && fileRef.fmt) || "").trim().toLowerCase();
+        if (!["json", "csv", "txt"].includes(fmt)) return;
+        const btn = document.createElement("button");
+        btn.className = "ghost llm-artifact-file-btn";
+        const fallbackName = `rag_${fmt}_result.${fmt}`;
+        const filename = String((fileRef && fileRef.filename) || "").trim() || fallbackName;
+        const bytes = Number((fileRef && fileRef.bytes) || 0);
+        const label = formatText(dict.rag_result_file_download || dict.llm_artifact_file_download || "Download {fmt}", {
+          fmt: fmt.toUpperCase(),
+        });
+        btn.textContent = `${label} (${_formatBytes(bytes)})`;
+        btn.addEventListener("click", () => {
+          const directUrl = String((fileRef && fileRef.download_url) || "").trim();
+          const requestId = String((resp && resp.request_id) || "").trim();
+          const url = directUrl || (requestId ? `/v1/rag/query/export?request_id=${encodeURIComponent(requestId)}&fmt=${encodeURIComponent(fmt)}` : "");
+          if (!url) {
+            setRagHint("rag_hint_export_empty", "bad");
+            return;
+          }
+          void downloadArtifact(url, filename, { preferPicker: true });
+        });
+        els.ragResultFiles.appendChild(btn);
+      });
+    }
+  }
 };
 
 const renderRagWorkspace = () => {
@@ -4089,6 +4180,8 @@ const indexSelectedRagMeetings = async () => {
 };
 
 const runRagQuery = async () => {
+  setResultsTab("llm", { setFlow: true });
+  setLlmSourceMode("rag");
   const dict = i18n[state.lang] || {};
   const query = String((els.ragQueryInput && els.ragQueryInput.value) || "").trim();
   if (!query) {
@@ -9539,6 +9632,18 @@ if (els.llmChatSendBtn) {
     void sendLlmChatPrompt();
   });
 }
+if (els.llmSourceModeFiles) {
+  els.llmSourceModeFiles.addEventListener("click", () => {
+    setResultsTab("llm", { setFlow: true });
+    setLlmSourceMode("files");
+  });
+}
+if (els.llmSourceModeRag) {
+  els.llmSourceModeRag.addEventListener("click", () => {
+    setResultsTab("llm", { setFlow: true });
+    setLlmSourceMode("rag");
+  });
+}
 if (els.llmChatClearBtn) {
   els.llmChatClearBtn.addEventListener("click", () => {
     clearLlmChatResults();
@@ -9709,6 +9814,7 @@ applyTheme(savedTheme || "light");
 setWorkMode(savedWorkMode || state.workMode, { persist: false, force: true });
 updateI18n();
 setResultsTab(state.resultsTab || "audio");
+setLlmSourceMode(state.llmSourceMode || "files");
 setFlowStep("mode");
 _loadRagSavedSetsFromStorage();
 _diagMarkAllMuted();
