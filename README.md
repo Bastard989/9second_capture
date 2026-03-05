@@ -108,6 +108,17 @@ cd "/Users/kirill/Documents/New project/9second_capture"
 pytest -q tests/unit
 ```
 
+RAG benchmark (Recall@K / MRR / nDCG):
+
+```bash
+cd "/Users/kirill/Documents/New project/9second_capture"
+python3 tools/rag_benchmark.py \
+  --api-base http://127.0.0.1:8010 \
+  --dataset "интеграция rag/benchmark_dataset.sample.json" \
+  --source clean \
+  --top-k 8
+```
+
 ## Документация
 
 - Пользовательский гайд: `docs/user_guide.md`

@@ -1,0 +1,33 @@
+{
+  "schema_version": "v1",
+  "description": "Sample benchmark set for RAG retrieval quality checks.",
+  "cases": [
+    {
+      "id": "case_architecture_risk",
+      "query": "Какие риски по сервису авторизации обсуждались и какое решение приняли?",
+      "meeting_ids": [
+        "mtg_example_1",
+        "mtg_example_2"
+      ],
+      "expected_chunk_ids": [],
+      "expected_text_contains": [
+        "сервис акторизации",
+        "надо переносить",
+        "старая инфраструктура"
+      ]
+    },
+    {
+      "id": "case_action_items",
+      "query": "Какие action items были зафиксированы и кому они назначены?",
+      "meeting_ids": [
+        "mtg_example_1"
+      ],
+      "expected_chunk_ids": [],
+      "expected_text_contains": [
+        "напиши мне в личку",
+        "задачу я создам",
+        "заведу"
+      ]
+    }
+  ]
+}
