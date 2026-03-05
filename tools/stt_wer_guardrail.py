@@ -61,19 +61,19 @@ def _args() -> argparse.Namespace:
         "--max-avg-wer-fast",
         type=float,
         default=0.52,
-        help="Maximum average WER for fast/live_fast profile",
+        help="Maximum average WER for fast profile",
     )
     p.add_argument(
         "--max-avg-wer-balanced",
         type=float,
         default=0.45,
-        help="Maximum average WER for balanced/live_balanced profile",
+        help="Maximum average WER for balanced profile",
     )
     p.add_argument(
         "--max-avg-wer-accurate",
         type=float,
         default=0.40,
-        help="Maximum average WER for accurate/live_accurate/final profile",
+        help="Maximum average WER for accurate/final profile",
     )
     p.add_argument(
         "--sample-rate",
@@ -159,9 +159,9 @@ def _run_case(
 
 def _profile_bucket(quality_profile: str) -> str:
     qp = str(quality_profile or "").strip().lower()
-    if qp in {"fast", "live_fast"}:
+    if qp == "fast":
         return "fast"
-    if qp in {"accurate", "live_accurate", "final"}:
+    if qp in {"accurate", "final"}:
         return "accurate"
     return "balanced"
 

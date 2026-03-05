@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -26,6 +28,10 @@ INSTALL_ERROR: str | None = None
 APP_PROCESS: subprocess.Popen | None = None
 APP_URL: str | None = None
 LOG_FILE: Path | None = None
+APP_LOG_FH = None
+LAUNCHER_SERVER: ThreadingHTTPServer | None = None
+SHUTDOWN_STARTED = False
+SHUTDOWN_LOCK = threading.Lock()
 
 OLLAMA_DEFAULT_MODEL = "llama3.1:8b"
 OLLAMA_DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
@@ -49,6 +55,84 @@ def _mode_file() -> Path:
 
 def _runtime_overrides_path() -> Path:
     return _user_root() / "state" / "runtime_overrides.json"
+
+
+def _launcher_pid_file() -> Path:
+    return _user_root() / "launcher.pid"
+
+
+def _read_pid_file(path: Path) -> int | None:
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        pid = int(raw)
+    except Exception:
+        return None
+    return pid if pid > 1 else None
+
+
+def _is_process_running(pid: int) -> bool:
+    if pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+    return True
+
+
+def _terminate_pid(pid: int, *, timeout_sec: float = 6.0) -> None:
+    if pid <= 1 or not _is_process_running(pid):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except Exception:
+        return
+    deadline = time.time() + max(0.2, float(timeout_sec))
+    while time.time() < deadline:
+        if not _is_process_running(pid):
+            return
+        time.sleep(0.15)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception:
+        pass
+
+
+def _claim_single_launcher_instance() -> None:
+    path = _launcher_pid_file()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    old_pid = _read_pid_file(path)
+    current_pid = os.getpid()
+    if old_pid and old_pid != current_pid and _is_process_running(old_pid):
+        _log(f"[launcher] stopping previous launcher pid={old_pid}")
+        _terminate_pid(old_pid, timeout_sec=4.0)
+    try:
+        path.write_text(str(current_pid), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _clear_launcher_pid() -> None:
+    path = _launcher_pid_file()
+    pid = _read_pid_file(path)
+    if pid and pid != os.getpid():
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _log(line: str) -> None:
@@ -571,9 +655,16 @@ def _start_app() -> str:
     env.setdefault("EMBEDDING_MODEL_ID", OLLAMA_DEFAULT_EMBEDDING_MODEL)
     env.setdefault("RAG_EMBEDDING_PROVIDER", "auto")
     env.setdefault("RAG_VECTOR_ENABLED", "true")
-    env.setdefault("LLM_REQUEST_TIMEOUT_SEC", "15")
-    env.setdefault("LLM_RETRIES", "1")
+    # 0 means "no hard limit" for local Ollama:
+    # - LLM_MAX_TOKENS=0 => do not send max_tokens to provider
+    # - LLM_REQUEST_TIMEOUT_SEC=0 => wait until provider responds
+    env.setdefault("LLM_MAX_TOKENS", "0")
+    env.setdefault("LLM_REQUEST_TIMEOUT_SEC", "0")
+    env.setdefault("LLM_RETRIES", "0")
+    env.setdefault("LLM_RETRY_BACKOFF_MS", "0")
     env.setdefault("LLM_CLEANUP_PROBE_TIMEOUT_SEC", "2.0")
+    # Keep transcript path deterministic and avoid LLM retry tail-latency.
+    env.setdefault("LLM_TRANSCRIPT_CLEANUP_ENABLED", "false")
     env.setdefault("BACKUP_AUDIO_RECOVERY_ENABLED", "true")
     env["POSTGRES_DSN"] = f"sqlite:///{(root / 'agent.db').as_posix()}"
     env["RECORDS_DIR"] = str(root / "records")
@@ -581,18 +672,19 @@ def _start_app() -> str:
     env["LOCAL_AGENT_STATE_DIR"] = str(root / "state")
     env["STT_PROVIDER"] = "whisper_local" if INSTALL_MODE == "full" else "mock"
     if INSTALL_MODE == "full":
-        env.setdefault("WHISPER_MODEL_SIZE", "medium")
+        env.setdefault("WHISPER_MODEL_SIZE", "small")
         env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
         env.setdefault("WHISPER_LANGUAGE", "auto")
         env.setdefault("WHISPER_VAD_FILTER", "true")
         env.setdefault("WHISPER_BEAM_SIZE_LIVE", "4")
-        env.setdefault("WHISPER_BEAM_SIZE_FINAL", "7")
+        env.setdefault("WHISPER_BEAM_SIZE_FINAL", "5")
         env.setdefault("WHISPER_ADAPTIVE_LOW_SIGNAL_ENABLED", "true")
         env.setdefault("WHISPER_LOW_SIGNAL_FORCE_VAD_OFF", "true")
         env.setdefault("WHISPER_LOW_SIGNAL_GAIN_BOOST", "2.2")
         env.setdefault("WHISPER_LOW_SIGNAL_TRACK_LEVEL_THRESHOLD", "0.015")
         env.setdefault("WHISPER_WARMUP_ON_START", "true")
     env["LOCAL_AGENT_AUTO_OPEN"] = "false"
+    env["LOCAL_AGENT_PARENT_PID"] = str(os.getpid())
     env["PYTHONUNBUFFERED"] = "1"
 
     script_path = bundle / "scripts" / "run_local_agent.py"
@@ -607,15 +699,23 @@ def _start_app() -> str:
     _log("[start] starting agent...")
     agent_log = root / "agent.log"
     agent_log.parent.mkdir(parents=True, exist_ok=True)
-    log_fh = open(agent_log, "a", encoding="utf-8")
-    log_fh.write(f"\n=== launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-    log_fh.flush()
+    global APP_LOG_FH
+    if APP_LOG_FH is not None:
+        try:
+            APP_LOG_FH.flush()
+            APP_LOG_FH.close()
+        except Exception:
+            pass
+        APP_LOG_FH = None
+    APP_LOG_FH = open(agent_log, "a", encoding="utf-8")
+    APP_LOG_FH.write(f"\n=== launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+    APP_LOG_FH.flush()
     APP_PROCESS = subprocess.Popen(
         cmd,
         cwd=str(root),
         env=env,
-        stdout=log_fh,
-        stderr=log_fh,
+        stdout=APP_LOG_FH,
+        stderr=APP_LOG_FH,
     )
     _log(f"[start] agent pid={APP_PROCESS.pid} log={agent_log}")
     _wait_app_ready(APP_URL, timeout_sec=20.0)
@@ -658,7 +758,7 @@ def _wait_app_ready(url: str, timeout_sec: float = 24.0) -> None:
 
 
 def _stop_app() -> None:
-    global APP_PROCESS
+    global APP_PROCESS, APP_URL, APP_LOG_FH
     if APP_PROCESS and APP_PROCESS.poll() is None:
         APP_PROCESS.terminate()
         try:
@@ -666,6 +766,39 @@ def _stop_app() -> None:
         except Exception:
             APP_PROCESS.kill()
     APP_PROCESS = None
+    APP_URL = None
+    if APP_LOG_FH is not None:
+        try:
+            APP_LOG_FH.flush()
+            APP_LOG_FH.close()
+        except Exception:
+            pass
+        APP_LOG_FH = None
+
+
+def _shutdown_launcher(server: ThreadingHTTPServer | None = None) -> None:
+    global SHUTDOWN_STARTED, LAUNCHER_SERVER
+    with SHUTDOWN_LOCK:
+        if SHUTDOWN_STARTED:
+            return
+        SHUTDOWN_STARTED = True
+    _stop_app()
+    target = server or LAUNCHER_SERVER
+    if target is not None:
+        try:
+            target.shutdown()
+        except Exception:
+            pass
+        try:
+            target.server_close()
+        except Exception:
+            pass
+    _clear_launcher_pid()
+
+
+def _signal_handler(signum, _frame) -> None:
+    _log(f"[launcher] signal received: {signum}")
+    _shutdown_launcher()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -796,6 +929,11 @@ class Handler(BaseHTTPRequestHandler):
             _stop_app()
             self._send_json({"ok": True})
             return
+        if parsed.path == "/api/shutdown":
+            self._send_json({"ok": True})
+            t = threading.Thread(target=_shutdown_launcher, daemon=True)
+            t.start()
+            return
         if parsed.path == "/api/open":
             try:
                 url = _start_app()
@@ -807,19 +945,30 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global INSTALL_MODE
+    global INSTALL_MODE, LAUNCHER_SERVER
     INSTALL_MODE = _load_install_mode()
+    _claim_single_launcher_instance()
+    atexit.register(_clear_launcher_pid)
     _log("[launcher] starting...")
     port = _pick_launcher_port()
     url = f"http://127.0.0.1:{port}"
     _write_url_file(url)
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        LAUNCHER_SERVER = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     except Exception as e:
         _log(f"[launcher] bind failed: {e}")
         raise
+    atexit.register(_shutdown_launcher, LAUNCHER_SERVER)
+    for sig_name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _signal_handler)
+        except Exception:
+            pass
     print(f"[launcher] UI: {url}")
-    serve_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    serve_thread = threading.Thread(target=LAUNCHER_SERVER.serve_forever, daemon=True)
     serve_thread.start()
     time.sleep(0.3)
     opened = False
@@ -832,7 +981,10 @@ def main() -> None:
             subprocess.Popen(["open", url])
         except Exception as e:
             _log(f"[launcher] open failed: {e}")
-    serve_thread.join()
+    try:
+        serve_thread.join()
+    finally:
+        _shutdown_launcher(LAUNCHER_SERVER)
 
 
 if __name__ == "__main__":

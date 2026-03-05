@@ -1,4 +1,4 @@
-from interview_analytics_agent.services.local_pipeline import _extract_missing_tail
+from interview_analytics_agent.services.local_pipeline import _extract_missing_tail, _split_final_pass_text
 
 
 def test_extract_missing_tail_when_full_prefix_matches() -> None:
@@ -33,3 +33,19 @@ def test_extract_missing_tail_allows_short_prefix_recovery() -> None:
         _extract_missing_tail(existing_text=existing, backup_text=backup)
         == "потом пошел основной текст встречи"
     )
+
+
+def test_split_final_pass_text_breaks_long_single_line() -> None:
+    raw = (
+        "Привет команда. Сегодня обновили endpoint для auth. "
+        "Нужно отдельно проверить перенос в новую инфраструктуру."
+    )
+    parts = _split_final_pass_text(raw)
+    assert len(parts) >= 2
+    assert all(part.strip() for part in parts)
+
+
+def test_split_final_pass_text_keeps_single_chunk_without_punctuation() -> None:
+    raw = "Это одна длинная строка без явных разделителей"
+    parts = _split_final_pass_text(raw)
+    assert parts == [raw]

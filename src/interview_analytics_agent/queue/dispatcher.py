@@ -47,7 +47,7 @@ def enqueue_stt(
     chunk_seq: int,
     blob_key: str,
     source_track: str | None = None,
-    quality_profile: str = "live",
+    quality_profile: str = "balanced",
     capture_levels: dict[str, float] | None = None,
 ) -> str:
     """
@@ -61,7 +61,7 @@ def enqueue_stt(
         "chunk_seq": chunk_seq,
         "blob_key": blob_key,
         "source_track": source_track or "",
-        "quality_profile": quality_profile or "live",
+        "quality_profile": quality_profile or "balanced",
         "capture_levels": capture_levels or {},
         "timestamp": _now_iso(),
     }

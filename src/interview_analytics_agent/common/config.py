@@ -259,9 +259,9 @@ class Settings(BaseSettings):
     llm_top_p: float = Field(default=0.95, alias="LLM_TOP_P")
     llm_frequency_penalty: float = Field(default=0.0, alias="LLM_FREQUENCY_PENALTY")
     llm_presence_penalty: float = Field(default=0.0, alias="LLM_PRESENCE_PENALTY")
-    llm_request_timeout_sec: int = Field(default=30, alias="LLM_REQUEST_TIMEOUT_SEC")
-    llm_retries: int = Field(default=2, alias="LLM_RETRIES")
-    llm_retry_backoff_ms: int = Field(default=250, alias="LLM_RETRY_BACKOFF_MS")
+    llm_request_timeout_sec: int = Field(default=60, alias="LLM_REQUEST_TIMEOUT_SEC")
+    llm_retries: int = Field(default=0, alias="LLM_RETRIES")
+    llm_retry_backoff_ms: int = Field(default=0, alias="LLM_RETRY_BACKOFF_MS")
     llm_transcript_cleanup_enabled: bool = Field(
         default=True, alias="LLM_TRANSCRIPT_CLEANUP_ENABLED"
     )

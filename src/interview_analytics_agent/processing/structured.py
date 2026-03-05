@@ -72,11 +72,28 @@ STRUCTURED_COLUMNS = [
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]{1,64}):\s*(.+)$")
 _MIN_STRUCTURED_CHARS = 48
 _MIN_STRUCTURED_LINES = 2
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[\.\!\?…])\s+")
+_SPACE_RE = re.compile(r"\s+")
 
 
 def _speaker_id_from_name(name: str) -> str:
     normalized = re.sub(r"[^0-9a-z]+", "_", (name or "").strip().lower())
     return normalized.strip("_")[:48]
+
+
+def _split_transcript_units(transcript: str) -> list[str]:
+    lines = [line.strip() for line in (transcript or "").splitlines() if line.strip()]
+    if len(lines) > 1:
+        return lines
+
+    compact = _SPACE_RE.sub(" ", (transcript or "").strip())
+    if not compact:
+        return []
+
+    raw_parts = [part.strip() for part in _SENTENCE_SPLIT_RE.split(compact) if part.strip()]
+    if len(raw_parts) <= 1:
+        return [compact]
+    return raw_parts
 
 
 def _build_fallback_rows(
@@ -86,7 +103,7 @@ def _build_fallback_rows(
     transcript: str,
     report: dict | None,
 ) -> list[dict[str, Any]]:
-    lines = [line.strip() for line in (transcript or "").splitlines() if line.strip()]
+    lines = _split_transcript_units(transcript)
     if not lines:
         return []
 
@@ -124,7 +141,7 @@ def _build_fallback_rows(
 
 
 def _transcript_insufficient_reason(transcript: str) -> str | None:
-    lines = [line.strip() for line in (transcript or "").splitlines() if line.strip()]
+    lines = _split_transcript_units(transcript)
     total_chars = sum(len(line) for line in lines)
     if not lines:
         return "Нет распознанного текста для структурирования."

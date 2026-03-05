@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 from typing import Any
 
@@ -7,7 +8,6 @@ from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.logging import get_project_logger
 from interview_analytics_agent.domain.enums import PipelineStatus
 from interview_analytics_agent.processing.enhancer import enhance_text
-from interview_analytics_agent.processing.quality import quality_score
 from interview_analytics_agent.processing.speaker_rules import infer_speakers
 from interview_analytics_agent.storage.blob import get_bytes
 from interview_analytics_agent.storage import records
@@ -27,6 +27,8 @@ _stt_warmup_ready = False
 _stt_warmup_error = ""
 _stt_warmup_lock = threading.Lock()
 _TRACK_SPEAKERS = {"system", "mic", "mixed"}
+_FINAL_PASS_SENTENCE_SPLIT_RE = re.compile(r"(?<=[\.\!\?…])\s+")
+_SPACE_RE = re.compile(r"\s+")
 
 
 def _status_for_chunk_processing(*, finished_at: object | None) -> PipelineStatus:
@@ -136,6 +138,17 @@ def _extract_missing_tail(*, existing_text: str, backup_text: str) -> str:
     return ""
 
 
+def _split_final_pass_text(transcript: str) -> list[str]:
+    compact = _SPACE_RE.sub(" ", (transcript or "").strip())
+    if not compact:
+        return []
+
+    parts = [part.strip() for part in _FINAL_PASS_SENTENCE_SPLIT_RE.split(compact) if part.strip()]
+    if len(parts) <= 1:
+        return [compact]
+    return parts
+
+
 def warmup_stt_provider_async() -> None:
     """
     Прогревает модель STT в фоне, чтобы первый live-чанк не зависал
@@ -202,6 +215,21 @@ def _get_stt_provider():
     return _stt_provider
 
 
+def reset_stt_provider_runtime(*, restart_warmup: bool = True) -> None:
+    """
+    Сбрасывает in-memory STT provider, чтобы применить новые runtime-настройки
+    (например, смену WHISPER_MODEL_SIZE) без перезапуска процесса.
+    """
+    global _stt_provider, _stt_warmup_started, _stt_warmup_ready, _stt_warmup_error
+    with _stt_warmup_lock:
+        _stt_provider = None
+        _stt_warmup_started = False
+        _stt_warmup_ready = False
+        _stt_warmup_error = ""
+    if restart_warmup and bool(getattr(get_settings(), "whisper_warmup_on_start", True)):
+        warmup_stt_provider_async()
+
+
 def stt_runtime_status() -> dict[str, object]:
     """
     Текущее состояние STT runtime для UI-диагностики.
@@ -223,14 +251,12 @@ def process_chunk_inline(
     chunk_seq: int,
     audio_bytes: bytes | None = None,
     blob_key: str | None = None,
-    quality_profile: str = "live",
+    quality_profile: str = "balanced",
     source_track: str | None = None,
     capture_levels: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Локальная обработка чанка без Redis-очередей.
-
-    Возвращает список payload-ов transcript.update для живого UI.
     """
     if audio_bytes is None:
         if not blob_key:
@@ -250,8 +276,6 @@ def process_chunk_inline(
     text = (res.text or "").strip()
     if not text:
         return []
-
-    updates: list[dict[str, Any]] = []
 
     with db_session() as session:
         mrepo = MeetingRepository(session)
@@ -284,7 +308,7 @@ def process_chunk_inline(
         speaker_map = {d.seq: d.speaker for d in decisions if d.speaker is not None}
 
         for s in segs:
-            enh, meta = enhance_text(s.raw_text or "")
+            enh, _meta = enhance_text(s.raw_text or "")
             enh_changed = enh != (s.enhanced_text or "")
             if enh_changed:
                 s.enhanced_text = enh
@@ -298,26 +322,7 @@ def process_chunk_inline(
             if speaker_changed:
                 s.speaker = inferred
 
-            # Для live-UI всегда отдаем update для текущего seq, даже если
-            # enh/speaker не изменились, чтобы raw поток показывался сразу.
-            if enh_changed or speaker_changed or s.seq == chunk_seq:
-                q = quality_score(s.raw_text or "", s.enhanced_text or "")
-                updates.append(
-                    {
-                        "schema_version": "v1",
-                        "event_type": "transcript.update",
-                        "meeting_id": meeting_id,
-                        "seq": s.seq,
-                        "speaker": s.speaker,
-                        "raw_text": s.raw_text or "",
-                        "enhanced_text": s.enhanced_text or "",
-                        "confidence": s.confidence,
-                        "quality": q,
-                        "meta": meta,
-                    }
-                )
-
-    return updates
+    return []
 
 
 def retranscribe_meeting_high_quality(*, meeting_id: str) -> int:
@@ -545,24 +550,33 @@ def final_pass_from_backup_audio(*, meeting_id: str) -> int:
     full_text = (res.text or "").strip()
     if not full_text:
         return 0
-    full_clean, _meta = enhance_text(full_text)
-    full_clean = (full_clean or full_text).strip()
+    parts = _split_final_pass_text(full_text)
+    if not parts:
+        return 0
+    settings = get_settings()
+    decisions = infer_speakers(
+        [(idx, part, part) for idx, part in enumerate(parts)],
+        response_window_sec=settings.speaker_response_window_sec,
+    )
+    inferred_speakers = {item.seq: item.speaker for item in decisions if item.speaker}
 
     with db_session() as session:
         srepo = TranscriptSegmentRepository(session)
         # backup-final-pass является primary: пересобираем сегменты целиком.
         session.query(TranscriptSegment).filter(TranscriptSegment.meeting_id == meeting_id).delete()
-        segment = TranscriptSegment(
-            meeting_id=meeting_id,
-            seq=0,
-            speaker="mixed",
-            start_ms=None,
-            end_ms=None,
-            raw_text=full_text,
-            enhanced_text=full_clean,
-            confidence=res.confidence,
-        )
-        srepo.upsert_by_meeting_seq(segment)
+        for idx, part in enumerate(parts):
+            clean_text, _meta = enhance_text(part)
+            segment = TranscriptSegment(
+                meeting_id=meeting_id,
+                seq=idx,
+                speaker=str(inferred_speakers.get(idx) or "mixed"),
+                start_ms=None,
+                end_ms=None,
+                raw_text=part,
+                enhanced_text=(clean_text or part).strip(),
+                confidence=res.confidence,
+            )
+            srepo.upsert_by_meeting_seq(segment)
 
     log.info(
         "meeting_final_pass_from_backup_audio",

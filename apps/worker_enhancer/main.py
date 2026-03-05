@@ -5,13 +5,11 @@ Worker Enhancer.
 - читаем из Redis Stream q:enhancer (consumer group)
 - берём все сегменты встречи
 - прогоняем enhance_text, обновляем enhanced_text
-- публикуем transcript.update (по каждому сегменту)
 - ставим задачу analytics
 """
 
 from __future__ import annotations
 
-import json
 import time
 from contextlib import suppress
 
@@ -21,10 +19,8 @@ from interview_analytics_agent.common.metrics import QUEUE_TASKS_TOTAL, track_st
 from interview_analytics_agent.common.otel import maybe_setup_otel
 from interview_analytics_agent.common.tracing import start_trace_from_payload
 from interview_analytics_agent.processing.enhancer import enhance_text
-from interview_analytics_agent.processing.quality import quality_score
 from interview_analytics_agent.processing.speaker_rules import infer_speakers
 from interview_analytics_agent.queue.dispatcher import Q_ENHANCER, enqueue_analytics
-from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.queue.retry import requeue_with_backoff
 from interview_analytics_agent.queue.streams import ack_task, consumer_name, read_task
 from interview_analytics_agent.services.readiness_service import enforce_startup_readiness
@@ -33,10 +29,6 @@ from interview_analytics_agent.storage.repositories import TranscriptSegmentRepo
 
 log = get_project_logger()
 GROUP_ENHANCER = "g:enhancer"
-
-
-def _publish_update(meeting_id: str, payload: dict) -> None:
-    redis_client().publish(f"ws:{meeting_id}", json.dumps(payload, ensure_ascii=False))
 
 
 def run_loop() -> None:
@@ -70,7 +62,7 @@ def run_loop() -> None:
                     }
 
                     for seg in segs:
-                        enh, meta = enhance_text(seg.raw_text or "")
+                        enh, _meta = enhance_text(seg.raw_text or "")
                         enh_changed = enh != (seg.enhanced_text or "")
                         if enh_changed:
                             seg.enhanced_text = enh
@@ -78,23 +70,6 @@ def run_loop() -> None:
                         speaker_changed = bool(inferred and inferred != (seg.speaker or ""))
                         if speaker_changed:
                             seg.speaker = inferred
-                        if enh_changed or speaker_changed:
-                            q = quality_score(seg.raw_text or "", enh)
-                            _publish_update(
-                                meeting_id,
-                                {
-                                    "schema_version": "v1",
-                                    "event_type": "transcript.update",
-                                    "meeting_id": meeting_id,
-                                    "seq": seg.seq,
-                                    "speaker": seg.speaker,
-                                    "raw_text": seg.raw_text or "",
-                                    "enhanced_text": seg.enhanced_text or "",
-                                    "confidence": seg.confidence,
-                                    "quality": q,
-                                    "meta": meta,
-                                },
-                            )
 
                 enqueue_analytics(meeting_id=meeting_id)
             should_ack = True

@@ -5,6 +5,7 @@ import time
 
 import pytest
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from apps.api_gateway.routers import artifacts as artifacts_router
@@ -159,7 +160,7 @@ def test_generate_transcripts_endpoint_returns_requested_variants(monkeypatch, a
 def test_get_transcript_json_endpoint_returns_text(monkeypatch, auth_none_settings) -> None:
     monkeypatch.setattr(
         artifacts_router,
-        "_ensure_transcript_text",
+        "_read_transcript_text_artifact",
         lambda *args, **kwargs: "CANDIDATE: привет.",
     )
 
@@ -382,6 +383,131 @@ def test_generate_llm_artifact_custom_schema_returns_json_and_txt(monkeypatch, t
         settings.records_dir = records_dir_snapshot
 
 
+def test_generate_llm_artifact_files_workspace_requires_input_text(monkeypatch, tmp_path, auth_none_settings) -> None:
+    settings = get_settings()
+    records_dir_snapshot = settings.records_dir
+    try:
+        settings.records_dir = str(tmp_path)
+        req = artifacts_router.LLMArtifactGenerateRequest(
+            transcript_variant="clean",
+            mode="custom",
+            prompt="Сделай JSON",
+            input_text="",
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            artifacts_router._generate_llm_artifact(artifacts_router.LLM_FILES_WORKSPACE_ID, req)
+        assert exc_info.value.status_code == 400
+        assert str(exc_info.value.detail) == "llm_input_text_required"
+    finally:
+        settings.records_dir = records_dir_snapshot
+
+
+def test_generate_llm_artifact_custom_schema_falls_back_when_llm_provider_fails(
+    monkeypatch,
+    tmp_path,
+    auth_none_settings,
+) -> None:
+    settings = get_settings()
+    records_dir_snapshot = settings.records_dir
+
+    class _FailingOrchestrator:
+        def complete_json(self, *, system: str, user: str) -> dict:
+            raise RuntimeError("provider timeout")
+
+    try:
+        settings.records_dir = str(tmp_path)
+        monkeypatch.setattr(
+            artifacts_router,
+            "_transcript_for_source",
+            lambda **kwargs: "INTERVIEWER: Расскажите про опыт.\nCANDIDATE: Доставлял сервисы в прод.",
+        )
+        monkeypatch.setattr(
+            artifacts_router,
+            "_build_llm_artifact_orchestrator",
+            lambda: _FailingOrchestrator(),
+        )
+        monkeypatch.setattr(
+            artifacts_router,
+            "_load_or_build_report",
+            lambda **kwargs: {
+                "summary": "Кандидат рассказал про релизный опыт и сопровождение.",
+                "risk_flags": ["Нужно уточнить глубину по безопасности."],
+                "recommendation": "Продолжить интервью по system design.",
+                "decision": {"status": "lean_yes", "confidence": 0.52, "reason": "Есть релевантный опыт"},
+                "highlights": {
+                    "strengths": ["Прод-опыт", "Коммуникация"],
+                    "concerns": ["Мало деталей по security"],
+                },
+            },
+        )
+
+        req = artifacts_router.LLMArtifactGenerateRequest(
+            transcript_variant="clean",
+            mode="custom",
+            prompt="Верни JSON",
+            schema={"type": "object", "properties": {"skills": {"type": "array"}}},
+        )
+        meta, cached = artifacts_router._generate_llm_artifact("m2f", req)
+        assert cached is False
+        saved = artifacts_router.records.read_json("m2f", f"artifacts/{meta['artifact_id']}/result.json")
+        assert saved["status"] == "llm_unavailable_fallback"
+        assert saved["final_decision"]["status"] == "lean_yes"
+        assert isinstance(saved["skills"], list)
+    finally:
+        settings.records_dir = records_dir_snapshot
+
+
+def test_generate_llm_artifact_custom_text_falls_back_when_llm_provider_fails(
+    monkeypatch,
+    tmp_path,
+    auth_none_settings,
+) -> None:
+    settings = get_settings()
+    records_dir_snapshot = settings.records_dir
+
+    class _FailingOrchestrator:
+        def complete_text(self, *, system: str, user: str):  # noqa: ANN201
+            raise RuntimeError("provider timeout")
+
+    try:
+        settings.records_dir = str(tmp_path)
+        monkeypatch.setattr(
+            artifacts_router,
+            "_transcript_for_source",
+            lambda **kwargs: "INTERVIEWER: Что по релизу?\nCANDIDATE: Закрыли основные риски.",
+        )
+        monkeypatch.setattr(
+            artifacts_router,
+            "_build_llm_artifact_orchestrator",
+            lambda: _FailingOrchestrator(),
+        )
+        monkeypatch.setattr(
+            artifacts_router,
+            "_load_or_build_report",
+            lambda **kwargs: {
+                "summary": "Риски по релизу частично закрыты.",
+                "risk_flags": ["Нужна дополнительная проверка интеграции."],
+                "recommendation": "Продолжить с контрольным чек-листом.",
+                "decision": {"status": "lean_yes", "confidence": 0.48, "reason": "Есть прогресс, но не финал"},
+                "highlights": {"strengths": ["Ownership"], "concerns": ["Integration checks"]},
+            },
+        )
+
+        req = artifacts_router.LLMArtifactGenerateRequest(
+            transcript_variant="clean",
+            mode="custom",
+            prompt="Сделай краткий вывод",
+        )
+        meta, cached = artifacts_router._generate_llm_artifact("m2t", req)
+        assert cached is False
+        assert meta["result_kind"] == "json"
+        saved = artifacts_router.records.read_json("m2t", f"artifacts/{meta['artifact_id']}/result.json")
+        assert saved["status"] == "llm_unavailable_fallback"
+        assert "skills" in saved
+    finally:
+        settings.records_dir = records_dir_snapshot
+
+
 def test_llm_artifact_request_accepts_schema_alias() -> None:
     req = artifacts_router.LLMArtifactGenerateRequest(
         mode="custom",
@@ -434,6 +560,177 @@ def test_generate_llm_artifact_table_falls_back_to_deterministic_builder_without
         file_names = {item["filename"] for item in meta["files"]}
         assert file_names == {"result.json", "result.csv"}
         assert artifacts_router.records.exists("m3", f"artifacts/{meta['artifact_id']}/result.csv")
+    finally:
+        settings.records_dir = records_dir_snapshot
+
+
+def test_parse_table_columns_from_prompt_supports_plain_colon_list() -> None:
+    prompt = (
+        "Собери табличный CSV по прикрепленным файлам обычной встречи: "
+        "topic, decision, action_item, owner, due_date, risk, status."
+    )
+    parsed = artifacts_router._parse_table_columns_from_prompt(prompt)
+    assert parsed == ["topic", "decision", "action_item", "owner", "due_date", "risk", "status"]
+
+
+def test_fallback_split_units_ignores_attachment_scaffold_and_splits_text() -> None:
+    transcript = (
+        "Дополнительные вложения пользователя:\n"
+        "- morning_sync.txt (9.8 KB, text/plain)\n"
+        "\n"
+        "[morning_sync.txt]\n"
+        "mixed: Вопрос по планам проекта. Надо переносить изменения на новую инфраструктуру. "
+        "Напиши в личку и создай задачу. По релизу нужно обновить Confluence."
+    )
+    units = artifacts_router._fallback_split_units(transcript)
+    assert len(units) >= 4
+    assert all("Дополнительные вложения пользователя" not in item for item in units)
+    assert all("morning_sync.txt (9.8 KB" not in item for item in units)
+    assert any("Надо переносить изменения" in item for item in units)
+
+
+def test_normalize_llm_table_payload_ignores_empty_rows_and_uses_meeting_fallback() -> None:
+    prompt = (
+        "Собери табличный CSV по прикрепленным файлам обычной встречи: "
+        "topic, decision, action_item, owner, due_date, risk, status."
+    )
+    payload = {
+        "columns": ["meeting_id", "source", "topic", "decision"],
+        "rows": [{"meeting_id": "", "source": "", "topic": "", "decision": ""}],
+    }
+    transcript = (
+        "Команда обсуждает сервис авторизации. "
+        "Надо переносить изменения на новую инфраструктуру. "
+        "Напиши в личку и создай задачу."
+    )
+
+    normalized = artifacts_router._normalize_llm_table_payload(
+        payload=payload,
+        transcript_text=transcript,
+        user_prompt=prompt,
+    )
+
+    assert normalized["columns"] == ["topic", "decision", "action_item", "owner", "due_date", "risk", "status"]
+    assert isinstance(normalized.get("rows"), list)
+    assert len(normalized["rows"]) >= 1
+    row = normalized["rows"][0]
+    assert str(row.get("topic") or "").strip() != ""
+    assert row["owner"] == "Не указан"
+    assert row["due_date"] == "Не указан"
+
+
+def test_normalize_llm_table_payload_from_files_context_builds_multiple_rows() -> None:
+    prompt = (
+        "Собери табличный CSV по прикрепленным файлам обычной встречи: "
+        "topic, decision, action_item, owner, due_date, risk, status."
+    )
+    transcript = (
+        "Additional user attachments:\n"
+        "- standup.txt (4 KB, text/plain)\n"
+        "\n"
+        "[standup.txt]\n"
+        "mixed: Вопрос по планам проекта. Надо переносить изменения на новую инфраструктуру. "
+        "Напиши в личку и создай задачу. По релизу нужно обновить Confluence. "
+        "Банк выдает CSRF ошибку, надо проверить фикс."
+    )
+
+    normalized = artifacts_router._normalize_llm_table_payload(
+        payload={},
+        transcript_text=transcript,
+        user_prompt=prompt,
+    )
+
+    assert normalized["columns"] == ["topic", "decision", "action_item", "owner", "due_date", "risk", "status"]
+    rows = list(normalized.get("rows") or [])
+    assert len(rows) >= 2
+    topics = [str(row.get("topic") or "").strip() for row in rows]
+    assert len({item for item in topics if item}) >= 2
+
+
+def test_normalize_llm_table_payload_for_mixed_transcript_forces_unknown_owner_due() -> None:
+    payload = {
+        "columns": ["topic", "decision", "action", "owner", "due_date", "risk", "status"],
+        "rows": [
+            {
+                "topic": "Авторизация",
+                "decision": "Надо переносить изменения",
+                "action": "Завести задачу на перенос",
+                "owner": "Лаунс",
+                "due_date": "15.03.2026",
+                "risk": "Высокий",
+                "status": "",
+            }
+        ],
+    }
+    transcript = "mixed: сервис авторизации отстает от старой инфраструктуры. Надо переносить."
+    prompt = (
+        "Сделай таблицу обычной встречи: "
+        "columns=[Тема, Решение, Действие, Ответственный, Срок, Риск, Статус]."
+    )
+
+    normalized = artifacts_router._normalize_llm_table_payload(
+        payload=payload,
+        transcript_text=transcript,
+        user_prompt=prompt,
+    )
+
+    assert normalized["columns"] == ["Тема", "Решение", "Действие", "Ответственный", "Срок", "Риск", "Статус"]
+    assert isinstance(normalized.get("rows"), list) and len(normalized["rows"]) >= 1
+    row = normalized["rows"][0]
+    assert row["Ответственный"] == "Не указан"
+    assert row["Срок"] == "Не указан"
+    assert row["Статус"] == "В работе"
+
+
+def test_generate_llm_artifact_table_with_llm_is_normalized(monkeypatch, tmp_path, auth_none_settings) -> None:
+    settings = get_settings()
+    records_dir_snapshot = settings.records_dir
+
+    class _DummyOrchestrator:
+        def complete_json(self, *, system: str, user: str) -> dict:
+            assert "Не выдумывай" in system
+            return {
+                "columns": ["Тема", "Решение", "Действие", "Ответственный", "Срок", "Риск", "Статус"],
+                "rows": [
+                    {
+                        "Тема": "Авторизация",
+                        "Решение": "Перенести изменения",
+                        "Действие": "Создать задачу",
+                        "Ответственный": "Лаунс",
+                        "Срок": "15.03.2026",
+                        "Риск": "Высокий",
+                        "Статус": "",
+                    }
+                ],
+            }
+
+    try:
+        settings.records_dir = str(tmp_path)
+        monkeypatch.setattr(
+            artifacts_router,
+            "_transcript_for_source",
+            lambda **kwargs: "mixed: сервис авторизации отстает от старой инфраструктуры. Надо переносить.",
+        )
+        monkeypatch.setattr(
+            artifacts_router,
+            "_build_llm_artifact_orchestrator",
+            lambda: _DummyOrchestrator(),
+        )
+
+        req = artifacts_router.LLMArtifactGenerateRequest(
+            transcript_variant="clean",
+            mode="table",
+            prompt=(
+                "Сделай таблицу обычной встречи: "
+                "columns=[Тема, Решение, Действие, Ответственный, Срок, Риск, Статус], rows по смыслу."
+            ),
+        )
+        meta, cached = artifacts_router._generate_llm_artifact("m4", req)
+        assert cached is False
+        saved = artifacts_router.records.read_json("m4", f"artifacts/{meta['artifact_id']}/result.json")
+        assert saved["columns"] == ["Тема", "Решение", "Действие", "Ответственный", "Срок", "Риск", "Статус"]
+        assert saved["rows"][0]["Ответственный"] == "Не указан"
+        assert saved["rows"][0]["Срок"] == "Не указан"
     finally:
         settings.records_dir = records_dir_snapshot
 

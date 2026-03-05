@@ -40,7 +40,7 @@ def test_ingest_audio_chunk_bytes_enqueues(monkeypatch) -> None:
         "chunk_seq": 3,
         "blob_key": "meetings/m-1/chunks/3.bin",
         "source_track": None,
-        "quality_profile": "live",
+        "quality_profile": "balanced",
     }
 
 

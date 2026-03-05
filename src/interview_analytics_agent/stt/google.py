@@ -17,7 +17,7 @@ class GoogleSTTProvider(STTProvider):
         *,
         audio: bytes,
         sample_rate: int,
-        quality_profile: str = "live",
+        quality_profile: str = "balanced",
         source_track: str | None = None,
         language_hint: str | None = None,
         capture_levels: dict[str, float] | None = None,

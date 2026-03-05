@@ -4,26 +4,40 @@
 Что делает:
 - выбирает свободный порт (с памятью последнего успешного)
 - поднимает api-gateway на 127.0.0.1
-- сохраняет выбранный порт в ./data/local_agent/state.json
+- сохраняет выбранный порт в state-файл локального профиля агента
 """
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import socket
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
 import uvicorn
 
 
+def _agent_root_dir() -> Path:
+    explicit_root = str(os.getenv("LOCAL_AGENT_ROOT_DIR", "") or "").strip()
+    if explicit_root:
+        return Path(explicit_root).expanduser().resolve()
+    explicit_state = str(os.getenv("LOCAL_AGENT_STATE_DIR", "") or "").strip()
+    if explicit_state:
+        return Path(explicit_state).expanduser().resolve().parent
+    return (Path.home() / ".9second_capture").resolve()
+
+
 def _state_dir() -> Path:
-    root = os.getenv("LOCAL_AGENT_STATE_DIR", "./data/local_agent")
-    return Path(root).resolve()
+    root = str(os.getenv("LOCAL_AGENT_STATE_DIR", "") or "").strip()
+    if root:
+        return Path(root).expanduser().resolve()
+    return (_agent_root_dir() / "state").resolve()
 
 
 def _state_file() -> Path:
@@ -32,6 +46,78 @@ def _state_file() -> Path:
 
 def _runtime_overrides_file() -> Path:
     return _state_dir() / "runtime_overrides.json"
+
+
+def _agent_pid_file() -> Path:
+    return _state_dir() / "agent.pid"
+
+
+def _write_agent_pid(port: int) -> None:
+    try:
+        payload = {"pid": os.getpid(), "port": int(port)}
+        _state_dir().mkdir(parents=True, exist_ok=True)
+        _agent_pid_file().write_text(json.dumps(payload), encoding="utf-8")
+    except Exception:
+        return
+
+
+def _cleanup_agent_pid() -> None:
+    path = _agent_pid_file()
+    if not path.exists():
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        raw = {}
+    file_pid = None
+    if isinstance(raw, dict):
+        try:
+            file_pid = int(raw.get("pid"))
+        except Exception:
+            file_pid = None
+    if file_pid and file_pid != os.getpid():
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        return
+
+
+def _pid_exists(pid: int) -> bool:
+    if pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+    return True
+
+
+def _start_parent_watchdog() -> None:
+    raw_parent = str(os.getenv("LOCAL_AGENT_PARENT_PID", "") or "").strip()
+    if not raw_parent:
+        return
+    try:
+        parent_pid = int(raw_parent)
+    except Exception:
+        return
+    if parent_pid <= 1:
+        return
+
+    def _watch() -> None:
+        while True:
+            time.sleep(2.0)
+            if _pid_exists(parent_pid):
+                continue
+            print(f"[local-agent] parent pid={parent_pid} exited, stopping agent")
+            _cleanup_agent_pid()
+            os._exit(0)
+
+    threading.Thread(target=_watch, daemon=True).start()
 
 
 def _apply_runtime_overrides() -> None:
@@ -55,6 +141,17 @@ def _apply_runtime_overrides() -> None:
         "EMBEDDING_API_KEY",
         "RAG_EMBEDDING_PROVIDER",
         "RAG_VECTOR_ENABLED",
+        "LLM_MAX_TOKENS",
+        "LLM_REQUEST_TIMEOUT_SEC",
+        "LLM_RETRIES",
+        "LLM_RETRY_BACKOFF_MS",
+        "LLM_TRANSCRIPT_CLEANUP_ENABLED",
+        "WHISPER_MODEL_SIZE",
+        "WHISPER_COMPUTE_TYPE",
+        "WHISPER_LANGUAGE",
+        "WHISPER_VAD_FILTER",
+        "WHISPER_BEAM_SIZE_LIVE",
+        "WHISPER_BEAM_SIZE_FINAL",
     }
     for key in allowed_keys:
         value = raw.get(key)
@@ -146,12 +243,16 @@ def main() -> None:
 
     port = _pick_port(8010, 8099, preferred=preferred_port)
     _save_last_port(port)
+    agent_root = _agent_root_dir()
+    agent_root.mkdir(parents=True, exist_ok=True)
 
     os.environ.setdefault("API_HOST", "127.0.0.1")
     os.environ["API_PORT"] = str(port)
     os.environ.setdefault("AUTH_MODE", "none")
     os.environ.setdefault("QUEUE_MODE", "inline")
-    os.environ.setdefault("POSTGRES_DSN", "sqlite:///./data/local_agent/agent.db")
+    os.environ.setdefault("POSTGRES_DSN", f"sqlite:///{(agent_root / 'agent.db').as_posix()}")
+    os.environ.setdefault("RECORDS_DIR", str(agent_root / "records"))
+    os.environ.setdefault("CHUNKS_DIR", str(agent_root / "chunks"))
     os.environ.setdefault("LLM_ENABLED", "true")
     os.environ.setdefault("LLM_LIVE_ENABLED", "false")
     os.environ.setdefault("OPENAI_API_BASE", "http://127.0.0.1:11434/v1")
@@ -160,16 +261,23 @@ def main() -> None:
     os.environ.setdefault("EMBEDDING_MODEL_ID", "nomic-embed-text")
     os.environ.setdefault("RAG_EMBEDDING_PROVIDER", "auto")
     os.environ.setdefault("RAG_VECTOR_ENABLED", "true")
-    os.environ.setdefault("LLM_REQUEST_TIMEOUT_SEC", "15")
-    os.environ.setdefault("LLM_RETRIES", "1")
+    # 0 means "no hard limit" for local Ollama:
+    # - LLM_MAX_TOKENS=0 => do not send max_tokens to provider
+    # - LLM_REQUEST_TIMEOUT_SEC=0 => wait until provider responds
+    os.environ.setdefault("LLM_MAX_TOKENS", "0")
+    os.environ.setdefault("LLM_REQUEST_TIMEOUT_SEC", "0")
+    os.environ.setdefault("LLM_RETRIES", "0")
+    os.environ.setdefault("LLM_RETRY_BACKOFF_MS", "0")
     os.environ.setdefault("LLM_CLEANUP_PROBE_TIMEOUT_SEC", "2.0")
+    # For local desktop mode prioritize predictable latency of transcript generation.
+    os.environ.setdefault("LLM_TRANSCRIPT_CLEANUP_ENABLED", "false")
     os.environ.setdefault("BACKUP_AUDIO_FINAL_PASS_ENABLED", "true")
-    # Рекомендованный профиль для mixed RU/EN интервью: баланс качества/скорости.
-    os.environ.setdefault("WHISPER_MODEL_SIZE", "medium")
+    # Faster default for local CPU runs; users can switch to medium/large in UI if needed.
+    os.environ.setdefault("WHISPER_MODEL_SIZE", "small")
     os.environ.setdefault("WHISPER_COMPUTE_TYPE", "int8")
     os.environ.setdefault("WHISPER_LANGUAGE", "auto")
     os.environ.setdefault("WHISPER_BEAM_SIZE_LIVE", "4")
-    os.environ.setdefault("WHISPER_BEAM_SIZE_FINAL", "7")
+    os.environ.setdefault("WHISPER_BEAM_SIZE_FINAL", "5")
     os.environ.setdefault("WHISPER_VAD_FILTER", "true")
     os.environ.setdefault("WHISPER_ADAPTIVE_LOW_SIGNAL_ENABLED", "true")
     os.environ.setdefault("WHISPER_LOW_SIGNAL_FORCE_VAD_OFF", "true")
@@ -183,6 +291,9 @@ def main() -> None:
     url = f"http://127.0.0.1:{port}"
     print(f"[local-agent] UI: {url}")
     print("[local-agent] Press Ctrl+C to stop.")
+    _write_agent_pid(port)
+    atexit.register(_cleanup_agent_pid)
+    _start_parent_watchdog()
 
     auto_open = os.getenv("LOCAL_AGENT_AUTO_OPEN", "true").lower() in {"1", "true", "yes"}
     if auto_open:

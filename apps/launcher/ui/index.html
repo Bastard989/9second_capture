@@ -181,6 +181,7 @@
       const controls = [...actionButtons, modelInput, embeddingModelInput].filter(Boolean);
       let uiBusy = false;
       let uiBusyError = "";
+      let suppressShutdownOnUnload = false;
 
       let browserChecks = {
         micPermission: "unknown",
@@ -507,10 +508,24 @@
         await runBusyAction("Запуск UI агента...", async () => {
           const startData = await postJson("/api/open");
           if (startData && startData.url) {
+            suppressShutdownOnUnload = true;
             window.location.href = startData.url;
           }
         });
       };
+
+      window.addEventListener("pagehide", () => {
+        if (suppressShutdownOnUnload) return;
+        try {
+          if (navigator.sendBeacon) {
+            navigator.sendBeacon("/api/shutdown", new Blob(["{}"], { type: "application/json" }));
+            return;
+          }
+        } catch (err) {
+          // fallback to keepalive fetch below
+        }
+        fetch("/api/shutdown", { method: "POST", keepalive: true }).catch(() => {});
+      });
 
       refreshStatus();
       setInterval(() => {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 import requests
 
@@ -18,7 +19,8 @@ class OpenAICompatConfig:
     api_base: str
     api_key: str
     model: str = "gpt-4o-mini"
-    timeout_s: int = 60
+    timeout_s: Optional[int] = 60
+    max_tokens: Optional[int] = 900
 
 
 class OpenAICompatProvider:
@@ -29,7 +31,22 @@ class OpenAICompatProvider:
         api_base = (getattr(s, "openai_api_base", "") or "").strip()
         api_key = (getattr(s, "openai_api_key", "") or "").strip()
         model = getattr(s, "llm_model_id", "gpt-4o-mini") or "gpt-4o-mini"
-        timeout_s = int(getattr(s, "llm_request_timeout_sec", 60) or 60)
+        timeout_raw = getattr(s, "llm_request_timeout_sec", 60)
+        max_tokens_raw = getattr(s, "llm_max_tokens", 900)
+
+        try:
+            timeout_s = int(timeout_raw)
+        except Exception:
+            timeout_s = 60
+        # 0/negative => no timeout (wait until provider returns)
+        timeout_opt: Optional[int] = None if timeout_s <= 0 else max(1, timeout_s)
+
+        try:
+            max_tokens = int(max_tokens_raw)
+        except Exception:
+            max_tokens = 900
+        # 0/negative => do not send max_tokens (provider default)
+        max_tokens_opt: Optional[int] = None if max_tokens <= 0 else max(64, max_tokens)
 
         if not api_base:
             raise ProviderError(ErrCode.LLM_PROVIDER_ERROR, "OPENAI_API_BASE не задан")
@@ -41,7 +58,11 @@ class OpenAICompatProvider:
             raise ProviderError(ErrCode.LLM_PROVIDER_ERROR, "OPENAI_API_KEY не задан")
 
         self.cfg = OpenAICompatConfig(
-            api_base=api_base, api_key=api_key, model=model, timeout_s=timeout_s
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            timeout_s=timeout_opt,
+            max_tokens=max_tokens_opt,
         )
 
     def _models_url(self) -> str:
@@ -76,6 +97,8 @@ class OpenAICompatProvider:
             ],
             "temperature": 0.2,
         }
+        if self.cfg.max_tokens is not None:
+            payload["max_tokens"] = self.cfg.max_tokens
 
         try:
             resp = requests.post(

@@ -5,12 +5,11 @@ API Gateway (FastAPI).
 - /health
 - /metrics
 - HTTP API для встреч
-- WebSocket для приёма аудио чанков и отдачи transcript.update
+- WebSocket для приёма аудио чанков и ACK/PONG
 
 Архитектурно:
-- WS принимает audio.chunk -> сохраняет в локальное хранилище -> ставит задачу STT
-- воркеры публикуют обновления в Redis pubsub channel ws:<meeting_id>
-- WS подписывается на канал и пушит transcript.update клиенту
+- WS принимает audio.chunk -> сохраняет в локальное хранилище
+- WS отвечает подтверждениями приёма чанков
 """
 
 from __future__ import annotations

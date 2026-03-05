@@ -6,7 +6,6 @@ Worker STT.
 - читаем аудио из локальное хранилище
 - распознаём (локальный whisper по умолчанию)
 - сохраняем TranscriptSegment (raw_text/enhanced_text=raw на старте)
-- публикуем transcript.update в Redis pubsub ws:<meeting_id>
 - ставим задачу enhancer
 
 Важно:
@@ -15,7 +14,6 @@ Worker STT.
 
 from __future__ import annotations
 
-import json
 import time
 from contextlib import suppress
 
@@ -26,7 +24,6 @@ from interview_analytics_agent.common.otel import maybe_setup_otel
 from interview_analytics_agent.common.tracing import start_trace_from_payload
 from interview_analytics_agent.domain.enums import PipelineStatus
 from interview_analytics_agent.queue.dispatcher import Q_STT, enqueue_enhancer
-from interview_analytics_agent.queue.redis import redis_client
 from interview_analytics_agent.queue.retry import requeue_with_backoff
 from interview_analytics_agent.queue.streams import ack_task, consumer_name, read_task
 from interview_analytics_agent.services.readiness_service import enforce_startup_readiness
@@ -73,10 +70,6 @@ def _build_stt_provider():
     )
 
 
-def _publish_update(meeting_id: str, payload: dict) -> None:
-    redis_client().publish(f"ws:{meeting_id}", json.dumps(payload, ensure_ascii=False))
-
-
 def run_loop() -> None:
     s = get_settings()
     stt = _build_stt_provider()
@@ -101,9 +94,9 @@ def run_loop() -> None:
                 blob_key = task.get("blob_key") or None
                 source_track = (task.get("source_track") or None) if isinstance(task, dict) else None
                 quality_profile = (
-                    str(task.get("quality_profile") or "live")
+                    str(task.get("quality_profile") or "balanced")
                     if isinstance(task, dict)
-                    else "live"
+                    else "balanced"
                 )
                 capture_levels = (
                     task.get("capture_levels")
@@ -143,20 +136,6 @@ def run_loop() -> None:
                         confidence=res.confidence,
                     )
                     srepo.upsert_by_meeting_seq(seg)
-
-                _publish_update(
-                    meeting_id,
-                    {
-                        "schema_version": "v1",
-                        "event_type": "transcript.update",
-                        "meeting_id": meeting_id,
-                        "seq": chunk_seq,
-                        "speaker": res.speaker,
-                        "raw_text": res.text or "",
-                        "enhanced_text": res.text or "",
-                        "confidence": res.confidence,
-                    },
-                )
 
                 enqueue_enhancer(meeting_id=meeting_id)
             should_ack = True

@@ -277,12 +277,12 @@ class WhisperLocalProvider(STTProvider):
         return "auto"
 
     def _beam_for_quality_profile(self, quality_profile: str) -> int:
-        normalized = str(quality_profile or "live").strip().lower()
+        normalized = str(quality_profile or "balanced").strip().lower()
         if normalized == "final":
             return self.beam_size_final
-        if normalized in {"live_fast", "fast"}:
+        if normalized == "fast":
             return max(1, self.beam_size_live - 1)
-        if normalized in {"live_accurate", "accurate"}:
+        if normalized == "accurate":
             return max(1, min(self.beam_size_final, self.beam_size_live + 1))
         return self.beam_size_live
 
@@ -419,7 +419,7 @@ class WhisperLocalProvider(STTProvider):
         *,
         audio: bytes,
         sample_rate: int,
-        quality_profile: str = "live",
+        quality_profile: str = "balanced",
         source_track: str | None = None,
         language_hint: str | None = None,
         capture_levels: dict[str, float] | None = None,
@@ -458,36 +458,19 @@ class WhisperLocalProvider(STTProvider):
             language_target = self.language
 
         beam = self._beam_for_quality_profile(quality_profile)
-        if language_profile in {"ru", "en"} and quality_profile in {"live_balanced", "live_accurate", "final"}:
+        if language_profile in {"ru", "en"} and quality_profile in {"balanced", "accurate", "final"}:
             beam = max(beam, self.beam_size_live)
-        text = ""
-        confidence: float | None = None
-        first_relaxed = bool(low_signal_mode and quality_profile != "final")
-        attempt_plan = [
-            (language_target, first_relaxed),
-            (None, first_relaxed),
-            (language_target, True),
-            (None, True),
-        ]
-        attempted: set[tuple[str, bool]] = set()
-        for attempt_language, relaxed in attempt_plan:
-            lang_key = attempt_language or "__auto__"
-            key = (lang_key, relaxed)
-            if key in attempted:
-                continue
-            attempted.add(key)
-            text, confidence = self._transcribe_with_params(
-                wav,
-                language=attempt_language,
-                beam_size=beam,
-                quality_profile=quality_profile,
-                language_profile=language_profile,
-                relaxed=relaxed,
-                force_vad_off=bool(low_signal_mode and self.low_signal_force_vad_off),
-                low_signal_mode=low_signal_mode,
-            )
-            if text:
-                break
+        relaxed_mode = bool(low_signal_mode and quality_profile != "final")
+        text, confidence = self._transcribe_with_params(
+            wav,
+            language=language_target,
+            beam_size=beam,
+            quality_profile=quality_profile,
+            language_profile=language_profile,
+            relaxed=relaxed_mode,
+            force_vad_off=bool(low_signal_mode and self.low_signal_force_vad_off),
+            low_signal_mode=low_signal_mode,
+        )
 
         # faster-whisper не даёт "confidence" как одно число стабильно,
         # оставим None, позже можно считать среднюю logprob.

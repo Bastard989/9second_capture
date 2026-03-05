@@ -53,6 +53,9 @@ from interview_analytics_agent.storage.repositories import MeetingRepository, Tr
 
 router = APIRouter()
 log = get_project_logger()
+_TRANSCRIPT_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_TRANSCRIPT_BUILD_LOCKS_GUARD = threading.Lock()
+LLM_FILES_WORKSPACE_ID = "llm_files_workspace"
 
 
 class MeetingListItem(BaseModel):
@@ -112,6 +115,7 @@ class LLMArtifactGenerateRequest(BaseModel):
     mode: LLMArtifactMode = "template"
     template_id: str | None = None
     prompt: str | None = None
+    input_text: str | None = None
     schema_guide: Any | None = Field(default=None, alias="schema")
     force_rebuild: bool = False
 
@@ -298,7 +302,17 @@ def _segments_have_text(segs: list) -> bool:
     return False
 
 
-def _ensure_transcript_segments_ready(meeting_id: str) -> None:
+def _meeting_transcript_lock(meeting_id: str) -> threading.Lock:
+    key = str(meeting_id or "").strip() or "__empty__"
+    with _TRANSCRIPT_BUILD_LOCKS_GUARD:
+        lock = _TRANSCRIPT_BUILD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _TRANSCRIPT_BUILD_LOCKS[key] = lock
+        return lock
+
+
+def _ensure_transcript_segments_ready_impl(meeting_id: str) -> None:
     has_text_segments = False
     meeting_finished = False
     raw_artifact_has_content = False
@@ -324,9 +338,11 @@ def _ensure_transcript_segments_ready(meeting_id: str) -> None:
     # В record-first режиме финальный текст теперь строится лениво по запросу
     # текста/отчётов, а не на Stop. Сначала стараемся использовать единый audio artifact.
     materialize_meeting_audio_mp3(meeting_id=meeting_id)
-    used_final_pass = bool(final_pass_from_backup_audio(meeting_id=meeting_id))
-    if used_final_pass:
-        return
+    use_audio_final_pass = bool(getattr(get_settings(), "backup_audio_final_pass_enabled", True))
+    if use_audio_final_pass:
+        used_final_pass = bool(final_pass_from_backup_audio(meeting_id=meeting_id))
+        if used_final_pass:
+            return
 
     if has_text_segments:
         # Если live-сегменты уже есть, а final pass по audio не получился
@@ -336,6 +352,13 @@ def _ensure_transcript_segments_ready(meeting_id: str) -> None:
     retranscribe_meeting_high_quality(meeting_id=meeting_id)
     if bool(getattr(get_settings(), "backup_audio_recovery_enabled", True)):
         recover_transcript_from_backup_audio(meeting_id=meeting_id)
+
+
+def _ensure_transcript_segments_ready(meeting_id: str) -> None:
+    # Защита от параллельного тяжёлого STT final-pass для одного meeting.
+    # UI часто делает несколько одновременных запросов raw/clean/report.
+    with _meeting_transcript_lock(meeting_id):
+        _ensure_transcript_segments_ready_impl(meeting_id)
 
 
 def _transcript_filename(variant: TranscriptVariant) -> str:
@@ -458,6 +481,30 @@ def _ensure_transcript_text(
         force_rebuild=force_rebuild,
     )
     return str(payload.get(variant) or "")
+
+
+def _read_transcript_text_artifact(
+    meeting_id: str,
+    *,
+    variant: TranscriptVariant,
+) -> str:
+    filename = _transcript_filename(variant)
+    try:
+        path = records.artifact_path(meeting_id, filename)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_meeting_id")
+    if not path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"transcript_{variant}_not_ready",
+        )
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="transcript_read_failed",
+        ) from exc
 
 
 def _ensure_transcripts(meeting_id: str, *, include_clean: bool = True) -> tuple[str, str]:
@@ -626,8 +673,585 @@ def _render_template_artifact(*, meeting_id: str, req: LLMArtifactGenerateReques
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported_template_id")
 
 
+_FALLBACK_SENTENCE_SPLIT_RE = re.compile(r"(?<=[\.\!\?…])(?:[\"'\)\]»”’,:;])*\s+")
+_FALLBACK_SPACE_RE = re.compile(r"\s+")
+_FALLBACK_SPEAKER_LINE_RE = re.compile(r"^([^:\n]{1,64}):\s*(.+)$")
+_FALLBACK_CLAUSE_SPLIT_RE = re.compile(r"[,;:]\s+")
+_FALLBACK_ATTACHMENT_HEADER_RE = re.compile(
+    r"^(?:дополнительные\s+вложения\s+пользователя|additional\s+user\s+attachments)\s*:?\s*$",
+    flags=re.IGNORECASE,
+)
+_FALLBACK_ATTACHMENT_META_LINE_RE = re.compile(r"^-\s+.+\([^)]+\)\s*$")
+_FALLBACK_ATTACHMENT_FILE_TAG_RE = re.compile(r"^\[[^\]\n]{1,240}\]\s*$")
+_TABLE_COLUMNS_RE = re.compile(r"columns?\s*=\s*\[([^\]]+)\]", flags=re.IGNORECASE)
+_TABLE_GENERIC_SPEAKER_LABELS = {
+    "mixed",
+    "speaker",
+    "спикер",
+    "system",
+    "mic",
+    "candidate",
+    "interviewer",
+    "assistant",
+    "user",
+}
+
+
+def _is_attachment_scaffold_line(line: str) -> bool:
+    text = str(line or "").strip()
+    if not text:
+        return True
+    if _FALLBACK_ATTACHMENT_HEADER_RE.match(text):
+        return True
+    if _FALLBACK_ATTACHMENT_META_LINE_RE.match(text):
+        return True
+    if _FALLBACK_ATTACHMENT_FILE_TAG_RE.match(text):
+        return True
+    return False
+
+
+def _split_compact_units(text: str) -> list[str]:
+    compact = _FALLBACK_SPACE_RE.sub(" ", str(text or "").strip())
+    if not compact:
+        return []
+    sentence_parts = [part.strip() for part in _FALLBACK_SENTENCE_SPLIT_RE.split(compact) if part.strip()]
+    if len(sentence_parts) > 1:
+        return sentence_parts
+    clause_parts = [part.strip() for part in _FALLBACK_CLAUSE_SPLIT_RE.split(compact) if part.strip()]
+    if len(clause_parts) > 1:
+        return clause_parts
+    if len(compact) <= 320:
+        return [compact]
+
+    chunks: list[str] = []
+    words = compact.split(" ")
+    current: list[str] = []
+    current_len = 0
+    max_chunk = 260
+    for word in words:
+        token = str(word or "").strip()
+        if not token:
+            continue
+        added = len(token) + (1 if current else 0)
+        if current and current_len + added > max_chunk:
+            chunks.append(" ".join(current).strip())
+            current = [token]
+            current_len = len(token)
+        else:
+            current.append(token)
+            current_len += added
+    if current:
+        chunks.append(" ".join(current).strip())
+    return [part for part in chunks if part]
+
+
+def _fallback_split_units(transcript: str) -> list[str]:
+    lines = [line.strip() for line in (transcript or "").splitlines() if line.strip()]
+    units: list[str] = []
+    if lines:
+        for line in lines:
+            if _is_attachment_scaffold_line(line):
+                continue
+            units.extend(_split_compact_units(line))
+        if units:
+            return units
+    return _split_compact_units(transcript)
+
+
+def _fallback_clip(text: str, *, limit: int = 220) -> str:
+    compact = _FALLBACK_SPACE_RE.sub(" ", str(text or "").strip())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(24, limit - 1)].rstrip() + "…"
+
+
+def _infer_meeting_type(transcript: str) -> str:
+    text = str(transcript or "").lower()
+    if any(token in text for token in ["кандидат", "интервьюер", "собесед", "ваканси", "оценка кандидата"]):
+        return "interview"
+    if any(token in text for token in ["статус", "стендап", "вчера", "сегодня", "блокер"]):
+        return "standup"
+    if any(token in text for token in ["план", "спек", "roadmap", "дорожн", "дедлайн"]):
+        return "planning"
+    if any(token in text for token in ["синк", "sync", "обсудили", "обсуждение", "встреча команды"]):
+        return "sync"
+    return "other"
+
+
+def _extract_meeting_fallback(transcript: str) -> dict[str, Any]:
+    units = _fallback_split_units(transcript)[:220]
+    topics: list[str] = []
+    decisions: list[dict[str, str]] = []
+    action_items: list[dict[str, str]] = []
+    risks: list[str] = []
+    blockers: list[str] = []
+    open_questions: list[str] = []
+
+    topic_seen: set[str] = set()
+    decision_seen: set[str] = set()
+    action_seen: set[str] = set()
+    risk_seen: set[str] = set()
+    blocker_seen: set[str] = set()
+
+    for raw_line in units:
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        speaker = ""
+        text = line
+        match = _FALLBACK_SPEAKER_LINE_RE.match(line)
+        if match:
+            speaker = str(match.group(1) or "").strip()
+            text = str(match.group(2) or "").strip()
+        if not text:
+            continue
+        low = text.lower()
+
+        if "?" in text:
+            open_questions.append(_fallback_clip(text))
+
+        if any(token in low for token in ["тема", "задач", "план", "спек", "релиз", "проект"]) and len(topic_seen) < 10:
+            norm = low[:160]
+            if norm not in topic_seen:
+                topic_seen.add(norm)
+                topics.append(_fallback_clip(text))
+
+        if any(token in low for token in ["решили", "договор", "согласен", "надо переносить", "оставим", "в итоге"]):
+            norm = low[:180]
+            if norm not in decision_seen:
+                decision_seen.add(norm)
+                decisions.append(
+                    {
+                        "text": _fallback_clip(text),
+                        "owner": _fallback_clip(speaker, limit=80),
+                        "deadline": "",
+                    }
+                )
+
+        if any(
+            token in low
+            for token in ["сделать", "сделаю", "нужно", "надо", "проверить", "создам", "напиши", "заведу", "перенос", "доделать"]
+        ):
+            norm = low[:180]
+            if norm not in action_seen:
+                action_seen.add(norm)
+                action_items.append(
+                    {
+                        "owner": _fallback_clip(speaker, limit=80),
+                        "task": _fallback_clip(text),
+                        "due_date": "",
+                        "status": "open",
+                    }
+                )
+
+        if any(token in low for token in ["риск", "проблем", "ошибк", "отстает", "не работает", "уязвим", "атака"]):
+            norm = low[:180]
+            if norm not in risk_seen:
+                risk_seen.add(norm)
+                risks.append(_fallback_clip(text))
+
+        if any(token in low for token in ["блокер", "не могу", "не получается", "не знаю, что делать", "нет доступа", "зависим"]):
+            norm = low[:180]
+            if norm not in blocker_seen:
+                blocker_seen.add(norm)
+                blockers.append(_fallback_clip(text))
+
+    if not topics:
+        topics = [item.get("text", "") for item in decisions[:3] if item.get("text")] or [_fallback_clip(item) for item in units[:5]]
+
+    next_steps = [item.get("task", "") for item in action_items[:10] if item.get("task")]
+
+    return {
+        "meeting_type": _infer_meeting_type(transcript),
+        "topics": topics[:10],
+        "decisions": decisions[:10],
+        "action_items": action_items[:20],
+        "risks": risks[:12],
+        "blockers": blockers[:8],
+        "open_questions": open_questions[:12],
+        "next_steps": next_steps[:10],
+    }
+
+
+def _prompt_prefers_ru(prompt: str) -> bool:
+    return bool(re.search(r"[А-Яа-яЁё]", str(prompt or "")))
+
+
+def _table_unknown_value(prompt: str) -> str:
+    return "Не указан" if _prompt_prefers_ru(prompt) else "Not specified"
+
+
+def _table_open_status_value(prompt: str) -> str:
+    return "В работе" if _prompt_prefers_ru(prompt) else "Open"
+
+
+def _parse_table_columns_from_prompt(prompt: str) -> list[str]:
+    text = str(prompt or "").strip()
+    if not text:
+        return []
+    match = _TABLE_COLUMNS_RE.search(text)
+    body = str(match.group(1) or "").strip() if match else ""
+    if body:
+        cols: list[str] = []
+        for raw in body.split(","):
+            col = str(raw or "").strip().strip("'\"`")
+            if col:
+                cols.append(col)
+        return cols[:40]
+
+    # Fallback for prompts without columns=[...], e.g.:
+    # "...: topic, decision, action_item, owner, due_date, risk, status."
+    tail = text
+    if ":" in tail:
+        tail = tail.split(":", 1)[1]
+    tail = str(tail or "").splitlines()[0].strip()
+    if not tail or "," not in tail:
+        return []
+
+    raw_tokens = [str(item or "").strip().strip("'\"`") for item in tail.split(",")]
+    tokens = [token.rstrip(".").strip() for token in raw_tokens if token]
+    if not (3 <= len(tokens) <= 20):
+        return []
+    if not all(re.match(r"^[A-Za-zА-Яа-я0-9_][A-Za-zА-Яа-я0-9_\-/\s]{0,40}$", token) for token in tokens):
+        return []
+    return tokens[:40]
+
+
+def _canonical_table_field(value: str) -> str:
+    key = re.sub(r"[^a-zа-я0-9]+", "", str(value or "").strip().lower())
+    if not key:
+        return ""
+    if any(token in key for token in ("тема", "topic", "subject")):
+        return "topic"
+    if any(token in key for token in ("решен", "decision")):
+        return "decision"
+    if any(token in key for token in ("действ", "action", "task", "nextstep", "actionitem")):
+        return "action"
+    if any(token in key for token in ("ответств", "owner", "assignee")):
+        return "owner"
+    if any(token in key for token in ("срок", "duedate", "deadline", "дедлайн")):
+        return "due_date"
+    if any(token in key for token in ("риск", "risk")):
+        return "risk"
+    if any(token in key for token in ("статус", "status", "state")):
+        return "status"
+    return ""
+
+
+def _extract_explicit_speakers(transcript: str) -> list[str]:
+    matches = re.findall(r"(?:^|\n)\s*([^:\n]{1,64}):", str(transcript or ""))
+    speakers: list[str] = []
+    seen: set[str] = set()
+    for raw in matches:
+        name = re.sub(r"\s+", " ", str(raw or "").strip())
+        low = name.lower()
+        if not name or low in _TABLE_GENERIC_SPEAKER_LABELS:
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        speakers.append(name)
+    return speakers
+
+
+def _owner_matches_speakers(owner: str, speakers: list[str]) -> bool:
+    value = str(owner or "").strip().lower()
+    if not value:
+        return False
+    for speaker in speakers:
+        s = str(speaker or "").strip().lower()
+        if not s:
+            continue
+        if value == s or value.startswith(f"{s} ") or s in value:
+            return True
+    return False
+
+
+def _value_explicit_in_transcript(value: str, transcript: str) -> bool:
+    candidate = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    if not candidate:
+        return False
+    text = re.sub(r"\s+", " ", str(transcript or "").strip().lower())
+    if not text:
+        return False
+    return candidate in text
+
+
+def _value_by_canonical(row: dict[str, Any], canonical: str) -> str:
+    direct = str(row.get(canonical) or "").strip()
+    if direct:
+        return direct
+    for raw_key, raw_value in row.items():
+        if _canonical_table_field(str(raw_key)) == canonical:
+            value = str(raw_value or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _canonical_rows_from_meeting_fallback(fallback: dict[str, Any]) -> list[dict[str, str]]:
+    topics = [str(item).strip() for item in list(fallback.get("topics") or []) if str(item).strip()]
+    decisions = [item for item in list(fallback.get("decisions") or []) if isinstance(item, dict)]
+    actions = [item for item in list(fallback.get("action_items") or []) if isinstance(item, dict)]
+    risks = [str(item).strip() for item in list(fallback.get("risks") or []) if str(item).strip()]
+    row_count = max(1, len(topics), len(decisions), len(actions), min(12, len(risks)))
+    rows: list[dict[str, str]] = []
+    for idx in range(row_count):
+        decision_item = decisions[idx] if idx < len(decisions) else {}
+        action_item = actions[idx] if idx < len(actions) else {}
+        topic = topics[idx] if idx < len(topics) else ""
+        decision = str(decision_item.get("text") or "").strip()
+        action = str(action_item.get("task") or "").strip()
+        owner = str(action_item.get("owner") or decision_item.get("owner") or "").strip()
+        due_date = str(action_item.get("due_date") or decision_item.get("deadline") or "").strip()
+        risk = risks[idx] if idx < len(risks) else ""
+        if not topic:
+            topic = decision or action or risk
+        rows.append(
+            {
+                "topic": topic,
+                "decision": decision,
+                "action": action,
+                "owner": owner,
+                "due_date": due_date,
+                "risk": risk,
+                "status": str(action_item.get("status") or "open").strip(),
+            }
+        )
+    return rows[:30]
+
+
+def _map_canonical_rows_to_columns(
+    *,
+    canonical_rows: list[dict[str, str]],
+    columns: list[str],
+    prompt: str,
+    transcript_text: str,
+) -> list[dict[str, str]]:
+    speakers = _extract_explicit_speakers(transcript_text)
+    strict_unknown_owner = len(speakers) == 0
+    unknown = _table_unknown_value(prompt)
+    open_status = _table_open_status_value(prompt)
+
+    rows_out: list[dict[str, str]] = []
+    seen_keys: set[str] = set()
+    for row in canonical_rows:
+        topic = str(row.get("topic") or "").strip()
+        decision = str(row.get("decision") or "").strip()
+        action = str(row.get("action") or "").strip()
+        owner = str(row.get("owner") or "").strip()
+        due_date = str(row.get("due_date") or "").strip()
+        risk = str(row.get("risk") or "").strip()
+        status_value = str(row.get("status") or "").strip()
+
+        if strict_unknown_owner or (owner and not _owner_matches_speakers(owner, speakers)):
+            owner = unknown
+        elif not owner:
+            owner = unknown
+
+        if not due_date or not _value_explicit_in_transcript(due_date, transcript_text):
+            due_date = unknown
+        if not risk:
+            risk = unknown
+        if not status_value or status_value.strip().lower() in {"open", "todo", "pending", "draft", "in_progress"}:
+            status_value = open_status
+
+        mapped: dict[str, str] = {}
+        for col in columns:
+            canonical = _canonical_table_field(col)
+            if canonical == "topic":
+                mapped[col] = topic
+            elif canonical == "decision":
+                mapped[col] = decision
+            elif canonical == "action":
+                mapped[col] = action
+            elif canonical == "owner":
+                mapped[col] = owner
+            elif canonical == "due_date":
+                mapped[col] = due_date
+            elif canonical == "risk":
+                mapped[col] = risk
+            elif canonical == "status":
+                mapped[col] = status_value
+            else:
+                mapped[col] = str(row.get(col) or "").strip()
+
+        if not any(str(value).strip() for value in mapped.values()):
+            continue
+        dedupe_key = "|".join(
+            [
+                topic.lower(),
+                decision.lower(),
+                action.lower(),
+                owner.lower(),
+            ]
+        ).strip("|")
+        if dedupe_key and dedupe_key in seen_keys:
+            continue
+        if dedupe_key:
+            seen_keys.add(dedupe_key)
+        rows_out.append(mapped)
+
+    if rows_out:
+        return rows_out[:40]
+    return [
+        {
+            col: (
+                unknown
+                if _canonical_table_field(col) in {"owner", "due_date", "risk"}
+                else open_status
+                if _canonical_table_field(col) == "status"
+                else ""
+            )
+            for col in columns
+        }
+    ]
+
+
+def _normalize_llm_table_payload(
+    *,
+    payload: Any,
+    transcript_text: str,
+    user_prompt: str,
+) -> dict[str, Any]:
+    prompt = str(user_prompt or "").strip()
+    requested_columns = _parse_table_columns_from_prompt(prompt)
+    data = payload if isinstance(payload, dict) else {}
+
+    columns: list[str] = []
+    if requested_columns:
+        columns = requested_columns
+    elif isinstance(data.get("columns"), list):
+        columns = [str(item).strip() for item in list(data.get("columns") or []) if str(item).strip()]
+
+    source_rows = list(data.get("rows") or []) if isinstance(data.get("rows"), list) else []
+    if not columns and source_rows and isinstance(source_rows[0], dict):
+        columns = [str(k).strip() for k in source_rows[0].keys() if str(k).strip()]
+    if not columns:
+        if _prompt_prefers_ru(prompt):
+            columns = ["Тема", "Решение", "Действие", "Ответственный", "Срок", "Риск", "Статус"]
+        else:
+            columns = ["Topic", "Decision", "Action", "Owner", "DueDate", "Risk", "Status"]
+
+    canonical_rows: list[dict[str, str]] = []
+    for row in source_rows:
+        if not isinstance(row, dict):
+            continue
+        normalized_row = {
+            "topic": _value_by_canonical(row, "topic"),
+            "decision": _value_by_canonical(row, "decision"),
+            "action": _value_by_canonical(row, "action"),
+            "owner": _value_by_canonical(row, "owner"),
+            "due_date": _value_by_canonical(row, "due_date"),
+            "risk": _value_by_canonical(row, "risk"),
+            "status": _value_by_canonical(row, "status"),
+        }
+        if any(
+            str(normalized_row.get(key) or "").strip()
+            for key in ("topic", "decision", "action", "owner", "due_date", "risk", "status")
+        ):
+            canonical_rows.append(normalized_row)
+
+    if not canonical_rows:
+        canonical_rows = _canonical_rows_from_meeting_fallback(_extract_meeting_fallback(transcript_text))
+
+    rows = _map_canonical_rows_to_columns(
+        canonical_rows=canonical_rows,
+        columns=columns,
+        prompt=prompt,
+        transcript_text=transcript_text,
+    )
+
+    result: dict[str, Any] = {
+        "columns": columns,
+        "rows": rows,
+        "assumptions": [str(item).strip() for item in list(data.get("assumptions") or []) if str(item).strip()][:12],
+        "citations": [str(item).strip() for item in list(data.get("citations") or []) if str(item).strip()][:24],
+        "warnings": [str(item).strip() for item in list(data.get("warnings") or []) if str(item).strip()][:12],
+    }
+    if str(data.get("schema_version") or "").strip():
+        result["schema_version"] = str(data.get("schema_version") or "").strip()
+    return result
+
+
+def _custom_json_fallback_payload(
+    *,
+    meeting_id: str,
+    source: TranscriptVariant,
+    error_detail: str,
+    transcript_text: str,
+) -> dict[str, Any]:
+    meeting_fallback = _extract_meeting_fallback(transcript_text)
+    meeting_type = str(meeting_fallback.get("meeting_type") or "other")
+    try:
+        report = _load_or_build_report(meeting_id=meeting_id, source=source)
+    except Exception:
+        report = {}
+    highlights = report.get("highlights") if isinstance(report.get("highlights"), dict) else {}
+    decision = report.get("decision") if isinstance(report.get("decision"), dict) else {}
+    skills = [str(item).strip() for item in (highlights.get("strengths") or []) if str(item).strip()]
+    concerns = [str(item).strip() for item in (highlights.get("concerns") or []) if str(item).strip()]
+    raw_risks = [str(item).strip() for item in (report.get("risk_flags") or []) if str(item).strip()]
+    risks = [r.replace("insufficient_interview_evidence", "insufficient_meeting_evidence") for r in raw_risks]
+    recommendation = str(report.get("recommendation") or "").strip()
+    summary = str(report.get("summary") or "").strip()
+    verdict = str(decision.get("status") or "").strip() or "insufficient_data"
+    confidence = float(decision.get("confidence") or 0.0)
+    if meeting_type != "interview" and verdict == "insufficient_data":
+        verdict = "meeting_notes"
+        confidence = max(confidence, 0.45)
+    evidence: list[str] = []
+    if summary:
+        evidence.append(summary)
+    evidence.extend(concerns[:4])
+
+    raw_recommendations: list[str] = []
+    if recommendation and recommendation != "insufficient_data":
+        raw_recommendations = [recommendation]
+    else:
+        raw_recommendations = [str(item).strip() for item in list(meeting_fallback.get("next_steps") or []) if str(item).strip()][:3]
+
+    payload = {
+        "schema_version": "v1",
+        "meeting_id": meeting_id,
+        "source": source,
+        "status": "llm_unavailable_fallback",
+        "warning": _safe_text(error_detail, limit=240),
+        "meeting_type": meeting_type,
+        "summary": summary or "LLM unavailable; basic report",
+        "topics": list(meeting_fallback.get("topics") or []),
+        "decisions": list(meeting_fallback.get("decisions") or []),
+        "action_items": list(meeting_fallback.get("action_items") or []),
+        "skills": skills,
+        "evidence": evidence,
+        "risks": list(meeting_fallback.get("risks") or []) or risks,
+        "blockers": list(meeting_fallback.get("blockers") or []),
+        "open_questions": list(meeting_fallback.get("open_questions") or []),
+        "next_steps": list(meeting_fallback.get("next_steps") or []),
+        "recommendations": raw_recommendations,
+        "итоговый_вердикт": verdict,
+        "final_decision": {
+            "status": verdict,
+            "confidence": confidence,
+            "reason": str(decision.get("reason") or "").strip(),
+        },
+    }
+    return payload
+
+
 def _generate_llm_artifact(meeting_id: str, req: LLMArtifactGenerateRequest) -> tuple[dict[str, Any], bool]:
-    transcript_text = _transcript_for_source(meeting_id=meeting_id, source=req.transcript_variant)
+    direct_input_text = str(req.input_text or "").strip()
+    if meeting_id == LLM_FILES_WORKSPACE_ID and not direct_input_text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="llm_input_text_required",
+        )
+    if direct_input_text:
+        transcript_text = direct_input_text
+        transcript_source = "input_text"
+    else:
+        transcript_text = _transcript_for_source(meeting_id=meeting_id, source=req.transcript_variant)
+        transcript_source = req.transcript_variant
     transcript_sha = sha256_hex(transcript_text.encode("utf-8"))
     s = get_settings()
     fingerprint = {
@@ -637,6 +1261,7 @@ def _generate_llm_artifact(meeting_id: str, req: LLMArtifactGenerateRequest) -> 
         "prompt": str(req.prompt or ""),
         "schema": req.schema_guide,
         "transcript_variant": req.transcript_variant,
+        "transcript_source": transcript_source,
         "transcript_sha256": transcript_sha,
         "llm_enabled": bool(s.llm_enabled),
         "llm_model_id": str(getattr(s, "llm_model_id", "") or ""),
@@ -709,16 +1334,16 @@ def _generate_llm_artifact(meeting_id: str, req: LLMArtifactGenerateRequest) -> 
         if orch is None:
             if req.mode == "table":
                 result_kind = "table"
-                report_file = _report_json_filename(req.transcript_variant)
-                report = records.read_json(meeting_id, report_file) if records.exists(meeting_id, report_file) else None
-                structured = build_structured_rows(
-                    meeting_id=meeting_id,
-                    source=req.transcript_variant,
-                    transcript=transcript_text,
-                    report=report,
+                normalized_table = _normalize_llm_table_payload(
+                    payload={},
+                    transcript_text=transcript_text,
+                    user_prompt=str(req.prompt or ""),
                 )
-                _save_json_result(structured)
-                _save_csv_result(structured_to_csv(structured))
+                warnings = list(normalized_table.get("warnings") or [])
+                warnings.append("llm_unavailable_deterministic_table")
+                normalized_table["warnings"] = warnings[:12]
+                _save_json_result(normalized_table)
+                _save_csv_result(_generic_table_json_to_csv(normalized_table))
             else:
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="llm_unavailable")
         else:
@@ -728,28 +1353,34 @@ def _generate_llm_artifact(meeting_id: str, req: LLMArtifactGenerateRequest) -> 
             if req.mode == "table":
                 result_kind = "table"
                 system = (
-                    "Верни ТОЛЬКО JSON с ключами columns, rows, assumptions, citations, warnings. "
-                    "rows должен быть массивом объектов."
+                    "Верни ТОЛЬКО валидный JSON с ключами columns, rows, assumptions, citations, warnings. "
+                    "rows должен быть массивом объектов. Заполняй только фактами из транскрипта. "
+                    "Не выдумывай ответственных, сроки, решения или риски. "
+                    "Если ответственный или срок явно не указаны в тексте, верни значение 'Не указан'. "
+                    "Если статус не указан явно, используй 'В работе'."
                 )
                 user = (
-                    f"Транскрипт (source={req.transcript_variant}):\n{transcript_text}\n\n"
+                    f"Контекст (source={transcript_source}):\n{transcript_text}\n\n"
                     f"Задача пользователя:\n{user_prompt or 'Сделай структурированную таблицу по интервью.'}\n"
                     f"Желаемая schema (если есть):\n{json.dumps(req.schema_guide, ensure_ascii=False)}"
                 )
+                table_warn = ""
                 try:
-                    data = orch.complete_json(system=system, user=user)
+                    raw_data = orch.complete_json(system=system, user=user)
                 except Exception:
-                    # Fallback to deterministic structured export to keep the pipeline useful.
-                    report_file = _report_json_filename(req.transcript_variant)
-                    report = records.read_json(meeting_id, report_file) if records.exists(meeting_id, report_file) else None
-                    data = build_structured_rows(
-                        meeting_id=meeting_id,
-                        source=req.transcript_variant,
-                        transcript=transcript_text,
-                        report=report,
-                    )
+                    raw_data = {}
+                    table_warn = "llm_unavailable_deterministic_table"
+                data = _normalize_llm_table_payload(
+                    payload=raw_data,
+                    transcript_text=transcript_text,
+                    user_prompt=user_prompt,
+                )
+                if table_warn:
+                    warnings = list(data.get("warnings") or [])
+                    warnings.append(table_warn)
+                    data["warnings"] = warnings[:12]
                 _save_json_result(data)
-                _save_csv_result(_generic_table_json_to_csv(data if isinstance(data, dict) else {"rows": []}))
+                _save_csv_result(_generic_table_json_to_csv(data))
             else:
                 if req.schema_guide is not None:
                     result_kind = "json"
@@ -757,7 +1388,7 @@ def _generate_llm_artifact(meeting_id: str, req: LLMArtifactGenerateRequest) -> 
                         "Верни ТОЛЬКО валидный JSON. Следуй пользовательской схеме и не добавляй текст вне JSON."
                     )
                     user = (
-                        f"Транскрипт (source={req.transcript_variant}):\n{transcript_text}\n\n"
+                        f"Контекст (source={transcript_source}):\n{transcript_text}\n\n"
                         f"Запрос:\n{user_prompt}\n\n"
                         f"Schema guide:\n{json.dumps(req.schema_guide, ensure_ascii=False)}"
                     )
@@ -767,28 +1398,36 @@ def _generate_llm_artifact(meeting_id: str, req: LLMArtifactGenerateRequest) -> 
                         detail = _safe_text(exc, limit=220)
                         if not detail.lower().startswith("llm_provider_error:"):
                             detail = f"llm_provider_error:{detail}"
-                        raise HTTPException(
-                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail=detail,
-                        ) from exc
+                        data = _custom_json_fallback_payload(
+                            meeting_id=meeting_id,
+                            source=req.transcript_variant,
+                            error_detail=detail,
+                            transcript_text=transcript_text,
+                        )
                     _save_json_result(data)
                     _save_txt_result(json.dumps(data, ensure_ascii=False, indent=2))
                 else:
                     result_kind = "text"
-                    system = "Сформируй результат строго на основе транскрипта. Не добавляй выдуманных фактов."
-                    user = f"Транскрипт (source={req.transcript_variant}):\n{transcript_text}\n\nЗапрос:\n{user_prompt}"
+                    system = "Сформируй результат строго на основе предоставленного контекста. Не добавляй выдуманных фактов."
+                    user = f"Контекст (source={transcript_source}):\n{transcript_text}\n\nЗапрос:\n{user_prompt}"
                     try:
                         text = orch.complete_text(system=system, user=user).text
                     except Exception as exc:
                         detail = _safe_text(exc, limit=220)
                         if not detail.lower().startswith("llm_provider_error:"):
                             detail = f"llm_provider_error:{detail}"
-                        raise HTTPException(
-                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail=detail,
-                        ) from exc
-                    _save_txt_result(text)
-                    _save_json_result({"text": text})
+                        data = _custom_json_fallback_payload(
+                            meeting_id=meeting_id,
+                            source=req.transcript_variant,
+                            error_detail=detail,
+                            transcript_text=transcript_text,
+                        )
+                        _save_json_result(data)
+                        _save_txt_result(json.dumps(data, ensure_ascii=False, indent=2))
+                        result_kind = "json"
+                    else:
+                        _save_txt_result(text)
+                        _save_json_result({"text": text})
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported_mode")
 
@@ -798,6 +1437,7 @@ def _generate_llm_artifact(meeting_id: str, req: LLMArtifactGenerateRequest) -> 
         "meeting_id": meeting_id,
         "mode": req.mode,
         "transcript_variant": req.transcript_variant,
+        "transcript_source": transcript_source,
         "template_id": template_id,
         "status": "ok",
         "created_at": _utc_now_iso(),
@@ -808,6 +1448,7 @@ def _generate_llm_artifact(meeting_id: str, req: LLMArtifactGenerateRequest) -> 
         "request": {
             "prompt": str(req.prompt or ""),
             "schema": req.schema_guide,
+            "input_text_chars": len(direct_input_text),
             "force_rebuild": bool(req.force_rebuild),
         },
     }
@@ -904,7 +1545,7 @@ def _senior_brief_filename(source: TranscriptVariant) -> str:
 
 
 def _transcript_for_source(*, meeting_id: str, source: TranscriptVariant) -> str:
-    return _ensure_transcript_text(meeting_id, variant=source, force_rebuild=False)
+    return _read_transcript_text_artifact(meeting_id, variant=source)
 
 
 _RAG_TOKEN_RE = re.compile(r"[0-9A-Za-zА-Яа-я_+\\-]{2,}", flags=re.UNICODE)
@@ -2458,11 +3099,14 @@ def get_transcript(
     force_rebuild: bool = Query(default=False),
     _=Depends(auth_dep),
 ) -> Any:
-    text = _ensure_transcript_text(
-        meeting_id,
-        variant=variant,
-        force_rebuild=bool(force_rebuild),
-    )
+    if force_rebuild:
+        text = _ensure_transcript_text(
+            meeting_id,
+            variant=variant,
+            force_rebuild=True,
+        )
+    else:
+        text = _read_transcript_text_artifact(meeting_id, variant=variant)
     filename = _transcript_filename(variant)
     if fmt == "json":
         return TranscriptTextResponse(
@@ -2477,7 +3121,7 @@ def get_transcript(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_meeting_id")
     if not path.exists():
-        raise HTTPException(status_code=404, detail="artifact_not_found")
+        raise HTTPException(status_code=409, detail=f"transcript_{variant}_not_ready")
     return FileResponse(path, media_type="text/plain", filename=path.name)
 
 
@@ -2776,7 +3420,6 @@ def download_artifact(
         elif kind == "clean":
             variant = "clean"
         filename = _transcript_filename(variant)
-        _ensure_transcript_text(meeting_id, variant=variant, force_rebuild=False)
     elif kind in {"report", "analysis"}:
         if not source:
             raise HTTPException(status_code=400, detail="source_required")
@@ -2797,16 +3440,6 @@ def download_artifact(
         if fmt != "txt":
             raise HTTPException(status_code=400, detail="format_required")
         filename = _senior_brief_filename(source)
-        if not records.exists(meeting_id, filename):
-            report = _load_or_build_report(
-                meeting_id=meeting_id,
-                source=source,
-            )
-            records.write_text(
-                meeting_id,
-                filename,
-                _senior_brief_text(meeting_id=meeting_id, source=source, report=report),
-            )
     elif kind == "audio":
         if fmt != "mp3":
             raise HTTPException(status_code=400, detail="format_required")
@@ -2830,6 +3463,8 @@ def download_artifact(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_meeting_id")
     if not path.exists():
+        if kind in {"raw", "normalized", "clean"}:
+            raise HTTPException(status_code=409, detail=f"transcript_{kind}_not_ready")
         raise HTTPException(status_code=404, detail="artifact_not_found")
 
     media_type = "text/plain"

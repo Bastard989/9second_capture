@@ -62,7 +62,6 @@ const state = {
     enhanced: new Map(),
   },
   transcriptUiState: "waiting",
-  nonEmptyRawUpdates: 0,
   pendingChunks: [],
   wsReconnectTimer: null,
   wsReconnectAttempts: 0,
@@ -79,6 +78,11 @@ const state = {
   deviceStatusKey: "device_status_unknown",
   deviceStatusStyle: "muted",
   deviceStatusCount: 0,
+  sttModels: [],
+  sttStatusKey: "stt_status_loading",
+  sttStatusStyle: "muted",
+  sttStatusText: "",
+  sttStatusParams: {},
   llmModels: [],
   llmStatusKey: "llm_status_loading",
   llmStatusStyle: "muted",
@@ -144,10 +148,11 @@ const state = {
     raw: "",
     clean: "",
   },
-  captureQuality: "balanced",
   languageProfile: "mixed",
   diagnosticsLast: null,
-  workMode: "driver_audio",
+  workMode: "link_fallback",
+  flowStep: "mode",
+  resultsTab: "audio",
   instanceId: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
   captureLockTimer: null,
   captureLockConflictMeetingId: "",
@@ -155,6 +160,16 @@ const state = {
   uiLogLastByKey: new Map(),
   warnedSystemLowAt: 0,
   busyOverlayCount: 0,
+  busyOverlayProgressPct: 0,
+  busyOverlayMinimized: false,
+  busyOverlayTimer: null,
+  busyOverlayStartedAtMs: 0,
+  busyOverlayDurationMs: 45000,
+  busyOverlayManualProgress: null,
+  busyOverlayCancelable: false,
+  busyOverlayCancelHintKey: "busy_overlay_cancelled",
+  busyOverlayAbortController: null,
+  busyOverlayCancelledByUser: false,
 };
 
 const PREFER_PCM_CAPTURE = true;
@@ -187,38 +202,17 @@ const RAG_SAVED_SETS_KEY = "9second_capture_rag_saved_sets_v1";
 const UI_EVENT_ENDPOINT = "/v1/diagnostics/ui-event";
 const UI_EVENT_THROTTLE_MS = 3000;
 const MEETING_TIME_ZONE = "Europe/Moscow";
-const QUALITY_PROFILES = {
-  fast: {
-    id: "fast",
-    wsQualityProfile: "live_fast",
-    timesliceMs: 3200,
-    hintKey: "quality_fast_desc",
-  },
-  balanced: {
-    id: "balanced",
-    wsQualityProfile: "live_balanced",
-    timesliceMs: 3800,
-    hintKey: "quality_balanced_desc",
-  },
-  accurate: {
-    id: "accurate",
-    wsQualityProfile: "live_accurate",
-    timesliceMs: 4600,
-    hintKey: "quality_accurate_desc",
-  },
+const TRANSCRIPT_QUALITY_PROFILE = "balanced";
+const LLM_FILES_WORKSPACE_ID = "llm_files_workspace";
+const BUSY_PROGRESS_DURATION_BY_TITLE = {
+  llm_artifact_busy_title: 135000,
+  busy_rag_index_title: 180000,
+  busy_rag_query_title: 90000,
+  busy_report_title: 60000,
+  busy_mp3_title: 30000,
+  busy_finish_title: 45000,
 };
 const WORK_MODE_CONFIGS = {
-  driver_audio: {
-    id: "driver_audio",
-    labelKey: "work_mode_driver",
-    descriptionKey: "work_mode_desc_driver",
-    supportsRealtime: true,
-    supportsUpload: false,
-    supportsQuick: false,
-    forceCaptureMode: "system",
-    useDeviceDriver: true,
-    contextMode: "driver_audio",
-  },
   browser_screen_audio: {
     id: "browser_screen_audio",
     labelKey: "work_mode_browser",
@@ -262,6 +256,19 @@ const VIRTUAL_DEVICE_PATTERNS = [
   "loopback",
   "virtual",
 ];
+const EMBEDDING_MODEL_HINTS = [
+  "embed",
+  "embedding",
+  "text-embedding",
+  "nomic-embed",
+  "mxbai-embed",
+  "bge",
+  "e5",
+  "gte",
+  "minilm",
+  "arctic-embed",
+  "jina-embeddings",
+];
 
 const i18n = {
   ru: {
@@ -269,9 +276,13 @@ const i18n = {
     theme_label: "Тема",
     theme_light: "Светлая",
     theme_dark: "Тёмная",
+    flow_mode: "Режим",
+    flow_capture: "Запись",
+    flow_process: "Обработка",
+    flow_results: "Результаты",
     work_mode_title: "Режим работы",
     help_work_mode:
-      "Выберите один из 4 способов записи встречи. Активный способ включает только свои настройки.",
+      "Выберите один из 3 способов записи встречи. Активный способ включает только свои настройки.",
     help_mode_driver:
       "Запись системного звука через виртуальный драйвер (BlackHole/VB-CABLE/Monitor).",
     help_mode_browser:
@@ -292,7 +303,7 @@ const i18n = {
     work_mode_desc_browser:
       "Запись через браузерный захват экрана и звука (Share audio в диалоге обязателен).",
     work_mode_desc_api:
-      "Подключение к видеовстрече через API-коннектор и запись MP3 без локального live-транскрипта.",
+      "Подключение к видеовстрече через API-коннектор и запись MP3 без текстовых апдейтов во время записи.",
     work_mode_desc_quick:
       "Запись по ссылке через браузерный захват: на «Старт» открываем встречу и пишем звук вкладки (Share audio).",
     mode_settings_title: "Настройки выбранного режима",
@@ -303,9 +314,9 @@ const i18n = {
     mode_settings_api_hint:
       "Укажите параметры API-подключения. Запуск и остановка записи MP3 выполняются в блоке «Запись».",
     work_mode_recording_disabled:
-      "Режим записи выключен для текущего профиля. Переключитесь на «Драйвер» или «Браузер».",
+      "Режим записи выключен для текущего профиля. Переключитесь на «Браузер» или «Ссылка».",
     work_mode_quick_no_realtime_diag:
-      "В текущем режиме realtime-индикатор не используется. Для проверки сигнала нажмите «Проверить».",
+      "В текущем режиме realtime-индикатор текста не используется. Для проверки сигнала нажмите «Проверить».",
     work_mode_upload_disabled:
       "Загрузка файла выключена в текущем режиме. Активируйте «API/файл».",
     work_mode_quick_disabled:
@@ -315,7 +326,7 @@ const i18n = {
     err_work_mode_switch_locked:
       "Нельзя переключить режим во время активной записи/загрузки. Сначала остановите текущий процесс.",
     err_work_mode_realtime_only:
-      "Выбранный режим не поддерживает realtime запись. Переключитесь на «Драйвер» или «Браузер».",
+      "Выбранный режим не поддерживает realtime запись. Переключитесь на «Браузер» или «Ссылка».",
     err_work_mode_upload_only:
       "Прямая загрузка файла отключена в режимах захвата. Используйте «Импорт MP3» в блоке «Результаты».",
     err_work_mode_quick_only:
@@ -353,9 +364,12 @@ const i18n = {
     meta_interviewer: "Интервьюер",
     interview_meta_hint:
       "Поля не обязательны, но помогают делать сравнимую аналитику между интервью.",
+    stt_model_label: "STT модель",
+    help_stt_model:
+      "Локальная faster-whisper модель для транскрибации. Чем крупнее модель, тем выше качество, но дольше обработка и выше нагрузка.",
     llm_model_label: "LLM модель",
     help_llm:
-      "LLM используется в чате для генерации форматов из транскрипта. Сам TXT транскрипт строится STT без LLM.",
+      "LLM используется в чате для генерации форматов из прикрепленных файлов. Сам TXT транскрипт строится STT без LLM.",
     embedding_model_label: "Embeddings модель",
     help_embeddings_model:
       "Отдельная модель для RAG-поиска по смыслу (эмбеддинги). Используется для поиска/сравнения интервью. Если недоступна, включается локальный hashing fallback.",
@@ -368,13 +382,25 @@ const i18n = {
     help_transcript_sources:
       "Raw — исходный STT текст. Normalized — служебная нормализация без LLM (убирает мусор/повторы, сохраняет смысл). Clean — пользовательский чистый текст после normalizer + опциональной LLM-очистки.",
     help_llm_chat_any_format:
-      "LLM сгенерирует вам любой формат данных который вам необходим из транскрипта.",
+      "LLM в этом блоке работает только по прикрепленным TXT/CSV/JSON/MD файлам и формирует нужный формат.",
     help_rag_chat_any_format:
       "RAG-чат сравнит выбранные интервью и соберет ответ с цитатами. Можно добавить файлы для дополнительного контекста.",
+    stt_scan_btn: "Сканировать",
+    stt_apply_btn: "Сменить модель",
     llm_scan_btn: "Сканировать",
     llm_apply_btn: "Сменить модель",
     embedding_scan_btn: "Сканировать",
     embedding_apply_btn: "Сменить модель",
+    stt_status_loading: "Загружаем настройки STT...",
+    stt_status_ready: "STT готов. Текущая модель: {model}.",
+    stt_status_scanning: "Сканируем STT модели...",
+    stt_status_scan_done: "Найдено STT моделей: {count}. Текущая: {model}.",
+    stt_status_scan_empty: "STT модели не найдены. Текущая: {model}.",
+    stt_status_applied: "STT модель переключена: {model}.",
+    stt_status_apply_failed: "Не удалось переключить STT модель.",
+    stt_status_unavailable: "STT API недоступен. Проверьте локальный backend.",
+    stt_model_placeholder: "Выберите STT модель",
+    stt_model_missing: "Сначала выберите STT модель.",
     llm_status_loading: "Загружаем настройки LLM...",
     llm_status_ready: "LLM включен. Текущая модель: {model}.",
     llm_status_disabled: "LLM выключен (LLM_ENABLED=false).",
@@ -455,15 +481,6 @@ const i18n = {
     language_profile_en: "English",
     language_profile_hint:
       "Подсказка для STT: выберите язык интервью для лучшей точности терминов.",
-    quality_profile_label: "Профиль качества",
-    help_quality_profile:
-      "Fast — быстрее, Accurate — точнее, Balanced — оптимальный профиль по умолчанию.",
-    quality_fast: "Fast",
-    quality_balanced: "Balanced",
-    quality_accurate: "Accurate",
-    quality_fast_desc: "Минимальная задержка, ниже точность, меньше нагрузка на CPU.",
-    quality_balanced_desc: "Баланс точности и задержки. Рекомендуется по умолчанию.",
-    quality_accurate_desc: "Максимальная точность, выше задержка и нагрузка на CPU.",
     diag_title: "Проверка MP3-захвата перед стартом",
     help_diagnostics:
       "Опциональная проверка перед записью: доступ к аудио, уровни system/mic и готовность MP3-потока.",
@@ -525,12 +542,12 @@ const i18n = {
     transcript_mode_record_first:
       "Итоговый текст строится после завершения записи для максимальной точности.",
     transcript_runtime_waiting: "Текст появится после завершения записи.",
-    transcript_runtime_recording: "Идёт запись. Live-транскрипт отключён для снижения нагрузки.",
+    transcript_runtime_recording: "Идёт запись. Текст формируется после остановки записи.",
     transcript_runtime_loading: "Завершаем обработку MP3 и собираем итоговый текст...",
     transcript_runtime_ready: "Итоговый текст готов.",
     transcript_runtime_empty:
       "Запись завершена, но текста пока нет. Проверьте источник аудио и сохраните MP3 для повторной обработки.",
-    transcript_empty_title: "Live-транскрипт отключен",
+    transcript_empty_title: "Транскрипция после записи",
     transcript_empty_hint:
       "Во время записи показываются только индикаторы захвата. Итоговый текст появится после Стоп.",
     transcript_placeholder_raw_post:
@@ -538,6 +555,8 @@ const i18n = {
     transcript_placeholder_clean_post:
       "Чистый текст появится после завершения записи и финальной обработки.",
     records_title: "Результаты",
+    results_tab_audio: "Аудио",
+    results_tab_transcript: "Транскрипция",
     records_refresh: "Обновить",
     records_menu_btn: "...",
     record_menu_rename: "Переименовать запись",
@@ -587,7 +606,7 @@ const i18n = {
     llm_artifact_title: "LLM-экспорт / кастомные форматы",
     llm_artifact_generate_btn: "Сформировать",
     llm_artifact_hint_idle:
-      "Выберите запись и формат, затем сформируйте LLM-артефакт из транскрипта.",
+      "Прикрепите файлы и отправьте запрос: LLM сформирует нужный формат только по вложениям.",
     llm_artifact_hint_running: "LLM-артефакт формируется...",
     llm_artifact_hint_done: "LLM-артефакт сформирован.",
     llm_artifact_hint_failed: "Не удалось сформировать LLM-артефакт.",
@@ -595,6 +614,8 @@ const i18n = {
     llm_artifact_hint_prompt_required: "Для режимов Custom/Table укажите prompt.",
     llm_artifact_hint_schema_invalid: "Schema JSON некорректен. Проверьте формат JSON.",
     llm_artifact_hint_no_result: "Сначала сформируйте LLM-артефакт.",
+    llm_artifact_hint_needs_text_or_transcript:
+      "Добавьте текст через вложения. Этот LLM-блок работает только по прикрепленным файлам.",
     llm_artifact_source_panel_title: "Источник и режим",
     llm_artifact_meeting_label: "Запись",
     llm_artifact_transcript_source_label: "Источник транскрипта",
@@ -611,7 +632,7 @@ const i18n = {
     llm_artifact_prompt_panel_title: "Prompt / Schema",
     llm_artifact_prompt_label: "Prompt (для custom/table)",
     llm_artifact_prompt_placeholder:
-      "Сделай таблицу для Google Sheets: навыки, опыт, риски, рекомендации.",
+      "Сделай протокол встречи: темы, решения, action items (owner, due_date, status), риски, блокеры.",
     llm_artifact_schema_label: "Schema JSON (опционально)",
     llm_artifact_schema_placeholder: '{"type":"object","properties":{"rows":{"type":"array"}}}',
     llm_artifact_result_title: "Результат LLM-артефакта",
@@ -621,29 +642,34 @@ const i18n = {
     llm_artifact_file_download: "Скачать {fmt}",
     llm_artifact_busy_title: "LLM-артефакт",
     llm_artifact_busy_text:
-      "Генерируем артефакт из выбранного транскрипта. Для custom/table и LLM может потребоваться больше времени.",
-    llm_chat_title: "LLM чат по транскрипту",
+      "Генерируем артефакт из прикрепленных файлов. Для custom/table и LLM может потребоваться больше времени.",
+    llm_chat_title: "LLM чат по файлам",
+    llm_chat_clear_btn: "Очистить",
     llm_chat_send_btn: "Отправить",
-    llm_chat_hint_idle: "Опишите нужный формат. LLM сформирует артефакт по выбранному транскрипту.",
+    llm_chat_hint_idle: "Прикрепите TXT/CSV/JSON/MD файлы и опишите нужный формат. LLM обработает только вложения.",
+    llm_chat_hint_cleared: "Предыдущие результаты очищены.",
+    llm_chat_hint_files_required: "Прикрепите хотя бы один текстовый файл (TXT/CSV/JSON/MD).",
     llm_chat_hint_prompt_required: "Введите запрос в чат LLM.",
     llm_chat_hint_running: "LLM обрабатывает запрос...",
     llm_chat_hint_done: "Ответ LLM получен.",
     llm_chat_hint_failed: "Не удалось получить ответ LLM.",
+    llm_chat_hint_needs_text_or_transcript:
+      "Добавьте текст через вложения. Этот LLM-блок работает только по прикрепленным файлам.",
     llm_chat_input_label: "Запрос в LLM",
     llm_chat_input_placeholder:
-      "Сделай табличный отчёт по clean transcript: навыки, доказательства, риски, рекомендации.",
-    llm_chat_preset_summary: "Summary",
+      "Сделай протокол встречи по прикрепленным файлам: summary, topics, decisions, action_items, risks, blockers.",
+    llm_chat_preset_summary: "Summary (интервьюеры)",
     llm_chat_preset_table: "Таблица",
     llm_chat_preset_json: "JSON",
     llm_chat_preset_csv: "CSV",
     llm_chat_preset_summary_prompt:
-      "Сделай короткое summary по clean transcript: ключевые темы, сильные стороны кандидата, риски, итог.",
+      "Сделай summary по прикрепленным файлам: ключевые темы, решения, риски, договоренности, next steps.",
     llm_chat_preset_table_prompt:
-      "Сделай таблицу для Google Sheets по clean transcript: columns=[Критерий, Факт, Оценка, Риск, Рекомендация], rows по смыслу.",
+      "Сделай таблицу для Google Sheets по прикрепленным файлам встречи: columns=[Тема, Решение, Действие, Ответственный, Срок, Риск, Статус], rows по смыслу. Не выдумывай факты: если Ответственный/Срок не названы явно, ставь «Не указан». Не подставляй имена по догадке.",
     llm_chat_preset_json_prompt:
-      "Верни структурированный JSON по clean transcript: skills, evidence, risks, recommendations, итоговый_вердикт.",
+      "Верни адаптивный JSON по прикрепленным файлам. Сначала определи meeting_type (interview|standup|status|planning|sync|other). Затем верни keys: meeting_type, summary, topics, decisions, action_items[{owner,task,due_date,status}], risks, blockers, open_questions, next_steps. Если meeting_type=interview, дополнительно верни skills, evidence, recommendations, итоговый_вердикт.",
     llm_chat_preset_csv_prompt:
-      "Собери табличный CSV по clean transcript: candidate, criterion, evidence, score, risk, recommendation.",
+      "Собери табличный CSV по прикрепленным файлам обычной встречи: topic, decision, action_item, owner, due_date, risk, status.",
     llm_chat_history_empty: "Здесь появится диалог с LLM.",
     llm_chat_files_title: "Файлы результата",
     chat_attach_btn: "📎 Прикрепить файлы",
@@ -750,14 +776,22 @@ const i18n = {
     hint_mp3_not_found: "MP3 пока недоступен для этой записи.",
     hint_mp3_not_found_ffmpeg:
       "MP3 недоступен. Скорее всего не установлен ffmpeg (нужен для конвертации backup_audio.webm в MP3).",
-    hint_mp3_import_started: "Загружаем MP3 в агент и строим запись...",
-    hint_mp3_import_done: "MP3 импортирован. Можно формировать отчёты.",
+    hint_mp3_import_started: "Импортируем MP3 в агент (без транскрибации)...",
+    hint_mp3_import_done: "MP3 импортирован. Транскрипт будет построен только по запросу.",
     hint_mp3_import_failed: "Не удалось импортировать MP3 файл.",
     hint_report_generated: "TXT транскрипт сохранён.",
     hint_report_source_missing: "Сначала выберите запись для транскрипта.",
     hint_report_name_missing: "Укажите имя TXT файла.",
     hint_report_missing: "TXT транскрипт пока не найден для этой записи.",
+    hint_transcript_not_ready:
+      "Транскрипт ещё не сформирован. Нажмите «TXT» в блоке нужного источника (Raw/Clean).",
+    hint_transcript_generate_failed: "Не удалось сформировать транскрипт. Проверьте логи STT.",
     busy_overlay_title: "Подождите...",
+    busy_overlay_cancel_btn: "Прервать",
+    busy_overlay_minimize_btn: "Свернуть",
+    busy_overlay_restore_btn: "Развернуть",
+    busy_overlay_progress_label: "Прогресс",
+    busy_overlay_cancelled: "Операция прервана пользователем.",
     busy_finish_title: "Формируем MP3",
     busy_finish_text:
       "Сохраняем аудио и готовим MP3. Текст и отчёты формируются позже по запросу в блоке «Результаты».",
@@ -898,9 +932,13 @@ const i18n = {
     theme_label: "Theme",
     theme_light: "Light",
     theme_dark: "Dark",
+    flow_mode: "Mode",
+    flow_capture: "Capture",
+    flow_process: "Process",
+    flow_results: "Results",
     work_mode_title: "Work mode",
     help_work_mode:
-      "Pick one of four interview capture modes. Only the active mode settings are applied.",
+      "Pick one of three interview capture modes. Only the active mode settings are applied.",
     help_mode_driver:
       "Capture system audio through virtual loopback driver (BlackHole/VB-CABLE/Monitor).",
     help_mode_browser:
@@ -921,7 +959,7 @@ const i18n = {
     work_mode_desc_browser:
       "Browser capture of screen + audio (Share audio must be enabled).",
     work_mode_desc_api:
-      "Meeting API connector flow: record MP3 from meeting source without live transcript.",
+      "Meeting API connector flow: record MP3 from meeting source without transcript updates during recording.",
     work_mode_desc_quick:
       "Meeting-by-link browser capture: on Start we open the meeting and record tab audio via Share audio.",
     mode_settings_title: "Selected mode settings",
@@ -932,9 +970,9 @@ const i18n = {
     mode_settings_api_hint:
       "Set API connector parameters. Start/Stop in Recording controls MP3 session.",
     work_mode_recording_disabled:
-      "Recording controls are disabled for this profile. Switch to Driver or Browser mode.",
+      "Recording controls are disabled for this profile. Switch to Browser or Link mode.",
     work_mode_quick_no_realtime_diag:
-      "Realtime live monitor is not used in this mode. Use Check to run signal probe.",
+      "Realtime text monitor is not used in this mode. Use Check to run signal probe.",
     work_mode_upload_disabled:
       "File upload is disabled for this profile. Switch to API/file mode.",
     work_mode_quick_disabled:
@@ -944,7 +982,7 @@ const i18n = {
     err_work_mode_switch_locked:
       "Cannot switch mode during active recording/upload. Stop current flow first.",
     err_work_mode_realtime_only:
-      "Selected mode does not support realtime recording. Switch to Driver or Browser.",
+      "Selected mode does not support realtime recording. Switch to Browser or Link.",
     err_work_mode_upload_only:
       "Direct upload mode is removed from capture panels. Use MP3 import in Results.",
     err_work_mode_quick_only:
@@ -982,9 +1020,12 @@ const i18n = {
     meta_interviewer: "Interviewer",
     interview_meta_hint:
       "Fields are optional, but they improve comparability between interviews.",
+    stt_model_label: "STT model",
+    help_stt_model:
+      "Local faster-whisper model for transcription. Larger models improve quality but increase latency and CPU load.",
     llm_model_label: "LLM model",
     help_llm:
-      "LLM is used in chat to generate formats from transcript. TXT transcript itself is built by STT without LLM.",
+      "LLM is used in chat to generate formats from attached files. TXT transcript itself is built by STT without LLM.",
     embedding_model_label: "Embeddings model",
     help_embeddings_model:
       "Separate model for semantic RAG retrieval (embeddings). Used for search/compare across interviews. If unavailable, local hashing fallback is used.",
@@ -997,13 +1038,25 @@ const i18n = {
     help_transcript_sources:
       "Raw = original STT text. Normalized = internal deterministic cleanup without LLM (removes noise/repeats, preserves meaning). Clean = user-facing text after normalizer + optional LLM cleanup.",
     help_llm_chat_any_format:
-      "LLM will generate any data format you need from the transcript.",
+      "LLM in this block works only with attached TXT/CSV/JSON/MD files and generates requested output format.",
     help_rag_chat_any_format:
       "RAG chat compares selected interviews and returns citation-backed answers. You can attach files for extra context.",
+    stt_scan_btn: "Scan",
+    stt_apply_btn: "Switch model",
     llm_scan_btn: "Scan",
     llm_apply_btn: "Switch model",
     embedding_scan_btn: "Scan",
     embedding_apply_btn: "Switch model",
+    stt_status_loading: "Loading STT settings...",
+    stt_status_ready: "STT ready. Current model: {model}.",
+    stt_status_scanning: "Scanning STT models...",
+    stt_status_scan_done: "STT models found: {count}. Current: {model}.",
+    stt_status_scan_empty: "No STT models found. Current: {model}.",
+    stt_status_applied: "STT model switched: {model}.",
+    stt_status_apply_failed: "Failed to switch STT model.",
+    stt_status_unavailable: "STT API is unavailable. Check local backend.",
+    stt_model_placeholder: "Select STT model",
+    stt_model_missing: "Select an STT model first.",
     llm_status_loading: "Loading LLM settings...",
     llm_status_ready: "LLM enabled. Current model: {model}.",
     llm_status_disabled: "LLM is disabled (LLM_ENABLED=false).",
@@ -1083,15 +1136,6 @@ const i18n = {
     language_profile_ru: "Russian",
     language_profile_en: "English",
     language_profile_hint: "STT hint: choose interview language for better term accuracy.",
-    quality_profile_label: "Quality profile",
-    help_quality_profile:
-      "Fast = lighter/faster, Accurate = better quality/higher load, Balanced = default.",
-    quality_fast: "Fast",
-    quality_balanced: "Balanced",
-    quality_accurate: "Accurate",
-    quality_fast_desc: "Lowest latency, lower accuracy, minimal CPU usage.",
-    quality_balanced_desc: "Balanced accuracy and latency (recommended).",
-    quality_accurate_desc: "Highest accuracy with higher latency and CPU load.",
     diag_title: "MP3 capture preflight checks",
     help_diagnostics:
       "Optional preflight: audio access, system/mic levels, and MP3 stream readiness.",
@@ -1153,12 +1197,12 @@ const i18n = {
     transcript_mode_record_first:
       "Final transcript is built after recording ends for maximum accuracy.",
     transcript_runtime_waiting: "Transcript will appear after recording stops.",
-    transcript_runtime_recording: "Recording in progress. Live transcript is disabled to reduce load.",
+    transcript_runtime_recording: "Recording in progress. Transcript is generated after stop.",
     transcript_runtime_loading: "Finalizing MP3 and building final transcript...",
     transcript_runtime_ready: "Final transcript is ready.",
     transcript_runtime_empty:
       "Recording is finished, but transcript is still empty. Check audio source and save MP3 for reprocessing.",
-    transcript_empty_title: "Live transcript is disabled",
+    transcript_empty_title: "Post-record transcription",
     transcript_empty_hint:
       "During recording, only capture health indicators are shown. Final transcript appears after Stop.",
     transcript_placeholder_raw_post:
@@ -1166,6 +1210,8 @@ const i18n = {
     transcript_placeholder_clean_post:
       "Clean text appears after recording stops and final processing is complete.",
     records_title: "Results",
+    results_tab_audio: "Audio",
+    results_tab_transcript: "Transcript",
     records_refresh: "Refresh",
     records_menu_btn: "...",
     record_menu_rename: "Rename recording",
@@ -1214,7 +1260,7 @@ const i18n = {
     compare_row_candidate_fallback: "Candidate not set",
     llm_artifact_title: "LLM export / custom formats",
     llm_artifact_generate_btn: "Generate",
-    llm_artifact_hint_idle: "Select a recording and format, then generate an LLM artifact from transcript.",
+    llm_artifact_hint_idle: "Attach files and send request. LLM will generate output format from attachments only.",
     llm_artifact_hint_running: "Generating LLM artifact...",
     llm_artifact_hint_done: "LLM artifact generated.",
     llm_artifact_hint_failed: "Failed to generate LLM artifact.",
@@ -1222,6 +1268,8 @@ const i18n = {
     llm_artifact_hint_prompt_required: "Prompt is required for Custom/Table modes.",
     llm_artifact_hint_schema_invalid: "Schema JSON is invalid. Check JSON syntax.",
     llm_artifact_hint_no_result: "Generate an LLM artifact first.",
+    llm_artifact_hint_needs_text_or_transcript:
+      "Add text via attachments. This LLM block works with attached files only.",
     llm_artifact_source_panel_title: "Source and mode",
     llm_artifact_meeting_label: "Recording",
     llm_artifact_transcript_source_label: "Transcript source",
@@ -1238,7 +1286,7 @@ const i18n = {
     llm_artifact_prompt_panel_title: "Prompt / Schema",
     llm_artifact_prompt_label: "Prompt (for custom/table)",
     llm_artifact_prompt_placeholder:
-      "Build a Google Sheets table with skills, experience, risks, and recommendations.",
+      "Build meeting minutes: topics, decisions, action items (owner, due_date, status), risks, blockers.",
     llm_artifact_schema_label: "Schema JSON (optional)",
     llm_artifact_schema_placeholder: '{"type":"object","properties":{"rows":{"type":"array"}}}',
     llm_artifact_result_title: "LLM artifact result",
@@ -1248,29 +1296,34 @@ const i18n = {
     llm_artifact_file_download: "Download {fmt}",
     llm_artifact_busy_title: "LLM artifact",
     llm_artifact_busy_text:
-      "Generating artifact from the selected transcript. Custom/table modes may take longer with LLM.",
-    llm_chat_title: "LLM chat over transcript",
+      "Generating artifact from attached files. Custom/table modes may take longer with LLM.",
+    llm_chat_title: "LLM chat over files",
+    llm_chat_clear_btn: "Clear",
     llm_chat_send_btn: "Send",
-    llm_chat_hint_idle: "Describe the target format. LLM will generate an artifact from the selected transcript.",
+    llm_chat_hint_idle: "Attach TXT/CSV/JSON/MD files and describe target format. LLM will use attachments only.",
+    llm_chat_hint_cleared: "Previous results were cleared.",
+    llm_chat_hint_files_required: "Attach at least one text file (TXT/CSV/JSON/MD).",
     llm_chat_hint_prompt_required: "Enter a prompt for LLM chat.",
     llm_chat_hint_running: "LLM is processing the request...",
     llm_chat_hint_done: "LLM response received.",
     llm_chat_hint_failed: "Failed to get an LLM response.",
+    llm_chat_hint_needs_text_or_transcript:
+      "Add text via attachments. This LLM block works with attached files only.",
     llm_chat_input_label: "LLM prompt",
     llm_chat_input_placeholder:
-      "Build a table from clean transcript: skills, evidence, risks, recommendations.",
-    llm_chat_preset_summary: "Summary",
+      "Build meeting minutes from attached files: summary, topics, decisions, action_items, risks, blockers.",
+    llm_chat_preset_summary: "Summary (interviewer compare)",
     llm_chat_preset_table: "Table",
     llm_chat_preset_json: "JSON",
     llm_chat_preset_csv: "CSV",
     llm_chat_preset_summary_prompt:
-      "Create a short summary from clean transcript: key topics, candidate strengths, risks, final conclusion.",
+      "Create a summary from attached files: key topics, decisions, risks, agreements, next steps.",
     llm_chat_preset_table_prompt:
-      "Build a Google Sheets-ready table from clean transcript with columns [Criterion, Evidence, Score, Risk, Recommendation].",
+      "Build a Google Sheets table for a regular meeting from attached files with columns [Topic, Decision, Action, Owner, DueDate, Risk, Status]. Do not invent facts: if Owner/DueDate are not explicitly stated, use \"Not specified\". Do not assign people by guess.",
     llm_chat_preset_json_prompt:
-      "Return structured JSON from clean transcript with keys: skills, evidence, risks, recommendations, final_decision.",
+      "Return adaptive JSON from attached files. Detect meeting_type first (interview|standup|status|planning|sync|other). Return keys: meeting_type, summary, topics, decisions, action_items[{owner,task,due_date,status}], risks, blockers, open_questions, next_steps. If meeting_type=interview, also include skills, evidence, recommendations, final_decision.",
     llm_chat_preset_csv_prompt:
-      "Build a CSV table from clean transcript with fields: candidate, criterion, evidence, score, risk, recommendation.",
+      "Build a CSV from attached files of a regular meeting with fields: topic, decision, action_item, owner, due_date, risk, status.",
     llm_chat_history_empty: "LLM chat history will appear here.",
     llm_chat_files_title: "Result files",
     chat_attach_btn: "📎 Attach files",
@@ -1377,14 +1430,22 @@ const i18n = {
     hint_mp3_not_found: "MP3 is not available for this recording yet.",
     hint_mp3_not_found_ffmpeg:
       "MP3 is unavailable. ffmpeg is likely missing (required to convert backup_audio.webm to MP3).",
-    hint_mp3_import_started: "Importing MP3 and creating record...",
-    hint_mp3_import_done: "MP3 imported. You can build reports now.",
+    hint_mp3_import_started: "Importing MP3 into agent (no auto transcription)...",
+    hint_mp3_import_done: "MP3 imported. Transcript will be generated only on demand.",
     hint_mp3_import_failed: "Failed to import MP3 file.",
     hint_report_generated: "TXT transcript saved.",
     hint_report_source_missing: "Select a record for transcript export.",
     hint_report_name_missing: "Set TXT filename.",
     hint_report_missing: "TXT transcript is not available for this recording yet.",
+    hint_transcript_not_ready:
+      "Transcript is not generated yet. Click \"TXT\" in the needed lane (Raw/Clean) to generate it.",
+    hint_transcript_generate_failed: "Failed to generate transcript. Check STT logs.",
     busy_overlay_title: "Please wait...",
+    busy_overlay_cancel_btn: "Abort",
+    busy_overlay_minimize_btn: "Minimize",
+    busy_overlay_restore_btn: "Restore",
+    busy_overlay_progress_label: "Progress",
+    busy_overlay_cancelled: "Operation canceled by user.",
     busy_finish_title: "Building MP3",
     busy_finish_text:
       "Saving audio and preparing MP3. Text and reports are generated later on demand in Results.",
@@ -1532,6 +1593,10 @@ const els = {
   metaVacancy: document.getElementById("metaVacancy"),
   metaLevel: document.getElementById("metaLevel"),
   metaInterviewer: document.getElementById("metaInterviewer"),
+  sttModelSelect: document.getElementById("sttModelSelect"),
+  scanSttModels: document.getElementById("scanSttModels"),
+  applySttModel: document.getElementById("applySttModel"),
+  sttModelStatusText: document.getElementById("sttModelStatusText"),
   llmModelSelect: document.getElementById("llmModelSelect"),
   scanLlmModels: document.getElementById("scanLlmModels"),
   applyLlmModel: document.getElementById("applyLlmModel"),
@@ -1548,10 +1613,6 @@ const els = {
   micSelect: document.getElementById("micSelect"),
   realtimeOnlySettings: document.getElementById("realtimeOnlySettings"),
   languageProfileSelect: document.getElementById("languageProfileSelect"),
-  qualityFast: document.getElementById("qualityFast"),
-  qualityBalanced: document.getElementById("qualityBalanced"),
-  qualityAccurate: document.getElementById("qualityAccurate"),
-  qualityHint: document.getElementById("qualityHint"),
   captureMethodChip: document.getElementById("captureMethodChip"),
   recordingModeHint: document.getElementById("recordingModeHint"),
   uploadModeHint: document.getElementById("uploadModeHint"),
@@ -1637,6 +1698,7 @@ const els = {
   llmArtifactPromptInput: document.getElementById("llmArtifactPromptInput"),
   llmArtifactSchemaInput: document.getElementById("llmArtifactSchemaInput"),
   llmArtifactForceRebuild: document.getElementById("llmArtifactForceRebuild"),
+  llmChatClearBtn: document.getElementById("llmChatClearBtn"),
   llmChatSendBtn: document.getElementById("llmChatSendBtn"),
   llmChatHint: document.getElementById("llmChatHint"),
   llmChatHistory: document.getElementById("llmChatHistory"),
@@ -1687,6 +1749,10 @@ const els = {
   busyOverlay: document.getElementById("busyOverlay"),
   busyOverlayTitle: document.getElementById("busyOverlayTitle"),
   busyOverlayText: document.getElementById("busyOverlayText"),
+  busyOverlayCancel: document.getElementById("busyOverlayCancel"),
+  busyOverlayToggle: document.getElementById("busyOverlayToggle"),
+  busyOverlayProgressFill: document.getElementById("busyOverlayProgressFill"),
+  busyOverlayPercent: document.getElementById("busyOverlayPercent"),
   quickRecordUrl: document.getElementById("quickRecordUrl"),
   quickRecordDuration: document.getElementById("quickRecordDuration"),
   quickRecordStart: document.getElementById("quickRecordStart"),
@@ -1699,14 +1765,13 @@ const els = {
   cardConnection: document.querySelector(".card-connection"),
   cardRecording: document.querySelector(".card-recording"),
   cardUpload: document.querySelector(".card-upload"),
+  flowSteps: Array.from(document.querySelectorAll("[data-flow-step]")),
+  resultTabButtons: Array.from(document.querySelectorAll("[data-results-tab]")),
+  resultTabPanes: Array.from(document.querySelectorAll("[data-results-pane]")),
   modeSettingsPanels: Array.from(document.querySelectorAll("[data-mode-panel]")),
   workModeButtons: Array.from(document.querySelectorAll("[data-work-mode]")),
   captureModeInputs: Array.from(document.querySelectorAll('input[name="captureMode"]')),
 };
-
-function getQualityConfig() {
-  return QUALITY_PROFILES[state.captureQuality] || QUALITY_PROFILES.balanced;
-}
 
 function renderTranscriptModeUi() {
   const dict = i18n[state.lang] || {};
@@ -1782,34 +1847,7 @@ function renderHelpTips() {
 }
 
 function getCaptureTimesliceMs() {
-  return Math.max(1200, Number(getQualityConfig().timesliceMs || CHUNK_TIMESLICE_MS));
-}
-
-function renderQualityProfile() {
-  const cfg = getQualityConfig();
-  if (els.qualityFast) {
-    els.qualityFast.classList.toggle("active", cfg.id === "fast");
-  }
-  if (els.qualityBalanced) {
-    els.qualityBalanced.classList.toggle("active", cfg.id === "balanced");
-  }
-  if (els.qualityAccurate) {
-    els.qualityAccurate.classList.toggle("active", cfg.id === "accurate");
-  }
-  if (els.qualityHint) {
-    const dict = i18n[state.lang] || {};
-    els.qualityHint.textContent = dict[cfg.hintKey] || cfg.hintKey;
-  }
-}
-
-function setCaptureQuality(nextQuality) {
-  const next = String(nextQuality || "").trim().toLowerCase();
-  if (!QUALITY_PROFILES[next]) {
-    state.captureQuality = "balanced";
-  } else {
-    state.captureQuality = next;
-  }
-  renderQualityProfile();
+  return CHUNK_TIMESLICE_MS;
 }
 
 function getLanguageProfile() {
@@ -2007,6 +2045,7 @@ const updateI18n = () => {
   setDriverStatus(state.driverStatusKey, state.driverStatusStyle);
   setFolderStatus(state.folderStatusKey, state.folderStatusStyle);
   renderDeviceStatus();
+  renderSttStatus();
   renderLlmStatus();
   renderEmbeddingStatus();
   if (state.statusHintKey) {
@@ -2023,10 +2062,18 @@ const updateI18n = () => {
   }
   if (els.themeLight) els.themeLight.textContent = dict.theme_light || "Light";
   if (els.themeDark) els.themeDark.textContent = dict.theme_dark || "Dark";
-  renderQualityProfile();
+  document.querySelectorAll(".lang-btn").forEach((btn) => {
+    btn.classList.toggle("active", String(btn.dataset.lang || "") === state.lang);
+  });
+  _renderBusyOverlayToggle();
+  _renderBusyOverlayCancel();
+  _setBusyOverlayProgress(state.busyOverlayProgressPct || 0);
   syncLanguageProfileSelect();
   renderMeterDetailLabels();
   renderDiagnosticsLabels();
+  if (els.sttModelSelect && !state.sttModels.length) {
+    setSttModelOptions([], "");
+  }
   if (els.llmModelSelect && !state.llmModels.length) {
     setLlmModelOptions([], "");
   }
@@ -2110,9 +2157,125 @@ const resolveUiText = (keyOrText = "", isRaw = false) => {
   return String(keyOrText || "");
 };
 
+const _busyOverlayProgressLabel = () =>
+  resolveUiText("busy_overlay_progress_label") || "Progress";
+
+const _busyOverlayDurationMs = (titleKeyOrText = "", overrideMs = null) => {
+  if (Number.isFinite(Number(overrideMs)) && Number(overrideMs) > 0) {
+    return Math.max(5000, Number(overrideMs));
+  }
+  const key = String(titleKeyOrText || "").trim();
+  const mapped = Number(BUSY_PROGRESS_DURATION_BY_TITLE[key] || 0);
+  if (mapped > 0) return mapped;
+  return 45000;
+};
+
+const _setBusyOverlayProgress = (progressPct) => {
+  const normalized = Math.max(0, Math.min(100, Math.round(Number(progressPct) || 0)));
+  state.busyOverlayProgressPct = normalized;
+  if (els.busyOverlayProgressFill) {
+    els.busyOverlayProgressFill.style.width = `${normalized}%`;
+  }
+  if (els.busyOverlayPercent) {
+    els.busyOverlayPercent.textContent = `${_busyOverlayProgressLabel()}: ${normalized}%`;
+  }
+};
+
+const _renderBusyOverlayToggle = () => {
+  if (!els.busyOverlayToggle) return;
+  const key = state.busyOverlayMinimized ? "busy_overlay_restore_btn" : "busy_overlay_minimize_btn";
+  const fallback = state.busyOverlayMinimized ? "Restore" : "Minimize";
+  els.busyOverlayToggle.textContent = resolveUiText(key) || fallback;
+};
+
+const _renderBusyOverlayCancel = () => {
+  if (!els.busyOverlayCancel) return;
+  const visible = Boolean(state.busyOverlayCancelable && state.busyOverlayCount > 0);
+  els.busyOverlayCancel.classList.toggle("hidden", !visible);
+  els.busyOverlayCancel.disabled = !visible;
+  if (visible) {
+    els.busyOverlayCancel.textContent = resolveUiText("busy_overlay_cancel_btn") || "Abort";
+  }
+};
+
+const _applyBusyOverlayMinimized = () => {
+  if (!els.busyOverlay) return;
+  els.busyOverlay.classList.toggle("minimized", Boolean(state.busyOverlayMinimized));
+  _renderBusyOverlayToggle();
+  _renderBusyOverlayCancel();
+};
+
+const _stopBusyOverlayTimer = () => {
+  if (state.busyOverlayTimer) {
+    clearInterval(state.busyOverlayTimer);
+    state.busyOverlayTimer = null;
+  }
+};
+
+const _tickBusyOverlayProgress = () => {
+  if (!els.busyOverlay || state.busyOverlayCount <= 0) return;
+  if (typeof state.busyOverlayManualProgress === "number") {
+    _setBusyOverlayProgress(Math.max(state.busyOverlayProgressPct, state.busyOverlayManualProgress));
+    return;
+  }
+  const elapsed = Math.max(0, Date.now() - Number(state.busyOverlayStartedAtMs || Date.now()));
+  const duration = Math.max(5000, Number(state.busyOverlayDurationMs || 45000));
+  const ratio = Math.min(1, elapsed / duration);
+  const eased = 1 - Math.pow(1 - ratio, 2.2);
+  const target = Math.min(97, Math.round(4 + eased * 93));
+  _setBusyOverlayProgress(Math.max(state.busyOverlayProgressPct, target));
+};
+
+const updateBusyOverlayProgress = (progressPct, textKeyOrText = "", options = {}) => {
+  if (!els.busyOverlay || state.busyOverlayCount <= 0) return;
+  const { rawText = false } = options || {};
+  if (textKeyOrText && els.busyOverlayText) {
+    const text = resolveUiText(textKeyOrText, rawText);
+    if (text) {
+      els.busyOverlayText.textContent = text;
+    }
+  }
+  if (Number.isFinite(Number(progressPct))) {
+    const normalized = Math.max(0, Math.min(100, Number(progressPct)));
+    state.busyOverlayManualProgress = normalized;
+    _setBusyOverlayProgress(Math.max(state.busyOverlayProgressPct, normalized));
+  }
+};
+
+const toggleBusyOverlayMinimized = () => {
+  if (!els.busyOverlay || state.busyOverlayCount <= 0) return;
+  state.busyOverlayMinimized = !state.busyOverlayMinimized;
+  _applyBusyOverlayMinimized();
+};
+
+const getBusyOverlayAbortSignal = () => {
+  const ctrl = state.busyOverlayAbortController;
+  if (!ctrl || !ctrl.signal) return null;
+  return ctrl.signal;
+};
+
+const cancelBusyOverlayOperation = () => {
+  if (!state.busyOverlayCancelable) return;
+  state.busyOverlayCancelledByUser = true;
+  const ctrl = state.busyOverlayAbortController;
+  if (ctrl && ctrl.signal && !ctrl.signal.aborted) {
+    ctrl.abort();
+  }
+  setStatusHint(state.busyOverlayCancelHintKey || "busy_overlay_cancelled", "muted");
+  hideBusyOverlay();
+};
+
 const showBusyOverlay = (titleKeyOrText = "busy_overlay_title", textKeyOrText = "", options = {}) => {
   if (!els.busyOverlay) return;
-  const { rawTitle = false, rawText = false } = options || {};
+  const {
+    rawTitle = false,
+    rawText = false,
+    durationMs = null,
+    cancelable = false,
+    cancelHintKey = "busy_overlay_cancelled",
+    abortController = null,
+  } = options || {};
+  const isFirstOpen = Number(state.busyOverlayCount || 0) <= 0;
   state.busyOverlayCount = Number(state.busyOverlayCount || 0) + 1;
   const title = resolveUiText(titleKeyOrText, rawTitle) || resolveUiText("busy_overlay_title");
   const text = resolveUiText(textKeyOrText, rawText);
@@ -2122,14 +2285,51 @@ const showBusyOverlay = (titleKeyOrText = "busy_overlay_title", textKeyOrText = 
   if (els.busyOverlayText) {
     els.busyOverlayText.textContent = text || title;
   }
+  if (isFirstOpen) {
+    state.busyOverlayProgressPct = 0;
+    state.busyOverlayManualProgress = null;
+    state.busyOverlayStartedAtMs = Date.now();
+    state.busyOverlayDurationMs = _busyOverlayDurationMs(titleKeyOrText, durationMs);
+    state.busyOverlayMinimized = false;
+    state.busyOverlayCancelHintKey = String(cancelHintKey || "busy_overlay_cancelled");
+    state.busyOverlayCancelledByUser = false;
+    state.busyOverlayCancelable = Boolean(cancelable);
+    const hasCustomAbortController = abortController && typeof abortController.abort === "function" && abortController.signal;
+    const hasNativeAbortController = typeof AbortController === "function";
+    state.busyOverlayAbortController = state.busyOverlayCancelable
+      ? (hasCustomAbortController ? abortController : hasNativeAbortController ? new AbortController() : null)
+      : null;
+    if (state.busyOverlayCancelable && !state.busyOverlayAbortController) {
+      state.busyOverlayCancelable = false;
+    }
+    _setBusyOverlayProgress(3);
+    _stopBusyOverlayTimer();
+    state.busyOverlayTimer = setInterval(_tickBusyOverlayProgress, 420);
+  }
+  _applyBusyOverlayMinimized();
   els.busyOverlay.classList.remove("hidden");
   els.busyOverlay.setAttribute("aria-hidden", "false");
+  _renderBusyOverlayCancel();
+  return getBusyOverlayAbortSignal();
 };
 
 const hideBusyOverlay = () => {
   if (!els.busyOverlay) return;
   state.busyOverlayCount = Math.max(0, Number(state.busyOverlayCount || 0) - 1);
   if (state.busyOverlayCount > 0) return;
+  _stopBusyOverlayTimer();
+  state.busyOverlayProgressPct = 0;
+  state.busyOverlayManualProgress = null;
+  state.busyOverlayStartedAtMs = 0;
+  state.busyOverlayDurationMs = 45000;
+  state.busyOverlayMinimized = false;
+  state.busyOverlayCancelable = false;
+  state.busyOverlayCancelHintKey = "busy_overlay_cancelled";
+  state.busyOverlayAbortController = null;
+  state.busyOverlayCancelledByUser = false;
+  _setBusyOverlayProgress(0);
+  _applyBusyOverlayMinimized();
+  _renderBusyOverlayCancel();
   els.busyOverlay.classList.add("hidden");
   els.busyOverlay.setAttribute("aria-hidden", "true");
 };
@@ -2213,8 +2413,10 @@ const setSignal = (statusKey) => {
 
 const setDriverStatus = (statusKey, style) => {
   const dict = i18n[state.lang];
-  els.driverStatus.textContent = dict[statusKey] || statusKey;
-  els.driverStatus.className = `pill ${style || "muted"}`;
+  if (els.driverStatus) {
+    els.driverStatus.textContent = dict[statusKey] || statusKey;
+    els.driverStatus.className = `pill ${style || "muted"}`;
+  }
   state.driverStatusKey = statusKey;
   state.driverStatusStyle = style || "muted";
 };
@@ -2553,10 +2755,7 @@ const renderRagChatAttachments = () => {
 };
 
 const _llmArtifactMeetingId = () => {
-  const fromSelect = String((els.llmArtifactMeetingSelect && els.llmArtifactMeetingSelect.value) || "").trim();
-  if (fromSelect) return fromSelect;
-  const current = String(getSelectedMeeting() || "").trim();
-  return current;
+  return LLM_FILES_WORKSPACE_ID;
 };
 
 const _llmArtifactSource = () => {
@@ -2607,7 +2806,8 @@ const _formatBytes = (value) => {
 
 const _llmArtifactSuggestedFilename = ({ meetingId, fmt, response, fileRef }) => {
   const meta = state.recordsMeta.get(String(meetingId || "").trim()) || {};
-  const label = sanitizeFilenamePart(meta.display_name || meetingId || "record");
+  const isFilesWorkspace = String(meetingId || "").trim() === LLM_FILES_WORKSPACE_ID;
+  const label = sanitizeFilenamePart(isFilesWorkspace ? "llm_files" : meta.display_name || meetingId || "record");
   const ext = String(fmt || "").trim().toLowerCase() || "txt";
   const source = String((response && response.transcript_variant) || state.llmArtifact.transcriptSource || "clean");
   const mode = String((response && response.mode) || state.llmArtifact.mode || "template");
@@ -2761,6 +2961,9 @@ const renderLlmChatHistory = () => {
   if (els.llmChatSendBtn) {
     els.llmChatSendBtn.disabled = Boolean(state.llmArtifact.busy);
   }
+  if (els.llmChatClearBtn) {
+    els.llmChatClearBtn.disabled = Boolean(state.llmArtifact.busy);
+  }
   if (state.llmArtifact.chatHintKey) {
     setLlmChatHint(state.llmArtifact.chatHintKey, state.llmArtifact.chatHintStyle || "muted", false);
   } else if (state.llmArtifact.chatHintText) {
@@ -2850,6 +3053,7 @@ const renderRagChatHistory = () => {
 };
 
 const _applyLlmChatPreset = (presetId) => {
+  setResultsTab("llm", { setFlow: true });
   const prompt = _llmChatPresetPrompt(presetId);
   if (!prompt || !els.llmChatInput) return;
   els.llmChatInput.value = prompt;
@@ -3023,23 +3227,41 @@ const generateLlmArtifact = async () => {
   state.llmArtifact.busy = true;
   renderLlmArtifactWorkspace();
   setLlmArtifactHint("llm_artifact_hint_running", "muted");
-  showBusyOverlay("llm_artifact_busy_title", "llm_artifact_busy_text");
+  const busySignal = showBusyOverlay("llm_artifact_busy_title", "llm_artifact_busy_text", { cancelable: true });
+  updateBusyOverlayProgress(8);
   try {
     const res = await fetch(`/v1/meetings/${meetingId}/artifacts/generate`, {
       method: "POST",
       headers: buildHeaders(),
       body: JSON.stringify(body),
+      signal: busySignal || undefined,
     });
     if (!res.ok) {
-      throw new Error(`llm_artifact_generate_failed_${res.status}`);
+      const detail = await readApiErrorMessage(res, `llm_artifact_generate_failed_${res.status}`);
+      if (isTranscriptNotReadyError(detail) || detail === "llm_input_text_required") {
+        throw new Error("llm_requires_input_or_transcript");
+      }
+      throw new Error(detail);
     }
+    updateBusyOverlayProgress(72);
     const payload = await res.json();
+    updateBusyOverlayProgress(92);
     state.llmArtifact.lastResponse = payload;
     setLlmArtifactHint("llm_artifact_hint_done", "good");
+    updateBusyOverlayProgress(100);
   } catch (err) {
+    if (isAbortRequestError(err)) {
+      setLlmArtifactHint("busy_overlay_cancelled", "muted");
+      return;
+    }
     console.warn("llm artifact generate failed", err);
     state.llmArtifact.lastResponse = null;
-    setLlmArtifactHint("llm_artifact_hint_failed", "bad");
+    const detail = String((err && err.message) || err || "").trim();
+    if (detail === "llm_requires_input_or_transcript") {
+      setLlmArtifactHint("llm_artifact_hint_needs_text_or_transcript", "bad");
+    } else {
+      setLlmArtifactHint("llm_artifact_hint_failed", "bad");
+    }
   } finally {
     hideBusyOverlay();
     state.llmArtifact.busy = false;
@@ -3047,15 +3269,25 @@ const generateLlmArtifact = async () => {
   }
 };
 
+const clearLlmChatResults = () => {
+  if (Boolean(state.llmArtifact.busy)) return;
+  state.llmArtifact.chatMessages = [];
+  state.llmArtifact.lastResponse = null;
+  state.llmArtifact.chatAttachments = [];
+  if (els.llmChatAttachInput) {
+    els.llmChatAttachInput.value = "";
+  }
+  setLlmChatHint("llm_chat_hint_cleared", "good");
+  setLlmArtifactHint("llm_chat_hint_cleared", "good");
+  renderLlmArtifactWorkspace();
+};
+
 const sendLlmChatPrompt = async () => {
+  setResultsTab("llm", { setFlow: true });
   _syncLlmArtifactControlsToState();
   const dict = i18n[state.lang] || {};
-  const meetingId = String(state.llmArtifact.meetingId || "").trim();
-  if (!meetingId) {
-    setLlmArtifactHint("llm_artifact_hint_no_meeting", "bad");
-    setLlmChatHint("llm_artifact_hint_no_meeting", "bad");
-    return;
-  }
+  const meetingId = LLM_FILES_WORKSPACE_ID;
+  state.llmArtifact.meetingId = meetingId;
   const prompt = String((els.llmChatInput && els.llmChatInput.value) || "").trim();
   if (!prompt) {
     setLlmChatHint("llm_chat_hint_prompt_required", "bad");
@@ -3068,22 +3300,34 @@ const sendLlmChatPrompt = async () => {
   state.llmArtifact.transcriptSource = "clean";
   const mode = _llmChatInferMode(prompt);
   const attachments = Array.isArray(state.llmArtifact.chatAttachments) ? state.llmArtifact.chatAttachments : [];
-  const attachmentContext = await _attachmentContextBlock(attachments);
-  const promptWithAttachments = attachmentContext ? `${prompt}\n\n${attachmentContext}` : prompt;
+  const textLikeAttachments = attachments.filter((file) => _attachmentIsTextLike(file));
+  if (!textLikeAttachments.length) {
+    setLlmChatHint("llm_chat_hint_files_required", "bad");
+    setLlmArtifactHint("llm_chat_hint_files_required", "bad");
+    return;
+  }
+  const attachmentContext = await _attachmentContextBlock(textLikeAttachments);
+  if (!attachmentContext || !String(attachmentContext).trim()) {
+    setLlmChatHint("llm_chat_hint_files_required", "bad");
+    setLlmArtifactHint("llm_chat_hint_files_required", "bad");
+    return;
+  }
   const body = {
     transcript_variant: "clean",
     mode,
-    prompt: promptWithAttachments,
+    prompt,
+    input_text: attachmentContext || null,
     schema: null,
-    force_rebuild: Boolean(els.llmArtifactForceRebuild && els.llmArtifactForceRebuild.checked),
+    // Для chat-запросов всегда пересобираем, чтобы не возвращать старый cache-артефакт.
+    force_rebuild: true,
   };
 
   if (els.llmArtifactModeSelect) {
     els.llmArtifactModeSelect.value = mode;
   }
   state.llmArtifact.mode = mode;
-  const userMetaParts = ["source=clean"];
-  if (attachments.length) userMetaParts.push(`files=${attachments.length}`);
+  const userMetaParts = [attachmentContext ? "source=files" : "source=clean"];
+  if (textLikeAttachments.length) userMetaParts.push(`files=${textLikeAttachments.length}`);
   _llmChatPushMessage({ role: "user", text: prompt, meta: userMetaParts.join(" • ") });
   if (els.llmChatInput) {
     els.llmChatInput.value = "";
@@ -3093,12 +3337,14 @@ const sendLlmChatPrompt = async () => {
   setLlmChatHint("llm_chat_hint_running", "muted");
   setLlmArtifactHint("llm_artifact_hint_running", "muted");
   renderLlmArtifactWorkspace();
-  showBusyOverlay("llm_artifact_busy_title", "llm_artifact_busy_text");
+  const busySignal = showBusyOverlay("llm_artifact_busy_title", "llm_artifact_busy_text", { cancelable: true });
+  updateBusyOverlayProgress(8);
   try {
     const res = await fetch(`/v1/meetings/${meetingId}/artifacts/generate`, {
       method: "POST",
       headers: buildHeaders(),
       body: JSON.stringify(body),
+      signal: busySignal || undefined,
     });
     if (!res.ok) {
       let detail = "";
@@ -3108,9 +3354,14 @@ const sendLlmChatPrompt = async () => {
       } catch (err) {
         // ignore non-json errors
       }
+      if (isTranscriptNotReadyError(detail) || detail === "llm_input_text_required") {
+        detail = "llm_requires_input_or_transcript";
+      }
       throw new Error(detail ? `llm_chat_failed_${res.status}_${detail}` : `llm_chat_failed_${res.status}`);
     }
+    updateBusyOverlayProgress(70);
     const payload = await res.json();
+    updateBusyOverlayProgress(86);
     state.llmArtifact.lastResponse = payload;
 
     let previewText = "";
@@ -3132,14 +3383,38 @@ const sendLlmChatPrompt = async () => {
     });
     setLlmChatHint("llm_chat_hint_done", "good");
     setLlmArtifactHint("llm_artifact_hint_done", "good");
+    setFlowStep("results");
+    updateBusyOverlayProgress(100);
   } catch (err) {
+    if (isAbortRequestError(err)) {
+      _llmChatPushMessage({
+        role: "assistant",
+        text: dict.busy_overlay_cancelled || "Operation canceled by user.",
+      });
+      setLlmChatHint("busy_overlay_cancelled", "muted");
+      setLlmArtifactHint("busy_overlay_cancelled", "muted");
+      setFlowStep("results");
+      return;
+    }
     console.warn("llm chat failed", err);
+    const rawErr = String(err && err.message ? err.message : err || "").trim();
+    const isNeedsText = rawErr.includes("llm_requires_input_or_transcript");
+    const friendlyErr = isNeedsText
+      ? (dict.llm_chat_hint_needs_text_or_transcript ||
+          "Нет готового транскрипта. Сначала сформируйте TXT в блоке «Транскрипция» или прикрепите TXT файл.")
+      : rawErr;
     _llmChatPushMessage({
       role: "assistant",
-      text: `${dict.llm_chat_hint_failed || "Failed to get an LLM response."}\n${String(err && err.message ? err.message : err)}`,
+      text: `${dict.llm_chat_hint_failed || "Failed to get an LLM response."}\n${friendlyErr}`,
     });
-    setLlmChatHint("llm_chat_hint_failed", "bad");
-    setLlmArtifactHint("llm_artifact_hint_failed", "bad");
+    if (isNeedsText) {
+      setLlmChatHint("llm_chat_hint_needs_text_or_transcript", "bad");
+      setLlmArtifactHint("llm_artifact_hint_needs_text_or_transcript", "bad");
+    } else {
+      setLlmChatHint("llm_chat_hint_failed", "bad");
+      setLlmArtifactHint("llm_artifact_hint_failed", "bad");
+    }
+    setFlowStep("process");
   } finally {
     hideBusyOverlay();
     state.llmArtifact.busy = false;
@@ -3714,15 +3989,19 @@ const _applyRagIndexJobStatusToRecords = (job) => {
   });
 };
 
-const _pollRagIndexJobUntilDone = async (jobId) => {
+const _pollRagIndexJobUntilDone = async (jobId, signal = null) => {
   const id = String(jobId || "").trim();
   if (!id) throw new Error("rag_index_job_id_required");
   let lastBody = null;
   const startedAt = Date.now();
   const timeoutMs = 15 * 60 * 1000;
   while (Date.now() - startedAt < timeoutMs) {
+    if (signal && signal.aborted) {
+      throw new DOMException("Operation canceled by user", "AbortError");
+    }
     const res = await fetch(`/v1/rag/index-jobs/${encodeURIComponent(id)}`, {
       headers: _ragJsonHeaders(),
+      signal: signal || undefined,
     });
     if (!res.ok) {
       throw new Error(`rag_index_job_status_failed_${res.status}`);
@@ -3732,9 +4011,13 @@ const _pollRagIndexJobUntilDone = async (jobId) => {
     state.rag.indexJobId = id;
     state.rag.indexJobStatus = body;
     _applyRagIndexJobStatusToRecords(body);
-    setRagHint(_formatRagIndexJobHint(body), _ragIndexJobTerminal(body.status) ? (body.status === "completed" ? "good" : "bad") : "muted", true);
+    const hintText = _formatRagIndexJobHint(body);
+    const progressPct = Math.round(Math.max(0, Math.min(100, Number((body && body.progress) || 0) * 100)));
+    updateBusyOverlayProgress(Math.max(6, progressPct), hintText, { rawText: true });
+    setRagHint(hintText, _ragIndexJobTerminal(body.status) ? (body.status === "completed" ? "good" : "bad") : "muted", true);
     renderRagWorkspace();
     if (_ragIndexJobTerminal(body.status)) {
+      updateBusyOverlayProgress(100, hintText, { rawText: true });
       return body;
     }
     await sleepMs(700);
@@ -3742,7 +4025,7 @@ const _pollRagIndexJobUntilDone = async (jobId) => {
   throw new Error("rag_index_job_timeout");
 };
 
-const _startRagIndexJobForMeetings = async (meetingIds) => {
+const _startRagIndexJobForMeetings = async (meetingIds, signal = null) => {
   const ids = Array.isArray(meetingIds) ? meetingIds.map((v) => String(v || "").trim()).filter(Boolean) : [];
   if (!ids.length) {
     throw new Error("rag_index_job_meeting_ids_required");
@@ -3755,6 +4038,7 @@ const _startRagIndexJobForMeetings = async (meetingIds) => {
       transcript_variant: state.rag.source || "clean",
       force_rebuild: Boolean(state.rag.forceReindex),
     }),
+    signal: signal || undefined,
   });
   if (!startRes.ok) {
     throw new Error(`rag_index_job_start_failed_${startRes.status}`);
@@ -3770,9 +4054,9 @@ const _startRagIndexJobForMeetings = async (meetingIds) => {
   return { jobId, startBody };
 };
 
-const _runRagIndexJobForMeetings = async (meetingIds) => {
-  const started = await _startRagIndexJobForMeetings(meetingIds);
-  return _pollRagIndexJobUntilDone(started.jobId);
+const _runRagIndexJobForMeetings = async (meetingIds, signal = null) => {
+  const started = await _startRagIndexJobForMeetings(meetingIds, signal);
+  return _pollRagIndexJobUntilDone(started.jobId, signal);
 };
 
 const indexSelectedRagMeetings = async () => {
@@ -3786,10 +4070,15 @@ const indexSelectedRagMeetings = async () => {
   state.rag.indexJobStatus = null;
   renderRagWorkspace();
   setRagHint("rag_hint_indexing", "muted");
-  showBusyOverlay("busy_rag_index_title", "busy_rag_index_text");
+  const busySignal = showBusyOverlay("busy_rag_index_title", "busy_rag_index_text", { cancelable: true });
+  updateBusyOverlayProgress(8);
   try {
-    await _runRagIndexJobForMeetings(selectedIds);
+    await _runRagIndexJobForMeetings(selectedIds, busySignal || null);
   } catch (err) {
+    if (isAbortRequestError(err)) {
+      setRagHint("busy_overlay_cancelled", "muted");
+      return;
+    }
     console.warn("rag index failed", err);
     setRagHint("rag_hint_failed", "bad");
   } finally {
@@ -3836,10 +4125,11 @@ const runRagQuery = async () => {
   renderRagWorkspace();
   setRagHint(selectedIds.length && state.rag.autoIndex ? "rag_hint_indexing" : "rag_hint_querying", "muted");
   setRagChatHint("rag_chat_hint_running", "muted");
-  showBusyOverlay("busy_rag_query_title", "busy_rag_query_text");
+  const busySignal = showBusyOverlay("busy_rag_query_title", "busy_rag_query_text", { cancelable: true });
+  updateBusyOverlayProgress(8);
   try {
     if (selectedIds.length && state.rag.autoIndex) {
-      const indexJob = await _runRagIndexJobForMeetings(selectedIds);
+      const indexJob = await _runRagIndexJobForMeetings(selectedIds, busySignal || null);
       const okMeetings = Number((indexJob && indexJob.ok_meetings) || 0);
       const totalMeetings = Number((indexJob && indexJob.total_meetings) || selectedIds.length || 0);
       if (okMeetings <= 0 && totalMeetings > 0) {
@@ -3848,16 +4138,20 @@ const runRagQuery = async () => {
       // Avoid duplicate synchronous indexing on query request when selection was pre-indexed asynchronously.
       payload.auto_index = false;
       setRagHint("rag_hint_querying", "muted");
+      updateBusyOverlayProgress(62);
     }
+    updateBusyOverlayProgress(70);
     const res = await fetch("/v1/rag/query", {
       method: "POST",
       headers: _ragJsonHeaders(),
       body: JSON.stringify(payload),
+      signal: busySignal || undefined,
     });
     if (!res.ok) {
       throw new Error(`rag_query_failed_${res.status}`);
     }
     const body = await res.json();
+    updateBusyOverlayProgress(88);
     state.rag.lastResponse = body;
     renderRagResults();
     const hits = Array.isArray(body && body.hits) ? body.hits : [];
@@ -3881,7 +4175,13 @@ const runRagQuery = async () => {
       setRagHint("rag_hint_done", "good");
       setRagChatHint("rag_chat_hint_done", "good");
     }
+    updateBusyOverlayProgress(100);
   } catch (err) {
+    if (isAbortRequestError(err)) {
+      setRagHint("busy_overlay_cancelled", "muted");
+      setRagChatHint("busy_overlay_cancelled", "muted");
+      return;
+    }
     console.warn("rag query failed", err);
     state.rag.lastResponse = null;
     renderRagResults();
@@ -4037,6 +4337,178 @@ const setDeviceStatus = (statusKey, style = "muted", count = 0) => {
   renderDeviceStatus();
 };
 
+const renderSttStatus = () => {
+  if (!els.sttModelStatusText) return;
+  const dict = i18n[state.lang] || {};
+  let text = state.sttStatusText;
+  if (!text) {
+    const template = dict[state.sttStatusKey] || state.sttStatusKey;
+    text = formatText(template, state.sttStatusParams || {});
+  }
+  els.sttModelStatusText.textContent = text;
+  els.sttModelStatusText.className = `hint llm-status ${state.sttStatusStyle || "muted"}`;
+};
+
+const setSttStatus = (
+  statusKeyOrText = "stt_status_loading",
+  style = "muted",
+  params = {},
+  isRaw = false
+) => {
+  state.sttStatusStyle = style || "muted";
+  state.sttStatusParams = params || {};
+  if (isRaw) {
+    state.sttStatusText = String(statusKeyOrText || "");
+    state.sttStatusKey = "";
+  } else {
+    state.sttStatusKey = String(statusKeyOrText || "");
+    state.sttStatusText = "";
+  }
+  renderSttStatus();
+};
+
+const setSttModelOptions = (models = [], preferredModel = "") => {
+  if (!els.sttModelSelect) return;
+  const incoming = Array.isArray(models) ? models : [];
+  const normalized = incoming
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const unique = [];
+  normalized.forEach((model) => {
+    if (seen.has(model)) return;
+    seen.add(model);
+    unique.push(model);
+  });
+
+  const currentValue = String(preferredModel || els.sttModelSelect.value || "").trim();
+  state.sttModels = unique;
+
+  els.sttModelSelect.innerHTML = "";
+  if (!unique.length) {
+    const emptyOpt = document.createElement("option");
+    emptyOpt.value = "";
+    emptyOpt.textContent = i18n[state.lang].stt_model_placeholder || "Select STT model";
+    els.sttModelSelect.appendChild(emptyOpt);
+    els.sttModelSelect.value = "";
+    return;
+  }
+
+  unique.forEach((model) => {
+    const opt = document.createElement("option");
+    opt.value = model;
+    opt.textContent = model;
+    els.sttModelSelect.appendChild(opt);
+  });
+
+  if (currentValue && unique.includes(currentValue)) {
+    els.sttModelSelect.value = currentValue;
+  } else {
+    els.sttModelSelect.value = unique[0];
+  }
+};
+
+const fetchSttStatus = async (options = {}) => {
+  const { scanAfter = false } = options;
+  if (!els.sttModelSelect) return;
+  setSttStatus("stt_status_loading", "muted");
+  try {
+    const res = await fetch("/v1/stt/status", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`stt_status_failed_${res.status}`);
+    }
+    const data = await res.json();
+    const currentModel = String(data.model_id || "").trim();
+    if (currentModel) {
+      setSttModelOptions([currentModel], currentModel);
+    } else {
+      setSttModelOptions([], "");
+    }
+    const warmupError = String(data.warmup_error || "").trim();
+    if (warmupError) {
+      setSttStatus(warmupError, "bad", {}, true);
+      return;
+    }
+    setSttStatus("stt_status_ready", "good", { model: currentModel || "—" });
+    if (scanAfter) {
+      await scanSttModels({ silentErrors: true });
+    }
+  } catch (err) {
+    console.warn("stt status fetch failed", err);
+    setSttStatus("stt_status_unavailable", "bad");
+  }
+};
+
+const scanSttModels = async (options = {}) => {
+  const { silentErrors = false } = options;
+  if (!els.sttModelSelect) return;
+  setSttStatus("stt_status_scanning", "muted");
+  if (els.scanSttModels) els.scanSttModels.disabled = true;
+  if (els.applySttModel) els.applySttModel.disabled = true;
+  try {
+    const res = await fetch("/v1/stt/models", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`stt_models_failed_${res.status}`);
+    }
+    const data = await res.json();
+    const models = Array.isArray(data.models) ? data.models : [];
+    const currentModel = String(data.current_model || els.sttModelSelect.value || "").trim();
+    setSttModelOptions(models, currentModel);
+    const selectedModel = String(els.sttModelSelect.value || currentModel || "—");
+    if (models.length) {
+      setSttStatus("stt_status_scan_done", "good", {
+        count: models.length,
+        model: selectedModel,
+      });
+    } else {
+      setSttStatus("stt_status_scan_empty", "bad", { model: selectedModel });
+    }
+  } catch (err) {
+    console.warn("stt model scan failed", err);
+    if (!silentErrors) {
+      setSttStatus("stt_status_unavailable", "bad");
+    }
+  } finally {
+    if (els.scanSttModels) els.scanSttModels.disabled = false;
+    if (els.applySttModel) els.applySttModel.disabled = false;
+  }
+};
+
+const applySttModel = async () => {
+  if (!els.sttModelSelect) return;
+  const modelId = String(els.sttModelSelect.value || "").trim();
+  if (!modelId) {
+    setSttStatus("stt_model_missing", "bad");
+    return;
+  }
+  if (els.applySttModel) els.applySttModel.disabled = true;
+  try {
+    const res = await fetch("/v1/stt/model", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({ model_id: modelId }),
+    });
+    if (!res.ok) {
+      const detail = await readApiErrorMessage(res, `stt_model_update_failed_${res.status}`);
+      throw new Error(detail);
+    }
+    const data = await res.json();
+    const appliedModel = String(data.model_id || modelId).trim();
+    setSttModelOptions(state.sttModels.length ? state.sttModels : [appliedModel], appliedModel);
+    setSttStatus("stt_status_applied", "good", { model: appliedModel || "—" });
+  } catch (err) {
+    console.warn("stt model switch failed", err);
+    const detail = String((err && err.message) || "").trim();
+    if (detail) {
+      setSttStatus(detail, "bad", {}, true);
+    } else {
+      setSttStatus("stt_status_apply_failed", "bad");
+    }
+  } finally {
+    if (els.applySttModel) els.applySttModel.disabled = false;
+  }
+};
+
 const renderLlmStatus = () => {
   if (!els.llmStatusText) return;
   const dict = i18n[state.lang] || {};
@@ -4067,9 +4539,28 @@ const setLlmStatus = (
   renderLlmStatus();
 };
 
+const normalizeModelStem = (modelId) =>
+  String(modelId || "")
+    .trim()
+    .toLowerCase()
+    .split(":")[0]
+    .replace(/_/g, "-");
+
+const isEmbeddingModelId = (modelId) => {
+  const normalized = normalizeModelStem(modelId);
+  if (!normalized) return false;
+  return EMBEDDING_MODEL_HINTS.some((hint) => normalized.includes(hint));
+};
+
+const filterChatModelIds = (models = []) =>
+  (Array.isArray(models) ? models : []).filter((modelId) => !isEmbeddingModelId(modelId));
+
+const filterEmbeddingModelIds = (models = []) =>
+  (Array.isArray(models) ? models : []).filter((modelId) => isEmbeddingModelId(modelId));
+
 const setLlmModelOptions = (models = [], preferredModel = "") => {
   if (!els.llmModelSelect) return;
-  const incoming = Array.isArray(models) ? models : [];
+  const incoming = filterChatModelIds(models);
   const normalized = incoming
     .map((value) => String(value || "").trim())
     .filter(Boolean);
@@ -4082,9 +4573,6 @@ const setLlmModelOptions = (models = [], preferredModel = "") => {
   });
 
   const currentValue = String(preferredModel || els.llmModelSelect.value || "").trim();
-  if (currentValue && !seen.has(currentValue)) {
-    unique.push(currentValue);
-  }
   state.llmModels = unique;
 
   els.llmModelSelect.innerHTML = "";
@@ -4469,6 +4957,10 @@ const pickMicDeviceId = async (excludeDeviceId = "", selectedMicId = "") => {
 const listDevices = async (options = {}) => {
   const { requestAccess = false } = options;
   try {
+    const hasSystemPicker = Boolean(els.deviceSelect);
+    if (!hasSystemPicker && !els.micSelect) {
+      return;
+    }
     if (
       requestAccess &&
       navigator.mediaDevices &&
@@ -4491,20 +4983,24 @@ const listDevices = async (options = {}) => {
         const rv = isVirtualAudioDevice(right.label) ? 1 : 0;
         return rv - lv;
       });
-    const prevValue = els.deviceSelect.value;
+    const prevValue = hasSystemPicker ? els.deviceSelect.value : "";
     const prevMicValue = els.micSelect ? els.micSelect.value : "";
-    els.deviceSelect.innerHTML = "";
-    inputs.forEach((device) => {
-      const opt = document.createElement("option");
-      opt.value = device.deviceId;
-      opt.textContent = device.label || `Audio device ${els.deviceSelect.length + 1}`;
-      els.deviceSelect.appendChild(opt);
-    });
+    if (hasSystemPicker) {
+      els.deviceSelect.innerHTML = "";
+      inputs.forEach((device, index) => {
+        const opt = document.createElement("option");
+        opt.value = device.deviceId;
+        opt.textContent = device.label || `Audio device ${index + 1}`;
+        els.deviceSelect.appendChild(opt);
+      });
+    }
     if (!inputs.length) {
-      const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "—";
-      els.deviceSelect.appendChild(opt);
+      if (hasSystemPicker) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "—";
+        els.deviceSelect.appendChild(opt);
+      }
       if (els.micSelect) {
         els.micSelect.innerHTML = "";
         const autoOpt = document.createElement("option");
@@ -4516,18 +5012,20 @@ const listDevices = async (options = {}) => {
       return;
     }
     setDeviceStatus("device_status_count", "muted", inputs.length);
-    const hasPrev = inputs.some((d) => d.deviceId === prevValue);
-    if (hasPrev) {
-      els.deviceSelect.value = prevValue;
-    } else {
-      const firstVirtual = inputs.find((device) => isVirtualAudioDevice(device.label));
-      if (firstVirtual && firstVirtual.deviceId) {
-        els.deviceSelect.value = firstVirtual.deviceId;
+    if (hasSystemPicker) {
+      const hasPrev = inputs.some((d) => d.deviceId === prevValue);
+      if (hasPrev) {
+        els.deviceSelect.value = prevValue;
+      } else {
+        const firstVirtual = inputs.find((device) => isVirtualAudioDevice(device.label));
+        if (firstVirtual && firstVirtual.deviceId) {
+          els.deviceSelect.value = firstVirtual.deviceId;
+        }
       }
     }
 
     if (els.micSelect) {
-      const selectedSystemDeviceId = els.deviceSelect.value || "";
+      const selectedSystemDeviceId = hasSystemPicker ? (els.deviceSelect.value || "") : "";
       const micCandidates = inputs
         .filter((device) => device.deviceId && device.deviceId !== selectedSystemDeviceId)
         .sort((left, right) => {
@@ -4555,13 +5053,15 @@ const listDevices = async (options = {}) => {
         els.micSelect.value = "";
       }
     }
-    const selectedSystem = inputs.find((device) => device.deviceId === String(els.deviceSelect.value || ""));
+    const selectedSystem = hasSystemPicker
+      ? inputs.find((device) => device.deviceId === String(els.deviceSelect.value || ""))
+      : null;
     logUiEvent(
       "device_list_refreshed",
       {
         request_access: Boolean(requestAccess),
         audio_inputs_count: inputs.length,
-        selected_system_device_id: String(els.deviceSelect.value || ""),
+        selected_system_device_id: hasSystemPicker ? String(els.deviceSelect.value || "") : "",
         selected_system_device_label: String((selectedSystem && selectedSystem.label) || ""),
         selected_system_is_virtual: Boolean(selectedSystem && isVirtualAudioDevice(selectedSystem.label)),
         selected_mic_device_id: String((els.micSelect && els.micSelect.value) || ""),
@@ -4652,6 +5152,30 @@ const scanLlmModels = async (options = {}) => {
   }
 };
 
+const readApiErrorMessage = async (res, fallback) => {
+  const fallbackText = String(fallback || "").trim() || `request_failed_${res && res.status}`;
+  if (!res) return fallbackText;
+  try {
+    const payload = await res.json();
+    if (payload && typeof payload === "object") {
+      const detail = String(payload.detail || payload.error || "").trim();
+      if (detail) return detail;
+    }
+  } catch (err) {
+    // ignore json parse errors
+  }
+  try {
+    const text = String((await res.text()) || "").trim();
+    if (text) return text.slice(0, 240);
+  } catch (err) {
+    // ignore body read errors
+  }
+  return fallbackText;
+};
+
+const isTranscriptNotReadyError = (detail) =>
+  /^transcript_(raw|normalized|clean)_not_ready$/i.test(String(detail || "").trim());
+
 const applyLlmModel = async () => {
   if (!els.llmModelSelect) return;
   const modelId = String(els.llmModelSelect.value || "").trim();
@@ -4667,7 +5191,8 @@ const applyLlmModel = async () => {
       body: JSON.stringify({ model_id: modelId }),
     });
     if (!res.ok) {
-      throw new Error(`llm_model_update_failed_${res.status}`);
+      const detail = await readApiErrorMessage(res, `llm_model_update_failed_${res.status}`);
+      throw new Error(detail);
     }
     const data = await res.json();
     const appliedModel = String(data.model_id || modelId).trim();
@@ -4675,7 +5200,12 @@ const applyLlmModel = async () => {
     setLlmStatus("llm_status_applied", "good", { model: appliedModel || "—" });
   } catch (err) {
     console.warn("llm model switch failed", err);
-    setLlmStatus("llm_status_apply_failed", "bad");
+    const detail = String((err && err.message) || "").trim();
+    if (detail) {
+      setLlmStatus(detail, "bad", {}, true);
+    } else {
+      setLlmStatus("llm_status_apply_failed", "bad");
+    }
   } finally {
     if (els.applyLlmModel) els.applyLlmModel.disabled = false;
   }
@@ -4713,7 +5243,7 @@ const setEmbeddingStatus = (
 
 const setEmbeddingModelOptions = (models = [], preferredModel = "") => {
   if (!els.embeddingModelSelect) return;
-  const incoming = Array.isArray(models) ? models : [];
+  const incoming = filterEmbeddingModelIds(models);
   const normalized = incoming
     .map((value) => String(value || "").trim())
     .filter(Boolean);
@@ -4726,9 +5256,6 @@ const setEmbeddingModelOptions = (models = [], preferredModel = "") => {
   });
 
   const currentValue = String(preferredModel || els.embeddingModelSelect.value || "").trim();
-  if (currentValue && !seen.has(currentValue)) {
-    unique.push(currentValue);
-  }
   state.embeddingModels = unique;
 
   els.embeddingModelSelect.innerHTML = "";
@@ -4841,7 +5368,8 @@ const applyEmbeddingModel = async () => {
       body: JSON.stringify({ model_id: modelId }),
     });
     if (!res.ok) {
-      throw new Error(`embedding_model_update_failed_${res.status}`);
+      const detail = await readApiErrorMessage(res, `embedding_model_update_failed_${res.status}`);
+      throw new Error(detail);
     }
     const data = await res.json();
     const appliedModel = String(data.model_id || modelId).trim();
@@ -4852,7 +5380,12 @@ const applyEmbeddingModel = async () => {
     setEmbeddingStatus("embedding_status_applied", "good", { model: appliedModel || "—" });
   } catch (err) {
     console.warn("embedding model switch failed", err);
-    setEmbeddingStatus("embedding_status_apply_failed", "bad");
+    const detail = String((err && err.message) || "").trim();
+    if (detail) {
+      setEmbeddingStatus(detail, "bad", {}, true);
+    } else {
+      setEmbeddingStatus("embedding_status_apply_failed", "bad");
+    }
   } finally {
     if (els.applyEmbeddingModel) els.applyEmbeddingModel.disabled = false;
   }
@@ -4860,12 +5393,53 @@ const applyEmbeddingModel = async () => {
 
 const normalizeWorkMode = (value) => {
   const raw = String(value || "").trim();
-  return WORK_MODE_CONFIGS[raw] ? raw : "driver_audio";
+  return WORK_MODE_CONFIGS[raw] ? raw : "link_fallback";
 };
 
 const getWorkModeConfig = (value = state.workMode) => {
   const mode = normalizeWorkMode(value);
-  return WORK_MODE_CONFIGS[mode] || WORK_MODE_CONFIGS.driver_audio;
+  return WORK_MODE_CONFIGS[mode] || WORK_MODE_CONFIGS.link_fallback;
+};
+
+const _normalizeFlowStep = (step) => {
+  const raw = String(step || "").trim().toLowerCase();
+  if (raw === "capture" || raw === "process" || raw === "results") return raw;
+  return "mode";
+};
+
+const setFlowStep = (step) => {
+  const normalized = _normalizeFlowStep(step);
+  state.flowStep = normalized;
+  (els.flowSteps || []).forEach((el) => {
+    if (!el || !el.dataset) return;
+    const target = _normalizeFlowStep(el.dataset.flowStep || "");
+    el.classList.toggle("active", target === normalized);
+  });
+};
+
+const setResultsTab = (tab, options = {}) => {
+  const { setFlow = false } = options;
+  const target = String(tab || "").trim().toLowerCase() === "llm"
+    ? "llm"
+    : String(tab || "").trim().toLowerCase() === "transcript"
+    ? "transcript"
+    : "audio";
+  state.resultsTab = target;
+  (els.resultTabButtons || []).forEach((btn) => {
+    if (!btn || !btn.dataset) return;
+    const key = String(btn.dataset.resultsTab || "").trim().toLowerCase();
+    btn.classList.toggle("active", key === target);
+  });
+  (els.resultTabPanes || []).forEach((pane) => {
+    if (!pane || !pane.dataset) return;
+    const key = String(pane.dataset.resultsPane || "").trim().toLowerCase();
+    const active = key === target;
+    pane.classList.toggle("active", active);
+    pane.classList.toggle("hidden", !active);
+  });
+  if (setFlow) {
+    setFlowStep(target === "audio" ? "results" : "process");
+  }
 };
 
 const isQuickFlowActive = () => {
@@ -5003,6 +5577,9 @@ const applyWorkModeUi = () => {
     uploadEnabled || quickEnabled ? "muted" : "bad"
   );
 
+  if (!state.captureStopper && !state.isCountingDown && !isQuickFlowActive() && !state.isUploading) {
+    setFlowStep("mode");
+  }
   syncCheckSignalButton();
   updateCaptureUi();
   setQuickButtonsByStatus(state.quickStatusKey || "quick_record_state_idle");
@@ -5083,6 +5660,14 @@ const sleepMs = (ms) =>
   new Promise((resolve) => {
     setTimeout(resolve, Math.max(0, Number(ms) || 0));
   });
+
+const isAbortRequestError = (err) => {
+  if (!err) return false;
+  const name = String((err && err.name) || "").trim().toLowerCase();
+  if (name === "aborterror") return true;
+  const message = String((err && err.message) || err || "").trim().toLowerCase();
+  return message.includes("abort");
+};
 
 const isDeviceBusyError = (err) => {
   const name = err && typeof err === "object" ? String(err.name || "") : "";
@@ -5320,7 +5905,8 @@ const buildMixedAudioStream = async (baseStream, includeMic, selectedMicId = "",
 
 const ensureStream = async (mode, options = {}) => {
   const { force = false } = options;
-  const selectedDeviceId = mode === "system" ? els.deviceSelect.value || "" : "";
+  const selectedDeviceId =
+    mode === "system" && els.deviceSelect ? els.deviceSelect.value || "" : "";
   const includeMic =
     mode === "system"
       ? true
@@ -5359,21 +5945,11 @@ const ensureStream = async (mode, options = {}) => {
     state.screenAudioMissing = Boolean(result.audioMissing) || !baseStream.getAudioTracks().length;
     state.screenAudioDriverFallback = false;
     if (state.screenAudioMissing) {
-      const allowDriverFallback = getWorkModeConfig().id !== "link_fallback";
-      const driverFallback = allowDriverFallback ? await openSystemDriverFallbackStream() : null;
-      if (driverFallback && driverFallback.stream && driverFallback.stream.getAudioTracks().length) {
-        stopStreamTracksSafe(baseStream);
-        baseStream = driverFallback.stream;
-        state.streamDeviceId = driverFallback.deviceId || "";
-        state.screenAudioMissing = false;
-        state.screenAudioDriverFallback = true;
-      } else {
-        setSignal("signal_no_audio");
-        console.warn("screen capture started without audio track");
-      }
+      setSignal("signal_no_audio");
+      console.warn("screen capture started without audio track");
     }
   } else {
-    const deviceId = els.deviceSelect.value;
+    const deviceId = els.deviceSelect ? els.deviceSelect.value : "";
     const openStreamForDevice = async (targetDeviceId) => {
       const constraints = {
         audio: targetDeviceId ? { deviceId: { exact: targetDeviceId } } : true,
@@ -5576,7 +6152,7 @@ const updateMeter = () => {
     if (elapsedMs > 9000 && levelsVeryLow && now - Number(state.warnedSystemLowAt || 0) > 18000) {
       state.warnedSystemLowAt = now;
       const currentHint = String(state.statusHintKey || "");
-      if (!currentHint || currentHint === "hint_recording_record_first" || currentHint === "hint_no_speech_yet") {
+      if (!currentHint || currentHint === "hint_recording_record_first") {
         setStatusHint("warn_system_level_low", "muted");
       }
       logUiEvent(
@@ -5895,7 +6471,7 @@ const sendChunk = async (blob, mimeType, sourceTrack = "mixed") => {
     sample_rate: state.audioContext ? state.audioContext.sampleRate : 48000,
     channels: 1,
     source_track: track,
-    quality_profile: String(getQualityConfig().wsQualityProfile || "live_balanced"),
+    quality_profile: TRANSCRIPT_QUALITY_PROFILE,
     mixed_level: Number((state.meterLevels.mixed || 0).toFixed(4)),
     system_level: Number((state.meterLevels.system || 0).toFixed(4)),
     mic_level: Number((state.meterLevels.mic || 0).toFixed(4)),
@@ -5920,26 +6496,6 @@ const sendChunk = async (blob, mimeType, sourceTrack = "mixed") => {
       "debug",
       { throttleKey: `chunk:${payload.seq}`, throttleMs: 1 }
     );
-  }
-  if (state.chunkCount >= 4 && state.nonEmptyRawUpdates === 0) {
-    setSignal("signal_no_audio");
-    const protectedHints = new Set([
-      "warn_mic_not_added",
-      "warn_system_source_fallback",
-      "warn_screen_audio_mic_only",
-      "err_media_denied",
-      "err_media_not_found",
-      "err_media_not_readable",
-      "err_screen_audio_missing",
-      "err_recorder_init",
-      "err_network",
-      "err_server_start",
-      "err_no_device_selected",
-      "err_system_source_not_virtual",
-    ]);
-    if (!protectedHints.has(state.statusHintKey)) {
-      setStatusHint("hint_no_speech_yet", "bad");
-    }
   }
 };
 
@@ -5982,10 +6538,6 @@ const openWebSocket = () => {
         return;
       }
       markWsServerActivity();
-      if (data && data.event_type === "transcript.update") {
-        // Record-first mode: live transcript is disabled in UI/runtime.
-        return;
-      }
     } catch (err) {
       console.warn("ws message parse failed", err);
     }
@@ -6367,41 +6919,6 @@ const renderTranscript = () => {
   renderTranscriptVisibility();
 };
 
-const handleTranscriptUpdate = (data) => {
-  if (!data || data.event_type !== "transcript.update") return;
-  if (state.captureStopper && !state.stopRequested) return;
-  if (typeof data.seq !== "number") return;
-
-  if (typeof data.raw_text === "string") {
-      state.transcript.raw.set(data.seq, data.raw_text);
-      if (data.raw_text.trim()) {
-        state.nonEmptyRawUpdates += 1;
-        setSignal("signal_ok");
-      if (
-        state.statusHintKey === "hint_no_speech_yet" ||
-        state.statusHintKey === "signal_check_fail"
-      ) {
-        setStatusHint("hint_recording_record_first", "good");
-      }
-    }
-  }
-
-  if (data.enhanced_text != null) {
-    if (state.enhancedTimers.has(data.seq)) {
-      clearTimeout(state.enhancedTimers.get(data.seq));
-      state.enhancedTimers.delete(data.seq);
-    }
-    const timer = setTimeout(() => {
-      state.transcript.enhanced.set(data.seq, data.enhanced_text);
-      state.enhancedTimers.delete(data.seq);
-      renderTranscript();
-    }, 3500);
-    state.enhancedTimers.set(data.seq, timer);
-  }
-
-  renderTranscript();
-};
-
 const resetSessionState = () => {
   clearWsHeartbeat();
   state.backupRecorder = null;
@@ -6418,7 +6935,6 @@ const resetSessionState = () => {
   state.wsHasServerActivity = false;
   state.wsBootstrapDeadlineMs = 0;
   state.wsLastServerActivityMs = 0;
-  state.nonEmptyRawUpdates = 0;
   setSignal("signal_waiting");
   els.chunkCount.textContent = "0";
   state.transcript.raw.clear();
@@ -6510,6 +7026,7 @@ const buildCaptureTargets = (captureMode) => {
 
 const loadFinalTranscripts = async (meetingId) => {
   if (!meetingId) return;
+  setFlowStep("process");
   setTranscriptUiState("loading");
   try {
     const [rawRes, cleanRes] = await Promise.all([
@@ -6523,10 +7040,14 @@ const loadFinalTranscripts = async (meetingId) => {
     if (rawText.trim()) state.transcript.raw.set(0, rawText);
     if (cleanText.trim()) state.transcript.enhanced.set(0, cleanText);
     renderTranscript();
-    setTranscriptUiState(hasTranscriptContent() ? "ready" : "empty");
+    setTranscriptUiState("waiting");
+    if (hasTranscriptContent()) {
+      setFlowStep("results");
+    }
   } catch (err) {
     setTranscriptUiState("empty");
     console.warn("load final transcripts failed", err);
+    setFlowStep("mode");
   }
 };
 
@@ -6551,7 +7072,7 @@ const drainPendingChunksHttp = async (meetingId, options = {}) => {
           sample_rate: payload.sample_rate,
           channels: payload.channels,
           source_track: payload.source_track || "mixed",
-          quality_profile: payload.quality_profile || String(getQualityConfig().wsQualityProfile || "live_balanced"),
+          quality_profile: payload.quality_profile || TRANSCRIPT_QUALITY_PROFILE,
           mixed_level:
             typeof payload.mixed_level === "number" ? payload.mixed_level : undefined,
           system_level:
@@ -6602,6 +7123,7 @@ const startCountdown = (seconds) =>
 const startRecording = async () => {
   if (state.isUploading) return;
   clearCaptureLockConflict();
+  setFlowStep("capture");
   const workCfg = getWorkModeConfig();
   logUiEvent(
     "recording_start_click",
@@ -6618,6 +7140,7 @@ const startRecording = async () => {
     setStatus("status_error", "error");
     setStatusHint("err_work_mode_realtime_only", "bad");
     setRecordingButtons(false);
+    setFlowStep("mode");
     return;
   }
   const captureLock = isCaptureLockedByOtherTab();
@@ -6631,6 +7154,7 @@ const startRecording = async () => {
     setStatus("status_error", "error");
     setStatusHint("err_capture_locked_other_tab", "bad");
     setRecordingButtons(false);
+    setFlowStep("mode");
     return;
   }
   setRecordingButtons(true);
@@ -6656,7 +7180,7 @@ const startRecording = async () => {
       await sleepMs(220);
     }
     interviewMeta = validateInterviewMetadata();
-    if (captureMode === "system" && !els.deviceSelect.value) {
+    if (captureMode === "system" && !(els.deviceSelect && els.deviceSelect.value)) {
       throw new Error("no_device_selected");
     }
     await runCapturePreflight(captureMode);
@@ -6676,6 +7200,7 @@ const startRecording = async () => {
     setRecordingButtons(false);
     if (String(err || "").includes("countdown_cancelled")) {
       logUiEvent("recording_start_cancelled", {}, "info");
+      setFlowStep("mode");
       return;
     }
     clearCaptureLockConflict();
@@ -6690,6 +7215,7 @@ const startRecording = async () => {
       },
       "error"
     );
+    setFlowStep("mode");
     return;
   }
 
@@ -6796,6 +7322,9 @@ const stopRecording = async (options = {}) => {
   const wasRecording = Boolean(state.captureStopper);
   const wasCountingDown = Boolean(state.isCountingDown);
   const activeMeetingId = state.meetingId;
+  if (activeMeetingId) {
+    setFlowStep("process");
+  }
   const shouldOfferMp3 = Boolean(activeMeetingId && wasRecording && !forceFinish);
   let finishedOk = false;
   state.stopRequested = true;
@@ -6838,18 +7367,25 @@ const stopRecording = async (options = {}) => {
     }
   }
   if (activeMeetingId && (forceFinish || wasRecording || wasCountingDown)) {
-    setTranscriptUiState("loading");
+    setTranscriptUiState("waiting");
     showBusyOverlay("busy_finish_title", "busy_finish_text");
+    updateBusyOverlayProgress(10);
     try {
       await fetch(`/v1/meetings/${activeMeetingId}/finish`, {
         method: "POST",
         headers: buildHeaders(),
       });
-      await fetchRecords();
-      setTranscriptUiState(hasTranscriptContent() ? "ready" : "empty");
+      updateBusyOverlayProgress(72);
+      await fetchRecords({ refreshCompare: false });
+      updateBusyOverlayProgress(92);
+      setTranscriptUiState("waiting");
+      setResultsTab("audio");
+      setFlowStep("results");
       finishedOk = true;
+      updateBusyOverlayProgress(100);
     } catch (err) {
-      setTranscriptUiState("empty");
+      setTranscriptUiState("waiting");
+      setFlowStep("mode");
       // ignore and keep local UI responsive
     } finally {
       hideBusyOverlay();
@@ -6884,6 +7420,9 @@ const stopRecording = async (options = {}) => {
   state.meetingId = null;
   els.meetingIdText.textContent = "—";
   state.stopRequested = false;
+  if (!finishedOk && !state.captureStopper && !state.isCountingDown) {
+    setFlowStep("mode");
+  }
 };
 
 const emergencyReleaseOnUnload = () => {
@@ -7019,7 +7558,7 @@ const checkSignal = async () => {
   const mode = getCaptureMode();
   setStatusHint("signal_check_running", "muted");
   try {
-    if (mode === "system" && !els.deviceSelect.value) {
+    if (mode === "system" && !(els.deviceSelect && els.deviceSelect.value)) {
       throw new Error("no_device_selected");
     }
     const keepStream = Boolean(state.captureStopper);
@@ -7578,6 +8117,7 @@ const fetchQuickRecordStatus = async (options = {}) => {
 
 const startQuickRecord = async () => {
   const workCfg = getWorkModeConfig();
+  setFlowStep("capture");
   hideQuickStopOverlay();
   clearCaptureLockConflict();
   logUiEvent(
@@ -7672,6 +8212,7 @@ const startQuickRecord = async () => {
     if (apiMode) {
       setStatusHint("api_record_failed", "bad");
     }
+    setFlowStep("mode");
     await fetchQuickRecordStatus({ silentErrors: true });
   } finally {
     if (els.quickRecordStart && (!els.quickRecordStop || els.quickRecordStop.disabled)) {
@@ -7682,6 +8223,7 @@ const startQuickRecord = async () => {
 
 const stopQuickRecord = async () => {
   const currentMode = getWorkModeConfig();
+  setFlowStep("process");
   const apiMode = currentMode.id === "api_upload";
   if (!currentMode.supportsQuick) {
     setQuickHint("err_work_mode_quick_only", "bad");
@@ -7701,6 +8243,7 @@ const stopQuickRecord = async () => {
     if (apiMode) {
       setStatusHint("api_record_stopped", "muted");
     }
+    setFlowStep("results");
     applyQuickJobStatus(body.job || null);
   } catch (err) {
     hideQuickStopOverlay();
@@ -7709,6 +8252,7 @@ const stopQuickRecord = async () => {
     if (apiMode) {
       setStatusHint("api_record_failed", "bad");
     }
+    setFlowStep("mode");
   }
 };
 
@@ -7739,10 +8283,15 @@ const updateCaptureUi = () => {
   if (els.languageProfileSelect) {
     els.languageProfileSelect.disabled = sttControlsLocked;
   }
-  [els.qualityFast, els.qualityBalanced, els.qualityAccurate].forEach((btn) => {
-    if (!btn) return;
-    btn.disabled = sttControlsLocked;
-  });
+  if (els.sttModelSelect) {
+    els.sttModelSelect.disabled = sttControlsLocked;
+  }
+  if (els.scanSttModels) {
+    els.scanSttModels.disabled = sttControlsLocked;
+  }
+  if (els.applySttModel) {
+    els.applySttModel.disabled = sttControlsLocked;
+  }
   if (els.runDiagnostics && !state.signalCheckInProgress) {
     els.runDiagnostics.disabled = !(realtimeEnabled || Boolean(cfg.supportsQuick));
   }
@@ -7895,9 +8444,10 @@ const chooseFolder = async () => {
   }
 };
 
-const fetchRecords = async () => {
+const fetchRecords = async (options = {}) => {
+  const { refreshCompare = false } = options || {};
   try {
-    const res = await fetch("/v1/meetings?limit=50", { headers: buildHeaders() });
+    const res = await fetch("/v1/meetings?limit=200", { headers: buildHeaders() });
     if (!res.ok) return;
     const data = await res.json();
     const items = data.items || [];
@@ -7910,7 +8460,12 @@ const fetchRecords = async () => {
       opt.textContent = "—";
       els.recordsSelect.appendChild(opt);
       syncResultsState();
-      void fetchComparison();
+      if (refreshCompare) {
+        void fetchComparison();
+      }
+      if (!state.captureStopper && !state.isCountingDown && !isQuickFlowActive() && !state.isUploading) {
+        setFlowStep("mode");
+      }
       return;
     }
     items.forEach((item) => {
@@ -7936,7 +8491,12 @@ const fetchRecords = async () => {
       els.recordsSelect.appendChild(opt);
     });
     syncResultsState();
-    void fetchComparison();
+    if (refreshCompare) {
+      void fetchComparison();
+    }
+    if (!state.captureStopper && !state.isCountingDown && !isQuickFlowActive() && !state.isUploading) {
+      setFlowStep("results");
+    }
   } catch (err) {
     console.warn("fetch records failed", err);
   }
@@ -8129,15 +8689,48 @@ const saveLocalBlob = async (filename, blob, options = {}) => {
 };
 
 const downloadArtifact = async (url, filename, options = {}) => {
-  const { preferPicker = false } = options;
+  const { preferPicker = false, onProgress = null, signal = null } = options;
   try {
-    const res = await fetch(url, { headers: buildAuthHeaders() });
+    const res = await fetch(url, { headers: buildAuthHeaders(), signal: signal || undefined });
     if (!res.ok) {
       return { ok: false, status: res.status };
     }
-    const blob = await res.blob();
+    let blob = null;
+    const totalBytes = Number(res.headers.get("content-length") || 0);
+    if (
+      res.body &&
+      Number.isFinite(totalBytes) &&
+      totalBytes > 0 &&
+      typeof onProgress === "function"
+    ) {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+      onProgress(6);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.byteLength) {
+          chunks.push(value);
+          loaded += value.byteLength;
+          const pct = Math.max(6, Math.min(99, Math.round((loaded / totalBytes) * 100)));
+          onProgress(pct);
+        }
+      }
+      blob = new Blob(chunks, {
+        type: res.headers.get("content-type") || "application/octet-stream",
+      });
+    } else {
+      blob = await res.blob();
+      if (typeof onProgress === "function") {
+        onProgress(95);
+      }
+    }
     return await saveLocalBlob(filename, blob, { preferPicker });
   } catch (err) {
+    if (isAbortRequestError(err)) {
+      return { ok: false, status: 0, aborted: true };
+    }
     console.warn("download failed", err);
     return { ok: false, status: 0 };
   }
@@ -8185,11 +8778,20 @@ const saveMeetingMp3 = async (meetingId, options = {}) => {
   }
   const url = `/v1/meetings/${meetingId}/artifact?kind=audio&fmt=mp3`;
   let result = null;
-  showBusyOverlay("busy_mp3_title", "busy_mp3_text");
+  const busySignal = showBusyOverlay("busy_mp3_title", "busy_mp3_text", { cancelable: true });
   try {
-    result = await downloadArtifact(url, filename, { preferPicker: true });
+    updateBusyOverlayProgress(8);
+    result = await downloadArtifact(url, filename, {
+      preferPicker: true,
+      onProgress: (pct) => updateBusyOverlayProgress(pct),
+      signal: busySignal,
+    });
+    updateBusyOverlayProgress(100);
   } finally {
     hideBusyOverlay();
+  }
+  if (result && result.aborted) {
+    return false;
   }
   if (result && result.ok) {
     if (syncRecordName && recordNameFromMp3) {
@@ -8284,13 +8886,17 @@ const renameSelectedRecord = async () => {
   }
 };
 
-const generateReportForMeeting = async (meetingId, source = "raw") => {
+const generateTranscriptForMeeting = async (meetingId, source = "raw", options = {}) => {
   if (!meetingId) return false;
   const src = source === "clean" ? "clean" : "raw";
-  const generated = await fetch(`/v1/meetings/${meetingId}/report`, {
+  const forceRebuild = Boolean(options && options.forceRebuild);
+  const generated = await fetch(`/v1/meetings/${meetingId}/transcripts/generate`, {
     method: "POST",
     headers: buildHeaders(),
-    body: JSON.stringify({ source: src }),
+    body: JSON.stringify({
+      variants: [src],
+      force_rebuild: forceRebuild,
+    }),
   });
   if (!generated.ok) return false;
   return true;
@@ -8351,15 +8957,28 @@ const downloadCurrentReportTxt = async () => {
   const fallback = source === "raw" ? "raw_transcript" : "clean_transcript";
   const filename = normalizeFilenameWithExt(inputValue, fallback, "txt");
   const url = `/v1/meetings/${meetingId}/artifact?kind=${source}&fmt=txt`;
-  showBusyOverlay("busy_report_title", "busy_report_text");
+  const busySignal = showBusyOverlay("busy_report_title", "busy_report_text", { cancelable: true });
   let result = null;
   try {
-    result = await downloadArtifact(url, filename, { preferPicker: true });
+    updateBusyOverlayProgress(8);
+    result = await downloadArtifact(url, filename, {
+      preferPicker: true,
+      onProgress: (pct) => updateBusyOverlayProgress(pct),
+      signal: busySignal,
+    });
+    updateBusyOverlayProgress(100);
   } finally {
     hideBusyOverlay();
   }
+  if (result && result.aborted) {
+    return;
+  }
   if (!result || !result.ok) {
-    setStatusHint("hint_report_missing", "bad");
+    if (result && Number(result.status) === 409) {
+      setStatusHint("hint_transcript_not_ready", "bad");
+    } else {
+      setStatusHint("hint_report_missing", "bad");
+    }
     return;
   }
   await fetchRecords();
@@ -8383,17 +9002,34 @@ const generateAndSaveCurrentReport = async () => {
     return;
   }
   let result = null;
-  showBusyOverlay("busy_report_title", "busy_report_text");
+  const busySignal = showBusyOverlay("busy_report_title", "busy_report_text", { cancelable: true });
   try {
+    updateBusyOverlayProgress(12);
+    const built = await generateTranscriptForMeeting(meetingId, source, {
+      forceRebuild: false,
+    });
+    if (!built) {
+      setStatusHint("hint_transcript_generate_failed", "bad");
+      return;
+    }
     const filename = normalizeFilenameWithExt(
       inputValue,
       source === "raw" ? "raw_transcript" : "clean_transcript",
       "txt"
     );
     const url = `/v1/meetings/${meetingId}/artifact?kind=${source}&fmt=txt`;
-    result = await downloadArtifact(url, filename, { preferPicker: true });
+    updateBusyOverlayProgress(42);
+    result = await downloadArtifact(url, filename, {
+      preferPicker: true,
+      onProgress: (pct) => updateBusyOverlayProgress(Math.max(42, pct)),
+      signal: busySignal,
+    });
+    updateBusyOverlayProgress(100);
   } finally {
     hideBusyOverlay();
+  }
+  if (result && result.aborted) {
+    return;
   }
   if (!result || !result.ok) {
     setStatusHint("hint_report_missing", "bad");
@@ -8405,6 +9041,7 @@ const generateAndSaveCurrentReport = async () => {
 };
 
 const exportReportLane = async (source = "raw", exportKind = "report_txt") => {
+  setResultsTab("transcript", { setFlow: true });
   const src = source === "clean" ? "clean" : "raw";
   const meetingId = getReportMeetingId(src);
   if (!meetingId) {
@@ -8427,13 +9064,32 @@ const exportReportLane = async (source = "raw", exportKind = "report_txt") => {
   }
 
   let result = null;
-  showBusyOverlay("busy_report_title", "busy_report_text");
+  setFlowStep("process");
+  const busySignal = showBusyOverlay("busy_report_title", "busy_report_text", { cancelable: true });
   try {
+    updateBusyOverlayProgress(12);
+    const built = await generateTranscriptForMeeting(meetingId, src, {
+      forceRebuild: false,
+    });
+    if (!built) {
+      setStatusHint("hint_transcript_generate_failed", "bad");
+      return;
+    }
     const url = `/v1/meetings/${meetingId}/artifact?kind=${src}&fmt=txt`;
     const filename = normalizeFilenameWithExt(rawName, `${src}_transcript`, "txt");
-    result = await downloadArtifact(url, filename, { preferPicker: true });
+    updateBusyOverlayProgress(42);
+    result = await downloadArtifact(url, filename, {
+      preferPicker: true,
+      onProgress: (pct) => updateBusyOverlayProgress(Math.max(42, pct)),
+      signal: busySignal,
+    });
+    updateBusyOverlayProgress(100);
   } finally {
     hideBusyOverlay();
+  }
+  if (result && result.aborted) {
+    setFlowStep("results");
+    return;
   }
   if (!result || !result.ok) {
     setStatusHint("hint_report_missing", "bad");
@@ -8441,10 +9097,11 @@ const exportReportLane = async (source = "raw", exportKind = "report_txt") => {
   }
   await fetchRecords();
   await fetchComparison();
+  setFlowStep("results");
 };
 
 const uploadAudioToMeetingPipeline = async (file, options = {}) => {
-  const { source = "upload_audio", enforceUploadMode = false } = options;
+  const { source = "upload_audio", enforceUploadMode = false, importOnly = false } = options;
   if (!file) return null;
   if (state.isUploading) return null;
   const workCfg = getWorkModeConfig();
@@ -8460,6 +9117,7 @@ const uploadAudioToMeetingPipeline = async (file, options = {}) => {
     return null;
   }
   state.isUploading = true;
+  setFlowStep("process");
   els.startBtn.disabled = true;
   els.stopBtn.disabled = true;
   setStatus("status_uploading", "recording");
@@ -8497,7 +9155,8 @@ const uploadAudioToMeetingPipeline = async (file, options = {}) => {
 
     const form = new FormData();
     form.append("file", file, file.name);
-    const uploadRes = await fetch(`/v1/meetings/${meetingId}/upload`, {
+    const uploadEndpoint = importOnly ? "backup-audio" : "upload";
+    const uploadRes = await fetch(`/v1/meetings/${meetingId}/${uploadEndpoint}`, {
       method: "POST",
       headers: buildAuthHeaders(),
       body: form,
@@ -8505,11 +9164,13 @@ const uploadAudioToMeetingPipeline = async (file, options = {}) => {
     if (!uploadRes.ok) {
       throw new Error(`meeting_upload_failed_${uploadRes.status}`);
     }
-    state.chunkCount = 1;
-    if (els.chunkCount) {
-      els.chunkCount.textContent = "1";
+    if (!importOnly) {
+      state.chunkCount = 1;
+      if (els.chunkCount) {
+        els.chunkCount.textContent = "1";
+      }
     }
-    setTranscriptUiState("loading");
+    setTranscriptUiState("waiting");
     const finishRes = await fetch(`/v1/meetings/${meetingId}/finish`, {
       method: "POST",
       headers: buildHeaders(),
@@ -8517,8 +9178,10 @@ const uploadAudioToMeetingPipeline = async (file, options = {}) => {
     if (!finishRes.ok) {
       throw new Error(`meeting_finish_failed_${finishRes.status}`);
     }
-    await fetchRecords();
-    setTranscriptUiState(hasTranscriptContent() ? "ready" : "empty");
+    await fetchRecords({ refreshCompare: false });
+    setTranscriptUiState("waiting");
+    setResultsTab("audio");
+    setFlowStep("results");
     if (els.recordsSelect) {
       els.recordsSelect.value = meetingId;
     }
@@ -8527,6 +9190,7 @@ const uploadAudioToMeetingPipeline = async (file, options = {}) => {
   } catch (err) {
     console.warn("postmeeting upload failed", err);
     setStatus("status_error", "error");
+    setFlowStep("mode");
     return null;
   } finally {
     state.isUploading = false;
@@ -8561,9 +9225,26 @@ els.captureModeInputs.forEach((el) => {
   });
 });
 
+(els.resultTabButtons || []).forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const tab = btn && btn.dataset ? btn.dataset.resultsTab : "audio";
+    setResultsTab(tab, { setFlow: true });
+  });
+});
+
 if (els.scanLlmModels) {
   els.scanLlmModels.addEventListener("click", () => {
     void scanLlmModels();
+  });
+}
+if (els.scanSttModels) {
+  els.scanSttModels.addEventListener("click", () => {
+    void scanSttModels();
+  });
+}
+if (els.applySttModel) {
+  els.applySttModel.addEventListener("click", () => {
+    void applySttModel();
   });
 }
 if (els.applyLlmModel) {
@@ -8581,14 +9262,15 @@ if (els.applyEmbeddingModel) {
     void applyEmbeddingModel();
   });
 }
-if (els.qualityFast) {
-  els.qualityFast.addEventListener("click", () => setCaptureQuality("fast"));
+if (els.busyOverlayToggle) {
+  els.busyOverlayToggle.addEventListener("click", () => {
+    toggleBusyOverlayMinimized();
+  });
 }
-if (els.qualityBalanced) {
-  els.qualityBalanced.addEventListener("click", () => setCaptureQuality("balanced"));
-}
-if (els.qualityAccurate) {
-  els.qualityAccurate.addEventListener("click", () => setCaptureQuality("accurate"));
+if (els.busyOverlayCancel) {
+  els.busyOverlayCancel.addEventListener("click", () => {
+    cancelBusyOverlayOperation();
+  });
 }
 if (els.languageProfileSelect) {
   els.languageProfileSelect.addEventListener("change", () => {
@@ -8607,9 +9289,11 @@ if (els.claimCaptureBtn) {
   });
 }
 
-els.refreshDevices.addEventListener("click", () => {
-  void listDevices({ requestAccess: true });
-});
+if (els.refreshDevices) {
+  els.refreshDevices.addEventListener("click", () => {
+    void listDevices({ requestAccess: true });
+  });
+}
 if (els.deviceSelect) {
   els.deviceSelect.addEventListener("change", () => {
     void listDevices();
@@ -8632,7 +9316,9 @@ window.addEventListener("storage", (event) => {
     setStatusHint("err_capture_locked_other_tab", "bad");
   }
 });
-els.checkDriver.addEventListener("click", checkDriver);
+if (els.checkDriver) {
+  els.checkDriver.addEventListener("click", checkDriver);
+}
 if (els.themeLight) {
   els.themeLight.addEventListener("click", () => applyTheme("light"));
 }
@@ -8699,7 +9385,10 @@ if (els.importMp3Input) {
     const file = els.importMp3Input && els.importMp3Input.files ? els.importMp3Input.files[0] : null;
     if (!file) return;
     setStatusHint("hint_mp3_import_started", "muted");
-    const meetingId = await uploadAudioToMeetingPipeline(file, { source: "results_mp3_import" });
+    const meetingId = await uploadAudioToMeetingPipeline(file, {
+      source: "results_mp3_import",
+      importOnly: true,
+    });
     if (!meetingId) {
       setStatusHint("hint_mp3_import_failed", "bad");
       return;
@@ -8848,6 +9537,11 @@ if (els.llmArtifactSchemaInput) {
 if (els.llmChatSendBtn) {
   els.llmChatSendBtn.addEventListener("click", () => {
     void sendLlmChatPrompt();
+  });
+}
+if (els.llmChatClearBtn) {
+  els.llmChatClearBtn.addEventListener("click", () => {
+    clearLlmChatResults();
   });
 }
 if (els.llmChatInput) {
@@ -9013,14 +9707,16 @@ const savedWorkMode = (() => {
 })();
 applyTheme(savedTheme || "light");
 setWorkMode(savedWorkMode || state.workMode, { persist: false, force: true });
-setCaptureQuality(state.captureQuality || "balanced");
 updateI18n();
+setResultsTab(state.resultsTab || "audio");
+setFlowStep("mode");
 _loadRagSavedSetsFromStorage();
 _diagMarkAllMuted();
 setDiagHint("diag_hint_idle", "muted");
 pruneStaleCaptureLock();
 clearCaptureLock();
 listDevices();
+fetchSttStatus({ scanAfter: true });
 fetchLlmStatus({ scanAfter: true });
 fetchEmbeddingStatus({ scanAfter: true });
 updateCaptureUi();

@@ -31,7 +31,7 @@ class STTQueueEvent(BaseQueueEvent):
     chunk_seq: int = 0
     blob_key: str = ""
     source_track: str = ""
-    quality_profile: str = "live"
+    quality_profile: str = "balanced"
     timestamp: str = ""
 
 

@@ -39,7 +39,7 @@ class ChunkIngestRequest(BaseModel):
     sample_rate: int = 16000
     channels: int = 1
     source_track: str | None = None
-    quality_profile: str = "live"
+    quality_profile: str = "balanced"
     mixed_level: float | None = None
     system_level: float | None = None
     mic_level: float | None = None
@@ -83,6 +83,7 @@ def _ingest_chunk_impl(meeting_id: str, req: ChunkIngestRequest) -> ChunkIngestR
                 idempotency_key=req.idempotency_key,
                 idempotency_scope="audio_chunk_http",
                 idempotency_prefix="http-chunk",
+                skip_transcription=True,
             )
         except ValueError as e:
             log.warning(
@@ -177,6 +178,7 @@ async def upload_audio(
         idempotency_key=None,
         idempotency_scope="audio_chunk_upload",
         idempotency_prefix="upload",
+        skip_transcription=True,
     )
     return ChunkIngestResponse(
         accepted=result.accepted,

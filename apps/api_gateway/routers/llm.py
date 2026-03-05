@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apps.api_gateway.deps import auth_dep
 from interview_analytics_agent.common.config import get_settings
+from interview_analytics_agent.services.local_pipeline import reset_stt_provider_runtime, stt_runtime_status
 
 router = APIRouter()
 
@@ -40,6 +41,38 @@ class LLMModelUpdateRequest(BaseModel):
 
 
 class LLMModelUpdateResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    ok: bool = True
+    model_id: str
+
+
+class STTStatusResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    provider: str
+    model_id: str
+    warmup_started: bool
+    warmup_ready: bool
+    warmup_error: str = ""
+    provider_initialized: bool
+
+
+class STTModelsResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    ok: bool = True
+    models: list[str] = Field(default_factory=list)
+    current_model: str
+
+
+class STTModelUpdateRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: str = Field(min_length=1, max_length=200)
+
+
+class STTModelUpdateResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     ok: bool = True
@@ -158,9 +191,107 @@ def _fetch_openai_compat_models(*, api_base: str, api_key: str, timeout_s: int) 
     return unique
 
 
+def _split_model_id(model_id: str) -> tuple[str, str]:
+    value = str(model_id or "").strip().lower()
+    if not value:
+        return "", ""
+    if ":" not in value:
+        return value, "latest"
+    name, tag = value.split(":", 1)
+    return name.strip(), tag.strip()
+
+
+_EMBEDDING_MODEL_HINTS = (
+    "embed",
+    "embedding",
+    "text-embedding",
+    "nomic-embed",
+    "mxbai-embed",
+    "bge",
+    "e5",
+    "gte",
+    "minilm",
+    "arctic-embed",
+    "jina-embeddings",
+)
+
+
+def _is_embedding_model(model_id: str) -> bool:
+    name, _tag = _split_model_id(model_id)
+    candidate = (name or str(model_id or "").strip().lower()).replace("_", "-")
+    if not candidate:
+        return False
+    return any(hint in candidate for hint in _EMBEDDING_MODEL_HINTS)
+
+
+def _filter_llm_chat_models(models: list[str]) -> list[str]:
+    return [model for model in models if not _is_embedding_model(model)]
+
+
+def _filter_embedding_models(models: list[str]) -> list[str]:
+    return [model for model in models if _is_embedding_model(model)]
+
+
+def _is_compatible_model(target_model: str, candidate_model: str) -> bool:
+    target_name, target_tag = _split_model_id(target_model)
+    candidate_name, candidate_tag = _split_model_id(candidate_model)
+    if not target_name or not candidate_name:
+        return False
+    tag_match = (
+        target_tag == candidate_tag
+        or not target_tag
+        or not candidate_tag
+        or candidate_tag.startswith(target_tag)
+        or target_tag.startswith(candidate_tag)
+    )
+    if not tag_match:
+        return False
+    if target_name == candidate_name:
+        return True
+    aliases = {
+        "llama3.1": {"llama3"},
+        "llama3": {"llama3.1"},
+    }
+    return candidate_name in aliases.get(target_name, set())
+
+
+def _resolve_model_match(target_model: str, installed_models: list[str]) -> tuple[bool, bool, str]:
+    target = str(target_model or "").strip()
+    if not target:
+        return False, False, ""
+    clean_models = [str(model).strip() for model in installed_models if str(model).strip()]
+    exact_lookup = {model.lower(): model for model in clean_models}
+    exact = exact_lookup.get(target.lower())
+    if exact:
+        return True, True, exact
+    for model in clean_models:
+        if _is_compatible_model(target, model):
+            return True, False, model
+    return False, False, ""
+
+
+def _available_models_hint(models: list[str], *, limit: int = 8) -> str:
+    visible = [str(model).strip() for model in models if str(model).strip()][: max(1, limit)]
+    if not visible:
+        return "none"
+    suffix = " ..." if len(models) > len(visible) else ""
+    return ", ".join(visible) + suffix
+
+
 def _runtime_override_file() -> Path:
     root = (os.getenv("LOCAL_AGENT_STATE_DIR") or "./data/local_agent").strip()
     return Path(root).resolve() / "runtime_overrides.json"
+
+
+def _stt_model_catalog() -> list[str]:
+    # Поддерживаемый набор faster-whisper моделей для локального переключения.
+    return [
+        "tiny",
+        "base",
+        "small",
+        "medium",
+        "large-v3",
+    ]
 
 
 def _embedding_api_base() -> str:
@@ -212,14 +343,19 @@ def llm_status(_=Depends(auth_dep)) -> LLMStatusResponse:
 @router.get("/llm/models", response_model=LLMModelsResponse)
 def llm_models(_=Depends(auth_dep)) -> LLMModelsResponse:
     s = get_settings()
-    models = _fetch_openai_compat_models(
-        api_base=(s.openai_api_base or "").strip(),
-        api_key=(s.openai_api_key or "").strip(),
-        timeout_s=int(s.llm_request_timeout_sec or 10),
+    models = _filter_llm_chat_models(
+        _fetch_openai_compat_models(
+            api_base=(s.openai_api_base or "").strip(),
+            api_key=(s.openai_api_key or "").strip(),
+            timeout_s=int(s.llm_request_timeout_sec or 10),
+        )
     )
     current = (s.llm_model_id or "").strip()
-    if current and current not in models:
-        models.append(current)
+    present, _exact, matched = _resolve_model_match(current, models)
+    if present and matched:
+        current = matched
+    else:
+        current = ""
     return LLMModelsResponse(models=models, current_model=current)
 
 
@@ -228,11 +364,83 @@ def llm_update_model(req: LLMModelUpdateRequest, _=Depends(auth_dep)) -> LLMMode
     next_model = req.model_id.strip()
     if not next_model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_id is required")
+    if _is_embedding_model(next_model):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Model '{next_model}' looks like an embedding model. "
+                "Select a chat/LLM model in LLM section."
+            ),
+        )
     s = get_settings()
+    models = _filter_llm_chat_models(
+        _fetch_openai_compat_models(
+            api_base=(s.openai_api_base or "").strip(),
+            api_key=(s.openai_api_key or "").strip(),
+            timeout_s=max(3, int(getattr(s, "llm_request_timeout_sec", 10) or 10)),
+        )
+    )
+    present, exact, matched = _resolve_model_match(next_model, models)
+    if not present:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Model '{next_model}' is not installed in provider. "
+                f"Available chat models: {_available_models_hint(models)}"
+            ),
+        )
+    effective_model = matched if matched else next_model
+    if not exact and matched:
+        next_model = matched
+
     s.llm_model_id = next_model
     os.environ["LLM_MODEL_ID"] = next_model
     _save_runtime_override("LLM_MODEL_ID", next_model)
-    return LLMModelUpdateResponse(model_id=next_model)
+    return LLMModelUpdateResponse(model_id=effective_model)
+
+
+@router.get("/stt/status", response_model=STTStatusResponse)
+def stt_status(_=Depends(auth_dep)) -> STTStatusResponse:
+    s = get_settings()
+    runtime = stt_runtime_status()
+    return STTStatusResponse(
+        provider=str(getattr(s, "stt_provider", "unknown") or "unknown"),
+        model_id=str(getattr(s, "whisper_model_size", "") or "").strip(),
+        warmup_started=bool(runtime.get("warmup_started", False)),
+        warmup_ready=bool(runtime.get("warmup_ready", False)),
+        warmup_error=str(runtime.get("warmup_error") or ""),
+        provider_initialized=bool(runtime.get("provider_initialized", False)),
+    )
+
+
+@router.get("/stt/models", response_model=STTModelsResponse)
+def stt_models(_=Depends(auth_dep)) -> STTModelsResponse:
+    s = get_settings()
+    current = str(getattr(s, "whisper_model_size", "") or "").strip()
+    return STTModelsResponse(models=_stt_model_catalog(), current_model=current)
+
+
+@router.post("/stt/model", response_model=STTModelUpdateResponse)
+def stt_update_model(req: STTModelUpdateRequest, _=Depends(auth_dep)) -> STTModelUpdateResponse:
+    next_model = str(req.model_id or "").strip()
+    if not next_model:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_id is required")
+    supported = _stt_model_catalog()
+    if next_model not in supported:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"STT model '{next_model}' is not supported in UI profile. "
+                f"Available: {', '.join(supported)}"
+            ),
+        )
+
+    s = get_settings()
+    s.whisper_model_size = next_model
+    os.environ["WHISPER_MODEL_SIZE"] = next_model
+    _save_runtime_override("WHISPER_MODEL_SIZE", next_model)
+    reset_stt_provider_runtime(restart_warmup=True)
+    return STTModelUpdateResponse(model_id=next_model)
 
 
 @router.get("/llm/embeddings/status", response_model=EmbeddingStatusResponse)
@@ -275,10 +483,12 @@ def embedding_status(_=Depends(auth_dep)) -> EmbeddingStatusResponse:
         )
 
     try:
-        models = _fetch_openai_compat_models(
-            api_base=api_base,
-            api_key=_embedding_api_key(),
-            timeout_s=max(3, int(getattr(s, "rag_embedding_request_timeout_sec", 8.0) or 8)),
+        models = _filter_embedding_models(
+            _fetch_openai_compat_models(
+                api_base=api_base,
+                api_key=_embedding_api_key(),
+                timeout_s=max(3, int(getattr(s, "rag_embedding_request_timeout_sec", 8.0) or 8)),
+            )
         )
     except HTTPException as exc:
         detail = str(exc.detail or "provider unavailable")
@@ -297,7 +507,16 @@ def embedding_status(_=Depends(auth_dep)) -> EmbeddingStatusResponse:
     if model_id and model_id in models:
         msg = "Embeddings provider ready"
     elif model_id:
-        msg = f"Embeddings API ready, model '{model_id}' not found (hashing fallback will be used)"
+        if _is_embedding_model(model_id):
+            msg = (
+                f"Embeddings API ready, model '{model_id}' not found "
+                "(hashing fallback will be used)"
+            )
+        else:
+            msg = (
+                f"Model '{model_id}' is not an embedding model "
+                "(hashing fallback will be used)"
+            )
     else:
         msg = "Embeddings API ready, model is not selected"
     return EmbeddingStatusResponse(
@@ -316,14 +535,19 @@ def embedding_models(_=Depends(auth_dep)) -> EmbeddingModelsResponse:
     s = get_settings()
     api_base = _embedding_api_base()
     api_key = _embedding_api_key()
-    models = _fetch_openai_compat_models(
-        api_base=api_base,
-        api_key=api_key,
-        timeout_s=max(3, int(getattr(s, "rag_embedding_request_timeout_sec", 8.0) or 8)),
+    models = _filter_embedding_models(
+        _fetch_openai_compat_models(
+            api_base=api_base,
+            api_key=api_key,
+            timeout_s=max(3, int(getattr(s, "rag_embedding_request_timeout_sec", 8.0) or 8)),
+        )
     )
     current = str(getattr(s, "embedding_model_id", "") or "").strip()
-    if current and current not in models:
-        models.append(current)
+    present, _exact, matched = _resolve_model_match(current, models)
+    if present and matched:
+        current = matched
+    else:
+        current = ""
     return EmbeddingModelsResponse(models=models, current_model=current)
 
 
@@ -334,8 +558,36 @@ def embedding_update_model(
     next_model = req.model_id.strip()
     if not next_model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_id is required")
+    if not _is_embedding_model(next_model):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Model '{next_model}' is not an embedding model. "
+                "Select an embedding model in Embeddings section."
+            ),
+        )
     s = get_settings()
+    models = _filter_embedding_models(
+        _fetch_openai_compat_models(
+            api_base=_embedding_api_base(),
+            api_key=_embedding_api_key(),
+            timeout_s=max(3, int(getattr(s, "rag_embedding_request_timeout_sec", 8.0) or 8)),
+        )
+    )
+    present, exact, matched = _resolve_model_match(next_model, models)
+    if not present:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Embedding model '{next_model}' is not installed in provider. "
+                f"Available embedding models: {_available_models_hint(models)}"
+            ),
+        )
+    effective_model = matched if matched else next_model
+    if not exact and matched:
+        next_model = matched
+
     s.embedding_model_id = next_model
     os.environ["EMBEDDING_MODEL_ID"] = next_model
     _save_runtime_override("EMBEDDING_MODEL_ID", next_model)
-    return EmbeddingModelUpdateResponse(model_id=next_model)
+    return EmbeddingModelUpdateResponse(model_id=effective_model)

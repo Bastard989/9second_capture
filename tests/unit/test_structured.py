@@ -48,3 +48,26 @@ def test_build_structured_rows_reports_insufficient_data(monkeypatch) -> None:
     assert "Недостаточно данных" in result["message"]
     assert len(result["rows"]) == 1
     assert result["rows"][0]["status"] == "insufficient_data"
+
+
+def test_build_structured_rows_splits_single_line_transcript_into_rows(monkeypatch) -> None:
+    class Settings:
+        llm_enabled = False
+
+    monkeypatch.setattr(structured, "get_settings", lambda: Settings())
+
+    transcript = (
+        "mixed: Вчера закрыли блокер по auth сервису. "
+        "Сегодня переносим изменения в новую инфраструктуру. "
+        "Нужно зафиксировать риски и ответственных."
+    )
+    result = structured.build_structured_rows(
+        meeting_id="m3",
+        source="clean",
+        transcript=transcript,
+        report=None,
+    )
+
+    assert result["status"] == "ok"
+    assert len(result["rows"]) >= 2
+    assert all(str(row.get("text") or "").strip() for row in result["rows"])

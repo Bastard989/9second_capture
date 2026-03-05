@@ -45,19 +45,11 @@ class DiagnosticsEmbeddingsStatus(BaseModel):
     message: str = ""
 
 
-class DiagnosticsQualityProfile(BaseModel):
-    id: str
-    ws_quality_profile: str
-    label: str
-    description: str
-
-
 class DiagnosticsPreflightResponse(BaseModel):
     server_time: str
     stt: DiagnosticsSTTStatus
     llm: DiagnosticsLLMStatus
     embeddings: DiagnosticsEmbeddingsStatus
-    quality_profiles: list[DiagnosticsQualityProfile] = Field(default_factory=list)
 
 
 class DiagnosticsUiEventRequest(BaseModel):
@@ -261,26 +253,6 @@ def diagnostics_preflight(_=Depends(auth_dep)) -> DiagnosticsPreflightResponse:
         stt=DiagnosticsSTTStatus(**stt_status),
         llm=_llm_status(),
         embeddings=_embeddings_status(),
-        quality_profiles=[
-            DiagnosticsQualityProfile(
-                id="fast",
-                ws_quality_profile="live_fast",
-                label="Fast",
-                description="Низкая задержка, ниже точность, меньше нагрузка на CPU.",
-            ),
-            DiagnosticsQualityProfile(
-                id="balanced",
-                ws_quality_profile="live_balanced",
-                label="Balanced",
-                description="Баланс точности и задержки. Режим по умолчанию.",
-            ),
-            DiagnosticsQualityProfile(
-                id="accurate",
-                ws_quality_profile="live_accurate",
-                label="Accurate",
-                description="Выше точность, больше задержка и нагрузка на CPU.",
-            ),
-        ],
     )
 
 

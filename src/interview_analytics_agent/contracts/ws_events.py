@@ -19,7 +19,6 @@ from .versions import WS_SCHEMA_VERSION
 # =============================================================================
 WSEventType = Literal[
     "audio.chunk",
-    "transcript.update",
     "error",
     "ping",
     "ws.pong",
@@ -48,23 +47,6 @@ class AudioChunkEvent:
     content_b64: str  # base64 аудио (MVP)
     speaker_hint: str | None = None
     idempotency_key: str | None = None
-
-
-# =============================================================================
-# ВЫХОД: transcript.update (server -> client)
-# =============================================================================
-@dataclass
-class TranscriptUpdateEvent:
-    schema_version: Literal[WS_SCHEMA_VERSION]
-    event_type: Literal["transcript.update"]
-
-    meeting_id: str
-    seq: int
-    speaker: str | None
-
-    raw_text: str
-    enhanced_text: str
-    confidence: float | None = None
 
 
 # =============================================================================
