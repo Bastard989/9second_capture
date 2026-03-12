@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-: "${DATABASE_URL:=postgresql+psycopg://interview:interview@postgres:5432/interview}"
-: "${REDIS_URL:=redis://redis:6379/0}"
+: "${DATABASE_URL:=postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>}"
+: "${REDIS_URL:=redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>}"
 export DATABASE_URL REDIS_URL
 
 wait_tcp () {

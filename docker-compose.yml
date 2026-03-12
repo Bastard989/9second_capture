@@ -34,8 +34,11 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Пример:
+      # POSTGRES_DSN=postgresql+psycopg://agent_user:strong_password@postgres:5432/agent
+      # REDIS_URL=redis://redis:6379/0
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>}
+      REDIS_URL: ${REDIS_URL:-redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
     command: ["alembic", "upgrade", "head"]
@@ -53,8 +56,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>}
+      REDIS_URL: ${REDIS_URL:-redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>}
       STORAGE_MODE: ${STORAGE_MODE:-local_fs}
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
       STORAGE_SHARED_FS_DIR: ${STORAGE_SHARED_FS_DIR:-}
@@ -159,8 +162,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>}
+      REDIS_URL: ${REDIS_URL:-redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>}
       STORAGE_MODE: ${STORAGE_MODE:-local_fs}
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
       STORAGE_SHARED_FS_DIR: ${STORAGE_SHARED_FS_DIR:-}
@@ -200,8 +203,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>}
+      REDIS_URL: ${REDIS_URL:-redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>}
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
       LLM_ENABLED: ${LLM_ENABLED:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -228,8 +231,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>}
+      REDIS_URL: ${REDIS_URL:-redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>}
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
@@ -255,8 +258,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>}
+      REDIS_URL: ${REDIS_URL:-redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>}
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
@@ -282,8 +285,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>}
+      REDIS_URL: ${REDIS_URL:-redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>}
       CHUNKS_DIR: ${CHUNKS_DIR:-/data/chunks}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
@@ -309,8 +312,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://interview:interview@postgres:5432/interview}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>}
+      REDIS_URL: ${REDIS_URL:-redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>}
       MEETING_CONNECTOR_PROVIDER: ${MEETING_CONNECTOR_PROVIDER:-sberjazz_mock}
       SBERJAZZ_API_BASE: ${SBERJAZZ_API_BASE:-}
       SBERJAZZ_API_TOKEN: ${SBERJAZZ_API_TOKEN:-}

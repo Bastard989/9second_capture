@@ -1,0 +1,14 @@
+title = "9second_capture gitleaks config"
+
+[allowlist]
+description = "Allow explicit placeholder examples in templates/docs."
+regexes = [
+  '''postgresql\+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>''',
+  '''redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>''',
+  '''driver://<DB_USER>:<DB_PASSWORD>@<DB_HOST>/<DB_NAME>'''
+]
+
+paths = [
+  '''^docs/.*''',
+  '''^интеграция rag/.*'''
+]

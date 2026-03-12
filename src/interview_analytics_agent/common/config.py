@@ -80,10 +80,10 @@ class Settings(BaseSettings):
     # Storage
     # -------------------------------------------------------------------------
     postgres_dsn: str = Field(
-        default="postgresql+psycopg://postgres:postgres@postgres:5432/agent",
+        default="postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>",
         alias="POSTGRES_DSN",
     )
-    redis_url: str = Field(default="redis://redis:6379/0", alias="REDIS_URL")
+    redis_url: str = Field(default="redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>", alias="REDIS_URL")
     queue_mode: str = Field(default="redis", alias="QUEUE_MODE")  # redis|inline
 
     chunks_dir: str = Field(default="./data/chunks", alias="CHUNKS_DIR")
