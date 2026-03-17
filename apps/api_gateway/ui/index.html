@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>9second_capture — Local Agent</title>
-    <link rel="stylesheet" href="/ui/styles.css?v=20260304_flow" />
+    <link rel="icon" type="image/svg+xml" href="/ui/favicon.svg" />
+    <link rel="stylesheet" href="/ui/styles.css?v=20260314_universal" />
   </head>
   <body>
     <div class="bg-layer"></div>
@@ -395,6 +396,122 @@
               </div>
 
               <div class="field">
+                <label for="sttProviderSelect">
+                  <span data-i18n="stt_provider_label">STT провайдер</span>
+                  <span class="help-tip" data-help-i18n="help_stt_provider" aria-label="help">?</span>
+                </label>
+                <div class="row llm-row">
+                  <select id="sttProviderSelect">
+                    <option value="whisper_local">Whisper local</option>
+                    <option value="google">Google STT</option>
+                    <option value="salutespeech">SaluteSpeech</option>
+                    <option value="mock">Mock</option>
+                  </select>
+                  <button id="applySttConfig" class="ghost" data-i18n="provider_apply_btn">Сохранить</button>
+                  <button id="verifySttConnectionBtn" class="ghost" data-i18n="stt_verify_btn">Проверить STT</button>
+                </div>
+                <div class="hint" data-i18n="stt_provider_hint">
+                  Выберите движок, который превращает речь в текст.
+                </div>
+              </div>
+
+              <div id="sttGoogleFields" class="stt-provider-fields hidden">
+                <div class="field">
+                  <label for="sttGoogleServiceAccountInput">
+                    <span data-i18n="stt_google_service_account_label">Google service account JSON</span>
+                    <span class="help-tip" data-help-i18n="help_stt_google_service_account" aria-label="help">?</span>
+                  </label>
+                  <textarea
+                    id="sttGoogleServiceAccountInput"
+                    autocomplete="off"
+                    data-i18n-placeholder="stt_google_service_account_placeholder"
+                    placeholder='Вставьте JSON целиком: {"type":"service_account", ...}'
+                  ></textarea>
+                </div>
+                <div class="field">
+                  <label for="sttGoogleRecognizeUrlInput">
+                    <span data-i18n="stt_google_recognize_url_label">Google recognize URL</span>
+                    <span class="help-tip" data-help-i18n="help_stt_google_recognize_url" aria-label="help">?</span>
+                  </label>
+                  <input
+                    id="sttGoogleRecognizeUrlInput"
+                    type="url"
+                    autocomplete="off"
+                    data-i18n-placeholder="stt_google_recognize_url_placeholder"
+                    placeholder="https://speech.googleapis.com/v1/speech:recognize"
+                  />
+                </div>
+              </div>
+
+              <div id="sttSaluteFields" class="stt-provider-fields hidden">
+                <div class="field">
+                  <label for="sttSaluteClientIdInput">
+                    <span data-i18n="stt_salute_client_id_label">SaluteSpeech Client ID</span>
+                    <span class="help-tip" data-help-i18n="help_stt_salute_client_id" aria-label="help">?</span>
+                  </label>
+                  <input
+                    id="sttSaluteClientIdInput"
+                    type="text"
+                    autocomplete="off"
+                    data-i18n-placeholder="stt_salute_client_id_placeholder"
+                    placeholder="Ваш client_id"
+                  />
+                </div>
+                <div class="field">
+                  <label for="sttSaluteClientSecretInput">
+                    <span data-i18n="stt_salute_client_secret_label">SaluteSpeech Client Secret</span>
+                    <span class="help-tip" data-help-i18n="help_stt_salute_client_secret" aria-label="help">?</span>
+                  </label>
+                  <input
+                    id="sttSaluteClientSecretInput"
+                    type="password"
+                    autocomplete="off"
+                    data-i18n-placeholder="stt_salute_client_secret_placeholder"
+                    placeholder="Оставьте пустым, чтобы не менять сохраненный secret"
+                  />
+                </div>
+                <div class="field">
+                  <label for="sttSaluteAuthUrlInput">
+                    <span data-i18n="stt_salute_auth_url_label">SaluteSpeech auth URL</span>
+                    <span class="help-tip" data-help-i18n="help_stt_salute_auth_url" aria-label="help">?</span>
+                  </label>
+                  <input
+                    id="sttSaluteAuthUrlInput"
+                    type="url"
+                    autocomplete="off"
+                    data-i18n-placeholder="stt_salute_auth_url_placeholder"
+                    placeholder="https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+                  />
+                </div>
+                <div class="field">
+                  <label for="sttSaluteRecognizeUrlInput">
+                    <span data-i18n="stt_salute_recognize_url_label">SaluteSpeech recognize URL</span>
+                    <span class="help-tip" data-help-i18n="help_stt_salute_recognize_url" aria-label="help">?</span>
+                  </label>
+                  <input
+                    id="sttSaluteRecognizeUrlInput"
+                    type="url"
+                    autocomplete="off"
+                    data-i18n-placeholder="stt_salute_recognize_url_placeholder"
+                    placeholder="https://smartspeech.sber.ru/rest/v1/speech:recognize"
+                  />
+                </div>
+                <div class="field">
+                  <label for="sttSaluteScopeInput">
+                    <span data-i18n="stt_salute_scope_label">SaluteSpeech scope</span>
+                    <span class="help-tip" data-help-i18n="help_stt_salute_scope" aria-label="help">?</span>
+                  </label>
+                  <input
+                    id="sttSaluteScopeInput"
+                    type="text"
+                    autocomplete="off"
+                    data-i18n-placeholder="stt_salute_scope_placeholder"
+                    placeholder="SALUTE_SPEECH_PERS"
+                  />
+                </div>
+              </div>
+
+              <div class="field">
                 <label for="sttModelSelect">
                   <span data-i18n="stt_model_label">STT модель</span>
                   <span class="help-tip" data-help-i18n="help_stt_model" aria-label="help">?</span>
@@ -410,6 +527,54 @@
               </div>
 
               <div class="field">
+                <label for="llmProviderSelect">
+                  <span data-i18n="llm_provider_label">LLM провайдер</span>
+                  <span class="help-tip" data-help-i18n="help_llm_provider" aria-label="help">?</span>
+                </label>
+                <div class="row llm-row">
+                  <select id="llmProviderSelect">
+                    <option value="openai_compat">OpenAI-compatible</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="gemini">Gemini</option>
+                    <option value="mock">Mock</option>
+                  </select>
+                  <button id="applyLlmConfig" class="ghost" data-i18n="provider_apply_btn">Сохранить</button>
+                </div>
+                <div class="hint" data-i18n="llm_provider_hint">
+                  Здесь выбирается сервис, который будет отвечать в LLM-чате и строить результаты.
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="llmApiBaseInput">
+                  <span data-i18n="llm_api_base_label">LLM API адрес</span>
+                  <span class="help-tip" data-help-i18n="help_llm_api_base" aria-label="help">?</span>
+                </label>
+                <input
+                  id="llmApiBaseInput"
+                  type="url"
+                  autocomplete="off"
+                  placeholder="https://..."
+                  data-i18n-placeholder="llm_api_base_placeholder"
+                />
+              </div>
+
+              <div class="field">
+                <label for="llmApiKeyInput">
+                  <span data-i18n="llm_api_key_label">LLM API ключ</span>
+                  <span class="help-tip" data-help-i18n="help_llm_api_key" aria-label="help">?</span>
+                </label>
+                <input
+                  id="llmApiKeyInput"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="sk-..."
+                  data-i18n-placeholder="llm_api_key_placeholder"
+                />
+              </div>
+
+              <div class="field">
                 <label for="llmModelSelect">
                   <span data-i18n="llm_model_label">LLM модель</span>
                   <span class="help-tip" data-help-i18n="help_llm" aria-label="help">?</span>
@@ -420,6 +585,54 @@
                   <button id="applyLlmModel" class="ghost" data-i18n="llm_apply_btn">Сменить модель</button>
                 </div>
                 <div id="llmStatusText" class="hint llm-status" data-i18n="llm_status_loading">Загружаем настройки LLM...</div>
+              </div>
+
+              <div class="field">
+                <label for="embeddingProviderSelect">
+                  <span data-i18n="embedding_provider_label">Embeddings провайдер</span>
+                  <span class="help-tip" data-help-i18n="help_embedding_provider" aria-label="help">?</span>
+                </label>
+                <div class="row llm-row">
+                  <select id="embeddingProviderSelect">
+                    <option value="auto">Авто</option>
+                    <option value="openai_compat">OpenAI-compatible</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="gemini">Gemini</option>
+                    <option value="hashing">Hashing local</option>
+                  </select>
+                  <button id="applyEmbeddingConfig" class="ghost" data-i18n="provider_apply_btn">Сохранить</button>
+                </div>
+                <div class="hint" data-i18n="embedding_provider_hint">
+                  Этот сервис отвечает за смысловой поиск по текстам в RAG.
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="embeddingApiBaseInput">
+                  <span data-i18n="embedding_api_base_label">Embeddings API адрес</span>
+                  <span class="help-tip" data-help-i18n="help_embedding_api_base" aria-label="help">?</span>
+                </label>
+                <input
+                  id="embeddingApiBaseInput"
+                  type="url"
+                  autocomplete="off"
+                  placeholder="https://..."
+                  data-i18n-placeholder="embedding_api_base_placeholder"
+                />
+              </div>
+
+              <div class="field">
+                <label for="embeddingApiKeyInput">
+                  <span data-i18n="embedding_api_key_label">Embeddings API ключ</span>
+                  <span class="help-tip" data-help-i18n="help_embedding_api_key" aria-label="help">?</span>
+                </label>
+                <input
+                  id="embeddingApiKeyInput"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="sk-..."
+                  data-i18n-placeholder="embedding_api_key_placeholder"
+                />
               </div>
 
               <div class="field">
@@ -598,86 +811,53 @@
             <div id="llmRagModePanel" class="llm-source-panel hidden">
               <div class="rag-workspace">
                 <div class="row compare-header">
-                  <strong data-i18n="rag_title">RAG чат / сравнение интервью</strong>
-                  <div class="row row-wrap rag-header-actions">
-                    <button id="ragRefreshMeetingsBtn" class="ghost" data-i18n="rag_refresh_meetings">
-                      Обновить список
-                    </button>
-                    <button id="ragIndexSelectedBtn" class="ghost" data-i18n="rag_index_selected">
-                      Индексировать выбранные
-                    </button>
-                    <button id="ragRunBtn" class="ghost" data-i18n="rag_run_btn">Выполнить запрос</button>
+                  <strong data-i18n="rag_title">RAG</strong>
+                  <div class="row row-wrap rag-header-actions rag-main-actions">
+                    <button id="ragRunBtn" class="primary" data-i18n="rag_run_btn">Запустить</button>
                   </div>
                 </div>
                 <div id="ragHint" class="hint" data-i18n="rag_hint_idle">
-                  Выберите интервью, задайте запрос и получите ответ с цитатами из транскриптов.
+                  Прикрепите готовые TXT-файлы и задайте вопрос. RAG будет искать только по этим текстам.
                 </div>
 
                 <div class="rag-layout">
                   <div class="rag-panel">
-                    <div class="file-title" data-i18n="rag_meeting_picker_title">Интервью для сравнения</div>
-                    <div class="row row-wrap rag-picker-actions">
-                      <button id="ragSelectCurrentBtn" class="ghost" data-i18n="rag_select_current">Текущая запись</button>
-                      <button id="ragSelectAllBtn" class="ghost" data-i18n="rag_select_all">Выбрать все</button>
-                      <button id="ragClearSelectionBtn" class="ghost" data-i18n="rag_clear_selection">Очистить</button>
-                    </div>
-                    <div class="rag-saved-set-row">
-                      <select id="ragSavedSetSelect">
-                        <option value="" data-i18n="rag_saved_set_none">Сохраненные наборы</option>
-                      </select>
-                      <button id="ragSaveSetBtn" class="ghost" data-i18n="rag_saved_set_save">Сохранить набор</button>
-                      <button id="ragLoadSetBtn" class="ghost" data-i18n="rag_saved_set_load">Загрузить</button>
-                      <button id="ragDeleteSetBtn" class="ghost" data-i18n="rag_saved_set_delete">Удалить</button>
-                    </div>
-                    <div class="hint" data-i18n="rag_meeting_picker_hint">
-                      Если ничего не выбрано, поиск пойдет по последним записям.
-                    </div>
-                    <div id="ragMeetingPicker" class="rag-meeting-picker"></div>
-                  </div>
-
-                  <div class="rag-panel">
                     <div class="row compare-header">
                       <div class="chat-title-with-help">
-                        <div class="file-title" data-i18n="rag_query_title">Запрос по выбранным интервью (compare)</div>
+                        <div class="file-title" data-i18n="rag_query_title">Запрос</div>
                         <span class="help-tip" data-help-i18n="help_rag_chat_any_format" aria-label="help">?</span>
                       </div>
-                      <button id="ragChatSendBtn" class="ghost" data-i18n="rag_chat_send_btn">Отправить</button>
                     </div>
                     <div id="ragChatHint" class="hint" data-i18n="rag_chat_hint_idle">
-                      RAG-чат сравнивает выбранные интервью и отвечает с цитатами.
+                      RAG сравнит прикрепленные файлы и покажет ответ с опорой на найденные фрагменты.
                     </div>
                     <div id="ragChatHistory" class="llm-chat-history rag-chat-history"></div>
-                    <div class="rag-query-grid">
-                      <div class="field">
-                        <label for="ragSourceSelect">
-                          <span data-i18n="rag_source_label">Источник транскрипта</span>
-                          <span class="help-tip" data-help-i18n="help_transcript_sources" aria-label="help">?</span>
-                        </label>
-                        <select id="ragSourceSelect">
-                          <option value="clean" data-i18n="rag_source_clean">Clean</option>
-                          <option value="normalized" data-i18n="rag_source_normalized">Normalized</option>
-                          <option value="raw" data-i18n="rag_source_raw">Raw</option>
-                        </select>
+                    <div class="field">
+                      <label>
+                        <span data-i18n="rag_files_label">Файлы для поиска</span>
+                        <span class="help-tip" data-help-i18n="help_rag_files" aria-label="help">?</span>
+                      </label>
+                      <div class="row row-wrap chat-attach-row">
+                        <button id="ragChatAttachBtn" class="ghost clip-btn" data-i18n="chat_attach_btn">📎 Прикрепить файлы</button>
+                        <input id="ragChatAttachInput" type="file" multiple class="hidden-file-input" />
+                        <div id="ragChatAttachments" class="chat-attachments"></div>
                       </div>
-                      <div class="field">
-                        <label for="ragTopKInput">
-                          <span data-i18n="rag_topk_label">Top-K цитат</span>
-                        </label>
-                        <input id="ragTopKInput" type="number" min="1" max="50" value="8" />
-                      </div>
+                    </div>
+                    <div class="field">
+                      <label for="ragTopKInput">
+                        <span data-i18n="rag_topk_label">Top-K</span>
+                        <span class="help-tip" data-help-i18n="help_rag_topk" aria-label="help">?</span>
+                      </label>
+                      <input id="ragTopKInput" type="number" min="1" max="50" value="8" />
                     </div>
                     <div class="rag-query-options">
                       <label class="checkbox-line">
                         <input id="ragUseLlmAnswer" type="checkbox" checked />
-                        <span data-i18n="rag_use_llm_answer">Сгенерировать ответ LLM по найденным цитатам</span>
-                      </label>
-                      <label class="checkbox-line">
-                        <input id="ragAutoIndex" type="checkbox" checked />
-                        <span data-i18n="rag_auto_index">Автоиндексация выбранных интервью перед запросом</span>
+                        <span data-i18n="rag_use_llm_answer">LLM-ответ</span>
                       </label>
                       <label class="checkbox-line">
                         <input id="ragForceReindex" type="checkbox" />
-                        <span data-i18n="rag_force_reindex">Принудительно пересобрать индекс</span>
+                        <span data-i18n="rag_force_reindex">Пересобрать индекс</span>
                       </label>
                     </div>
                     <div class="field">
@@ -691,14 +871,9 @@
                         data-i18n-placeholder="rag_query_input_placeholder"
                       ></textarea>
                     </div>
-                    <div class="row row-wrap chat-attach-row">
-                      <button id="ragChatAttachBtn" class="ghost clip-btn" data-i18n="chat_attach_btn">📎 Прикрепить файлы</button>
-                      <input id="ragChatAttachInput" type="file" multiple class="hidden-file-input" />
-                      <div id="ragChatAttachments" class="chat-attachments"></div>
-                    </div>
                     <div class="field">
                       <label for="ragAnswerPromptInput">
-                        <span data-i18n="rag_answer_prompt_label">Доп. инструкция для ответа (опционально)</span>
+                        <span data-i18n="rag_answer_prompt_label">Инструкция для ответа</span>
                       </label>
                       <textarea
                         id="ragAnswerPromptInput"
@@ -707,7 +882,7 @@
                         data-i18n-placeholder="rag_answer_prompt_placeholder"
                       ></textarea>
                     </div>
-                    <div class="row row-wrap rag-export-actions">
+                    <div class="row row-wrap rag-export-actions hidden">
                       <button id="ragExportJsonBtn" class="ghost" data-i18n="rag_export_json">Экспорт JSON</button>
                       <button id="ragExportCsvBtn" class="ghost" data-i18n="rag_export_csv">Экспорт CSV цитат</button>
                       <button id="ragExportTxtBtn" class="ghost" data-i18n="rag_export_txt">Экспорт TXT ответа</button>
@@ -725,12 +900,12 @@
                   </div>
                   <div class="rag-hits-block">
                     <div class="row compare-header">
-                      <strong data-i18n="rag_hits_title">Цитаты / найденные фрагменты</strong>
+                      <strong data-i18n="rag_hits_title">Фрагменты</strong>
                     </div>
                     <div id="ragHitsList" class="rag-hits-list"></div>
                   </div>
                 </div>
-                <div class="llm-chat-files-head" data-i18n="rag_result_files_title">Файлы результата RAG</div>
+                <div class="llm-chat-files-head" data-i18n="rag_result_files_title">Файлы</div>
                 <div id="ragResultFiles" class="llm-artifact-files"></div>
               </div>
             </div>
@@ -763,6 +938,6 @@
       <span data-i18n="footer_note">Данные остаются локально. Для записи требуется разрешение браузера.</span>
     </footer>
 
-    <script src="/ui/app.js?v=20260304_flow"></script>
+    <script src="/ui/app.js?v=20260314_universal"></script>
   </body>
 </html>

@@ -1310,6 +1310,92 @@ def test_rag_query_export_endpoint_returns_file(monkeypatch, auth_none_settings)
     assert "rag_query_result.json" in body
 
 
+def test_rag_files_query_endpoint_returns_hits(monkeypatch, auth_none_settings) -> None:
+    monkeypatch.setattr(
+        artifacts_router,
+        "_rag_files_query",
+        lambda req: artifacts_router.RAGQueryResponse(
+            query=req.query,
+            transcript_variant="clean",
+            documents_count=len(req.documents),
+            indexed_documents=len(req.documents),
+            total_chunks_scanned=3,
+            hits=[
+                artifacts_router.RAGHit(
+                    meeting_id="",
+                    document_id="doc_python",
+                    document_name="candidate_python.txt",
+                    chunk_id="c1",
+                    transcript_variant="clean",
+                    score=1.0,
+                    keyword_score=1.0,
+                    text="Кандидат уверенно рассказал про Python и SQL.",
+                )
+            ],
+        ),
+    )
+
+    client = _client()
+    resp = client.post(
+        "/v1/rag/files/query",
+        json={
+            "query": "python sql",
+            "documents": [
+                {
+                    "name": "candidate_python.txt",
+                    "text": "Кандидат уверенно рассказал про Python и SQL.",
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["documents_count"] == 1
+    assert body["hits"][0]["document_name"] == "candidate_python.txt"
+
+
+def test_rag_files_query_builds_hits_from_attached_documents(tmp_path, auth_none_settings) -> None:
+    snapshot_records_dir = auth_none_settings.records_dir
+    try:
+        auth_none_settings.records_dir = str(tmp_path)
+        resp = artifacts_router._rag_files_query(
+            artifacts_router.RAGFilesQueryRequest(
+                query="python sql",
+                documents=[
+                    artifacts_router.RAGFileDocumentInput(
+                        name="candidate_python.txt",
+                        text=(
+                            "Интервьюер: расскажите про опыт.\n"
+                            "Кандидат: Я много работал с Python, SQL и очередями задач.\n"
+                            "Кандидат: На прошлой работе проектировал сервисы и API."
+                        ),
+                        candidate_name="Иван",
+                        interviewer="Мария",
+                    ),
+                    artifacts_router.RAGFileDocumentInput(
+                        name="candidate_frontend.txt",
+                        text=(
+                            "Интервьюер: расскажите про опыт.\n"
+                            "Кандидат: В основном React, TypeScript и верстка интерфейсов."
+                        ),
+                    ),
+                ],
+                top_k=4,
+                answer_mode="none",
+            )
+        )
+    finally:
+        auth_none_settings.records_dir = snapshot_records_dir
+
+    assert resp.documents_count == 2
+    assert resp.indexed_documents == 2
+    assert resp.total_chunks_scanned >= 2
+    assert resp.hits
+    assert any(hit.document_name == "candidate_python.txt" for hit in resp.hits)
+    assert any("Python" in hit.text or "python" in hit.text for hit in resp.hits)
+    assert resp.files
+
+
 def test_rag_index_job_manager_completes_and_reports_progress(monkeypatch, auth_none_settings) -> None:
     manager = artifacts_router.RAGIndexJobManager(max_jobs=8)
 

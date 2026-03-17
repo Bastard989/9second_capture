@@ -83,6 +83,8 @@ const state = {
   sttStatusStyle: "muted",
   sttStatusText: "",
   sttStatusParams: {},
+  sttGoogleServiceAccountSet: false,
+  sttSaluteClientSecretSet: false,
   llmModels: [],
   llmStatusKey: "llm_status_loading",
   llmStatusStyle: "muted",
@@ -283,15 +285,15 @@ const i18n = {
     flow_results: "Результаты",
     work_mode_title: "Режим работы",
     help_work_mode:
-      "Выберите один из 3 способов записи встречи. Активный способ включает только свои настройки.",
+      "Здесь вы выбираете, как агент будет записывать встречу. Одновременно работает только один вариант.",
     help_mode_driver:
-      "Запись системного звука через виртуальный драйвер (BlackHole/VB-CABLE/Monitor).",
+      "Запись звука через отдельный системный источник. Нужен только для специальных настроек звука.",
     help_mode_browser:
-      "Захват вкладки/экрана браузером. Для системного звука включайте Share audio.",
+      "Запись из вкладки браузера. Если нужен звук встречи, включите Share audio.",
     help_mode_api:
-      "Подключение к встрече через API-коннектор. Запись MP3 запускается кнопками Старт/Стоп.",
+      "Агент сам подключается к встрече и сохраняет аудио в MP3.",
     help_mode_quick:
-      "Вставьте ссылку, нажмите «Старт»: агент откроет встречу и запишет через браузерный Share audio.",
+      "Вставьте ссылку на встречу, нажмите «Старт», и агент сам откроет её в браузере.",
     work_mode_hint:
       "Выберите один режим: его настройки будут активны, остальные секции станут неактивными.",
     work_mode_active_label: "Активный режим:",
@@ -339,15 +341,15 @@ const i18n = {
     connection_title: "Контекст интервью",
     api_key_label: "API ключ (опционально)",
     help_api_key:
-      "Это ключ локального агента (X-API-Key), а не пароль/код от видеовстречи. Нужен только если на локальном API включена авторизация.",
+      "Это внутренний ключ агента, а не пароль от встречи. Обычно его можно не заполнять.",
     api_key_placeholder: "X-API-Key",
     api_record_url_label: "Ссылка встречи",
     help_api_meeting_url:
-      "URL встречи для API-коннектора. После старта агент пишет MP3 и отправляет данные в пайплайн.",
+      "Сюда вставьте ссылку на встречу, к которой агент должен подключиться.",
     api_record_url_placeholder: "https://...",
     api_record_duration_label: "Длительность (сек)",
     help_api_duration:
-      "Ограничение времени API-захвата. По достижении лимита запись остановится автоматически.",
+      "Сколько максимум может идти запись. Когда время закончится, агент остановится сам.",
     api_record_upload_label: "Отправить запись в пайплайн агента",
     api_record_hint:
       "Нажмите «Старт» в блоке «Запись»: агент подключится к встрече и начнет запись MP3.",
@@ -357,7 +359,7 @@ const i18n = {
     api_record_failed: "Ошибка API-записи. Проверьте ссылку встречи и настройки локального API.",
     interview_meta_title: "Контекст интервью (опционально)",
     help_interview_meta:
-      "Рекомендуется заполнить для сравнимой аналитики между интервью. Поля не обязательны.",
+      "Эти поля можно не заполнять. Они просто помогают потом сравнивать интервью между собой.",
     meta_candidate_name: "Имя кандидата",
     meta_candidate_id: "Candidate ID",
     meta_vacancy: "Вакансия",
@@ -365,41 +367,116 @@ const i18n = {
     meta_interviewer: "Интервьюер",
     interview_meta_hint:
       "Поля не обязательны, но помогают делать сравнимую аналитику между интервью.",
+    stt_provider_label: "STT провайдер",
+    help_stt_provider:
+      "Это сервис, который превращает речь в текст. Можно выбрать локальный Whisper или облачный провайдер.",
+    stt_google_service_account_label: "Google service account JSON",
+    help_stt_google_service_account:
+      "Сюда вставляется JSON-ключ сервисного аккаунта Google Cloud. Без него Google STT не сможет подключиться.",
+    stt_google_service_account_placeholder:
+      'Вставьте JSON целиком: {"type":"service_account", ...}',
+    stt_google_service_account_placeholder_saved:
+      "JSON уже сохранен. Оставьте поле пустым, если не хотите его менять.",
+    stt_google_recognize_url_label: "Google recognize URL",
+    help_stt_google_recognize_url:
+      "Обычно менять не нужно. Оставьте стандартный адрес Google, если не используете особый прокси.",
+    stt_google_recognize_url_placeholder:
+      "https://speech.googleapis.com/v1/speech:recognize",
+    stt_salute_client_id_label: "SaluteSpeech Client ID",
+    help_stt_salute_client_id:
+      "Это идентификатор вашего приложения в SaluteSpeech. Он нужен для входа в сервис.",
+    stt_salute_client_id_placeholder: "Ваш client_id",
+    stt_salute_client_secret_label: "SaluteSpeech Client Secret",
+    help_stt_salute_client_secret:
+      "Это секретный ключ вашего приложения. Если он уже сохранен и менять его не нужно, оставьте поле пустым.",
+    stt_salute_client_secret_placeholder:
+      "Оставьте пустым, чтобы не менять сохраненный secret",
+    stt_salute_client_secret_placeholder_saved:
+      "Secret уже сохранен. Оставьте поле пустым, если не хотите его менять.",
+    stt_salute_auth_url_label: "SaluteSpeech auth URL",
+    help_stt_salute_auth_url:
+      "Это адрес, по которому агент получает временный токен доступа для SaluteSpeech.",
+    stt_salute_auth_url_placeholder:
+      "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+    stt_salute_recognize_url_label: "SaluteSpeech recognize URL",
+    help_stt_salute_recognize_url:
+      "Это адрес сервиса распознавания речи SaluteSpeech. Обычно его менять не нужно.",
+    stt_salute_recognize_url_placeholder:
+      "https://smartspeech.sber.ru/rest/v1/speech:recognize",
+    stt_salute_scope_label: "SaluteSpeech scope",
+    help_stt_salute_scope:
+      "Это профиль доступа, который выдали для вашего приложения. Если вы не меняли его, оставьте значение по умолчанию.",
+    stt_salute_scope_placeholder: "SALUTE_SPEECH_PERS",
     stt_model_label: "STT модель",
     help_stt_model:
-      "Локальная faster-whisper модель для транскрибации. Чем крупнее модель, тем выше качество, но дольше обработка и выше нагрузка.",
+      "Это выбранный вариант распознавания для текущего STT сервиса. У локального Whisper это размер модели, у облачных провайдеров — профиль распознавания.",
+    llm_provider_label: "LLM провайдер",
+    help_llm_provider:
+      "Это сервис, который отвечает в чате и строит таблицы, JSON и другие результаты по файлам.",
+    llm_api_base_label: "LLM API адрес",
+    llm_api_base_placeholder: "https://...",
+    help_llm_api_base:
+      "Сюда вставляется адрес сервиса модели. Если используете локальный сервер, это его локальный адрес.",
+    llm_api_key_label: "LLM API ключ",
+    llm_api_key_placeholder: "Оставьте пустым, чтобы не менять сохраненный ключ",
+    llm_api_key_placeholder_saved: "Ключ уже сохранен. Оставьте пустым, чтобы его не менять",
+    help_llm_api_key:
+      "Это ключ доступа к сервису модели. Если ключ уже сохранен и менять его не нужно, поле можно оставить пустым.",
     llm_model_label: "LLM модель",
     help_llm:
-      "LLM используется в чате для генерации форматов из прикрепленных файлов. Сам TXT транскрипт строится STT без LLM.",
+      "Эта модель нужна для чата, таблиц и других результатов по файлам. Для самого транскрипта она не нужна.",
+    embedding_provider_label: "Embeddings провайдер",
+    help_embedding_provider:
+      "Этот сервис нужен для поиска по смыслу в RAG. Он помогает находить нужные места в тексте.",
+    embedding_api_base_label: "Embeddings API адрес",
+    embedding_api_base_placeholder: "https://...",
+    help_embedding_api_base:
+      "Сюда вставляется адрес сервиса, который строит смысловые векторы для поиска по тексту.",
+    embedding_api_key_label: "Embeddings API ключ",
+    embedding_api_key_placeholder: "Оставьте пустым, чтобы не менять сохраненный ключ",
+    embedding_api_key_placeholder_saved:
+      "Ключ уже сохранен. Оставьте пустым, чтобы его не менять",
+    help_embedding_api_key:
+      "Это ключ доступа к embeddings сервису. Если ключ уже сохранен, поле можно не заполнять.",
     embedding_model_label: "Embeddings модель",
     help_embeddings_model:
-      "Отдельная модель для RAG-поиска по смыслу (эмбеддинги). Используется для поиска/сравнения интервью. Если недоступна, включается локальный hashing fallback.",
+      "Эта модель помогает искать нужные места в тексте по смыслу, а не только по словам.",
     help_llm_schema:
-      "Опционально. Если указать JSON-схему, LLM должен вернуть валидный JSON по этой структуре. Оставьте пустым для обычного текста.",
+      "Если здесь задать шаблон ответа, модель постарается вернуть результат в этой форме. Если это не нужно, оставьте пусто.",
     help_transcript_raw:
-      "Raw (грязный): прямой STT-транскрипт как есть, с паузами, междометиями и шумовыми вставками.",
+      "Raw - это текст как распознался сразу после записи. В нем могут быть лишние слова, паузы и ошибки.",
     help_transcript_clean:
-      "Clean (чистый): очищенный текст для чтения и отчетов. Обычно строится из raw через нормализацию и (опционально) LLM-очистку.",
+      "Clean - это более аккуратный и удобный для чтения текст. Его проще использовать для отчетов.",
     help_transcript_sources:
-      "Raw — исходный STT текст. Normalized — служебная нормализация без LLM (убирает мусор/повторы, сохраняет смысл). Clean — пользовательский чистый текст после normalizer + опциональной LLM-очистки.",
+      "Raw - как распозналось. Normalized - текст немного прибран. Clean - самый удобный и чистый вариант для чтения.",
+    help_rag_topk:
+      "Сколько кусочков текста взять для ответа. Меньше - короче и точнее, больше - шире охват.",
     help_llm_chat_any_format:
-      "LLM в этом блоке работает только по прикрепленным TXT/CSV/JSON/MD файлам и формирует нужный формат.",
+      "Здесь можно прикрепить файлы и попросить модель сделать таблицу, JSON, CSV или другой нужный результат.",
     help_rag_chat_any_format:
-      "RAG-чат сравнит выбранные интервью и соберет ответ с цитатами. Можно добавить файлы для дополнительного контекста.",
+      "Этот режим ищет ответ только по прикрепленным текстовым файлам и показывает, на каких местах текста он основан.",
+    help_rag_files:
+      "Сюда прикрепляются готовые TXT-файлы с транскриптами. RAG будет искать и сравнивать только их.",
+    stt_verify_btn: "Проверить STT",
     stt_scan_btn: "Сканировать",
     stt_apply_btn: "Сменить модель",
+    provider_apply_btn: "Сохранить",
     llm_scan_btn: "Сканировать",
     llm_apply_btn: "Сменить модель",
     embedding_scan_btn: "Сканировать",
     embedding_apply_btn: "Сменить модель",
     stt_status_loading: "Загружаем настройки STT...",
+    stt_status_verifying: "Проверяем подключение STT...",
     stt_status_ready: "STT готов. Текущая модель: {model}.",
+    stt_status_on_demand:
+      "STT настроен. Модель {model} загрузится, когда вы сами запустите транскрипт.",
     stt_status_scanning: "Сканируем STT модели...",
     stt_status_scan_done: "Найдено STT моделей: {count}. Текущая: {model}.",
     stt_status_scan_empty: "STT модели не найдены. Текущая: {model}.",
     stt_status_applied: "STT модель переключена: {model}.",
     stt_status_apply_failed: "Не удалось переключить STT модель.",
     stt_status_unavailable: "STT API недоступен. Проверьте локальный backend.",
+    stt_config_applied: "Настройки STT сохранены.",
     stt_model_placeholder: "Выберите STT модель",
     stt_model_missing: "Сначала выберите STT модель.",
     llm_status_loading: "Загружаем настройки LLM...",
@@ -410,8 +487,8 @@ const i18n = {
     llm_status_scan_empty: "Модели не найдены. Текущая: {model}.",
     llm_status_applied: "Модель переключена: {model}.",
     llm_status_apply_failed: "Не удалось переключить модель.",
-    llm_status_unavailable:
-      "LLM API недоступен. Проверьте Ollama/OPENAI_API_BASE.",
+    llm_status_unavailable: "LLM API недоступен. Проверьте адрес сервиса и ключ.",
+    llm_config_applied: "Настройки LLM сохранены.",
     llm_model_placeholder: "Выберите модель",
     llm_model_missing: "Сначала выберите модель.",
     embedding_status_loading: "Загружаем настройки embeddings...",
@@ -423,6 +500,7 @@ const i18n = {
     embedding_status_apply_failed: "Не удалось переключить embeddings модель.",
     embedding_status_unavailable:
       "Embeddings API недоступен. RAG будет использовать hashing fallback.",
+    embedding_config_applied: "Настройки embeddings сохранены.",
     embedding_model_placeholder: "Выберите embeddings модель",
     embedding_model_missing: "Сначала выберите embeddings модель.",
     device_label: "Источник аудио",
@@ -461,7 +539,7 @@ const i18n = {
     stop_btn: "Стоп",
     capture_mode_label: "Режим захвата",
     help_capture_method:
-      "Показывает текущий способ захвата. Переключается в блоке «Режим работы».",
+      "Показывает, откуда сейчас идет запись.",
     capture_mode_system: "Системный звук",
     capture_mode_screen: "Экран + звук",
     capture_mode_hint: "Для экрана со звуком включите “Share audio” в окне браузера.",
@@ -469,14 +547,14 @@ const i18n = {
       "Важно: в режиме «Системный звук» микрофон добавляется автоматически, чтобы записывать и голос, и системный трек.",
     include_mic_label: "Добавлять микрофон в запись",
     help_mic:
-      "Добавляет ваш микрофон, чтобы в записи были слышны вопросы интервьюера.",
+      "Если включено, в запись попадет и ваш голос.",
     recording_stt_moved_hint:
       "STT-настройки вынесены в «Результаты»: они используются при формировании отчётов из MP3.",
     mic_input_label: "Микрофон",
     mic_input_auto: "Авто (рекомендуется)",
     language_profile_label: "Язык интервью",
     help_language_profile:
-      "Подсказка для STT по языку интервью. Улучшает точность терминов и имен.",
+      "Подскажите агенту, на каком языке идет разговор. Так текст обычно распознается точнее.",
     language_profile_mixed: "Mixed (RU + EN)",
     language_profile_ru: "Русский",
     language_profile_en: "English",
@@ -484,7 +562,7 @@ const i18n = {
       "Подсказка для STT: выберите язык интервью для лучшей точности терминов.",
     diag_title: "Проверка MP3-захвата перед стартом",
     help_diagnostics:
-      "Опциональная проверка перед записью: доступ к аудио, уровни system/mic и готовность MP3-потока.",
+      "Быстрая проверка перед стартом: видит ли агент звук и готова ли запись.",
     diag_run_btn: "Проверить",
     diag_hint_idle: "Запустите проверку, если есть проблемы с захватом.",
     diag_hint_running: "Диагностика выполняется...",
@@ -524,7 +602,7 @@ const i18n = {
     monitor_state_pause: "пауза",
     monitor_last_never: "еще не зафиксировано",
     help_live_monitor:
-      "Этот блок не распознаёт текст. Он показывает именно корректность захвата аудио в MP3.",
+      "Этот блок не переводит речь в текст. Он только показывает, идет ли звук в запись.",
     signal_check_running: "Проверка захвата...",
     signal_check_blocked_recording: "Проверка захвата доступна только до старта записи.",
     signal_check_ok: "Захват работает: уровень сигнала обнаружен.",
@@ -683,29 +761,31 @@ const i18n = {
     llm_chat_role_user: "Вы",
     llm_chat_role_assistant: "LLM",
     llm_chat_preview_error: "Не удалось загрузить предпросмотр артефакта.",
-    rag_title: "RAG чат / сравнение интервью",
-    rag_refresh_meetings: "Обновить список",
-    rag_index_selected: "Индексировать выбранные",
-    rag_run_btn: "Выполнить запрос",
-    rag_hint_idle: "Выберите интервью, задайте запрос и получите ответ с цитатами из транскриптов.",
-    rag_hint_indexing: "Строим RAG индекс для выбранных интервью...",
+    rag_title: "RAG",
+    rag_refresh_meetings: "Обновить",
+    rag_index_selected: "Индексировать",
+    rag_run_btn: "Запустить",
+    rag_hint_idle: "Прикрепите готовые TXT-файлы и задайте вопрос. RAG будет искать только по этим текстам.",
+    rag_hint_indexing: "Готовим файлы для поиска...",
     rag_hint_querying: "Ищем релевантные фрагменты и собираем ответ...",
     rag_hint_done: "RAG запрос выполнен.",
     rag_hint_query_empty: "Введите вопрос или задачу для RAG.",
     rag_hint_index_no_selection: "Выберите хотя бы одну запись для индексации.",
+    rag_hint_files_required: "Сначала прикрепите хотя бы один TXT-файл для поиска.",
     rag_hint_failed: "RAG запрос завершился с ошибкой.",
     rag_hint_no_results: "По запросу не найдено релевантных фрагментов.",
     rag_hint_export_empty: "Сначала выполните RAG запрос.",
-    rag_meeting_picker_title: "Интервью для сравнения",
+    rag_meeting_picker_title: "Записи",
     rag_meeting_picker_hint: "Если ничего не выбрано, поиск пойдет по последним записям.",
     rag_picker_empty: "Список записей пуст. Сначала создайте или импортируйте запись.",
     rag_select_current: "Текущая запись",
     rag_select_all: "Выбрать все",
     rag_clear_selection: "Очистить",
-    rag_saved_set_none: "Сохраненные наборы",
-    rag_saved_set_save: "Сохранить набор",
-    rag_saved_set_load: "Загрузить",
+    rag_saved_set_none: "Наборы",
+    rag_saved_set_save: "Сохранить",
+    rag_saved_set_load: "Открыть",
     rag_saved_set_delete: "Удалить",
+    rag_sets_title: "Наборы и доп. действия",
     rag_saved_set_prompt_name: "Введите название набора интервью для RAG compare:",
     rag_saved_set_hint_saved: "Набор сохранен.",
     rag_saved_set_hint_loaded: "Набор загружен.",
@@ -723,34 +803,36 @@ const i18n = {
     rag_index_status_invalid: "битый",
     rag_index_status_orphaned: "без транскрипта",
     rag_index_status_unknown: "неизвестно",
-    rag_topk_label: "Top-K цитат",
-    rag_query_title: "Запрос по выбранным интервью (compare)",
-    rag_chat_send_btn: "Отправить",
-    rag_chat_hint_idle: "RAG-чат сравнивает выбранные интервью и отвечает с цитатами.",
+    rag_files_label: "Файлы для поиска",
+    rag_topk_label: "Top-K",
+    rag_query_title: "Запрос",
+    rag_chat_send_btn: "Запустить",
+    rag_chat_hint_idle: "RAG сравнит прикрепленные файлы и покажет ответ с опорой на найденные фрагменты.",
     rag_chat_hint_running: "RAG обрабатывает запрос...",
     rag_chat_hint_done: "Ответ RAG получен.",
     rag_chat_hint_failed: "Не удалось получить ответ RAG.",
     rag_chat_history_empty: "Здесь появится диалог RAG-чата.",
     rag_chat_role_user: "Вы",
     rag_chat_role_assistant: "RAG",
-    rag_use_llm_answer: "Сгенерировать ответ LLM по найденным цитатам",
-    rag_auto_index: "Автоиндексация выбранных интервью перед запросом",
-    rag_force_reindex: "Принудительно пересобрать индекс",
+    rag_use_llm_answer: "Собрать итоговый ответ",
+    rag_auto_index: "Автоиндексация",
+    rag_force_reindex: "Пересобрать поиск по файлам",
     rag_query_input_label: "Вопрос / задача",
     rag_query_input_placeholder:
       "Сравни кандидатов по backend/system design и собери таблицу с сильными и слабыми сторонами.",
-    rag_answer_prompt_label: "Доп. инструкция для ответа (опционально)",
+    rag_answer_prompt_label: "Инструкция для ответа",
     rag_answer_prompt_placeholder: "Ответь кратко, затем перечисли доказательства с ссылками [n].",
-    rag_export_json: "Экспорт JSON",
-    rag_export_csv: "Экспорт CSV цитат",
-    rag_export_txt: "Экспорт TXT ответа",
+    rag_export_json: "JSON",
+    rag_export_csv: "CSV",
+    rag_export_txt: "TXT",
     rag_answer_title: "Ответ (LLM/RAG)",
-    rag_hits_title: "Цитаты / найденные фрагменты",
+    rag_hits_title: "Найденные фрагменты",
     rag_result_meta_none: "Нет результатов",
     rag_result_meta_template:
-      "Встреч: {meetings}, индексов: {indexed}, чанков: {chunks}, top hits: {hits}, режим: {mode}",
+      "Файлов: {documents}, в поиске: {indexed}, фрагментов: {chunks}, совпадений: {hits}, режим: {mode}",
     rag_hit_meta_score: "Score",
     rag_hit_meta_meeting: "Запись",
+    rag_hit_meta_document: "Файл",
     rag_hit_meta_candidate: "Кандидат",
     rag_hit_meta_vacancy: "Вакансия",
     rag_hit_meta_level: "Уровень",
@@ -758,12 +840,12 @@ const i18n = {
     rag_hit_meta_time: "Время",
     rag_hit_meta_speakers: "Спикеры",
     rag_hits_empty: "Здесь появятся найденные фрагменты с цитатами.",
-    rag_result_files_title: "Файлы результата RAG",
+    rag_result_files_title: "Файлы ответа",
     rag_result_file_download: "Скачать {fmt}",
     busy_rag_query_title: "RAG запрос",
-    busy_rag_query_text: "Ищем фрагменты по выбранным интервью и готовим ответ с цитатами.",
+    busy_rag_query_text: "Читаем прикрепленные файлы, ищем нужные фрагменты и готовим ответ с цитатами.",
     busy_rag_index_title: "Индексация RAG",
-    busy_rag_index_text: "Собираем чанки и citations по выбранным транскриптам.",
+    busy_rag_index_text: "Готовим прикрепленные файлы для поиска.",
     choose_folder: "Выбрать папку",
     folder_not_selected: "Папка не выбрана",
     folder_selected: "Папка выбрана",
@@ -831,7 +913,7 @@ const i18n = {
     quick_record_title: "Запись по ссылке (браузерный захват)",
     quick_record_url_label: "Ссылка встречи",
     help_quick_url:
-      "Ссылка встречи. На старте агент откроет её и запустит браузерный захват вкладки со звуком.",
+      "Сюда вставьте ссылку на встречу. На старте агент откроет её и начнет запись через браузер.",
     quick_record_url_placeholder: "https://...",
     quick_record_duration_label: "Длительность (сек)",
     help_quick_duration:
@@ -945,15 +1027,15 @@ const i18n = {
     flow_results: "Results",
     work_mode_title: "Work mode",
     help_work_mode:
-      "Pick one of three interview capture modes. Only the active mode settings are applied.",
+      "Choose how the agent should record the meeting. Only one option works at a time.",
     help_mode_driver:
-      "Capture system audio through virtual loopback driver (BlackHole/VB-CABLE/Monitor).",
+      "Records sound from a separate system audio source. Needed only for special audio setups.",
     help_mode_browser:
-      "Capture screen/tab via browser. Enable Share audio to include system sound.",
+      "Records from a browser tab. Turn on Share audio if you want meeting sound too.",
     help_mode_api:
-      "Connect to meeting through API connector. MP3 recording starts with Start/Stop controls.",
+      "The agent joins the meeting by itself and saves audio as MP3.",
     help_mode_quick:
-      "Paste a meeting URL and press Start: app opens the meeting and records via browser Share audio.",
+      "Paste a meeting link, press Start, and the agent will open it in the browser for you.",
     work_mode_hint:
       "Choose one mode: only its settings stay active, other sections are dimmed and blocked.",
     work_mode_active_label: "Active mode:",
@@ -1001,15 +1083,15 @@ const i18n = {
     connection_title: "Interview context",
     api_key_label: "API key (optional)",
     help_api_key:
-      "This is the local agent key (X-API-Key), not a meeting password/code. It is required only when local API authentication is enabled.",
+      "This is the agent's internal key, not a meeting password. Most users can leave it empty.",
     api_key_placeholder: "X-API-Key",
     api_record_url_label: "Meeting URL",
     help_api_meeting_url:
-      "Meeting link used by API connector. After start, agent records MP3 and sends it to pipeline.",
+      "Paste the meeting link here so the agent knows where to connect.",
     api_record_url_placeholder: "https://...",
     api_record_duration_label: "Duration (sec)",
     help_api_duration:
-      "Maximum API capture duration. Recording auto-stops when limit is reached.",
+      "How long recording is allowed to run. When the time is over, it stops automatically.",
     api_record_upload_label: "Upload recording to agent pipeline",
     api_record_hint:
       "Press Start in Recording: agent connects by API and starts MP3 recording.",
@@ -1019,7 +1101,7 @@ const i18n = {
     api_record_failed: "API recording failed. Check meeting URL and local API settings.",
     interview_meta_title: "Interview context (optional)",
     help_interview_meta:
-      "Recommended for comparable analytics across interviews, but not required to start.",
+      "You can leave these fields empty. They only help compare interviews later.",
     meta_candidate_name: "Candidate name",
     meta_candidate_id: "Candidate ID",
     meta_vacancy: "Vacancy",
@@ -1027,41 +1109,115 @@ const i18n = {
     meta_interviewer: "Interviewer",
     interview_meta_hint:
       "Fields are optional, but they improve comparability between interviews.",
+    stt_provider_label: "STT provider",
+    help_stt_provider:
+      "This is the service that turns speech into text. You can use local Whisper or a cloud provider.",
+    stt_google_service_account_label: "Google service account JSON",
+    help_stt_google_service_account:
+      "Paste the full Google Cloud service account JSON here. Google STT cannot connect without it.",
+    stt_google_service_account_placeholder:
+      'Paste the full JSON here: {"type":"service_account", ...}',
+    stt_google_service_account_placeholder_saved:
+      "A JSON key is already saved. Leave this empty if you do not want to change it.",
+    stt_google_recognize_url_label: "Google recognize URL",
+    help_stt_google_recognize_url:
+      "Usually you can keep the standard Google URL. Change it only if you use a custom proxy.",
+    stt_google_recognize_url_placeholder:
+      "https://speech.googleapis.com/v1/speech:recognize",
+    stt_salute_client_id_label: "SaluteSpeech Client ID",
+    help_stt_salute_client_id:
+      "This is your SaluteSpeech application ID. It is needed to sign in to the service.",
+    stt_salute_client_id_placeholder: "Your client_id",
+    stt_salute_client_secret_label: "SaluteSpeech Client Secret",
+    help_stt_salute_client_secret:
+      "This is your application secret. If it is already saved and you do not want to change it, leave this empty.",
+    stt_salute_client_secret_placeholder:
+      "Leave empty to keep the saved secret",
+    stt_salute_client_secret_placeholder_saved:
+      "A secret is already saved. Leave this empty if you do not want to change it.",
+    stt_salute_auth_url_label: "SaluteSpeech auth URL",
+    help_stt_salute_auth_url:
+      "This is the URL used to get a temporary access token for SaluteSpeech.",
+    stt_salute_auth_url_placeholder:
+      "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+    stt_salute_recognize_url_label: "SaluteSpeech recognize URL",
+    help_stt_salute_recognize_url:
+      "This is the speech recognition URL for SaluteSpeech. In most cases you can keep the default value.",
+    stt_salute_recognize_url_placeholder:
+      "https://smartspeech.sber.ru/rest/v1/speech:recognize",
+    stt_salute_scope_label: "SaluteSpeech scope",
+    help_stt_salute_scope:
+      "This is the access scope issued for your app. If you did not change it, keep the default value.",
+    stt_salute_scope_placeholder: "SALUTE_SPEECH_PERS",
     stt_model_label: "STT model",
     help_stt_model:
-      "Local faster-whisper model for transcription. Larger models improve quality but increase latency and CPU load.",
+      "This is the recognition option for the current STT service. With local Whisper it is the model size, with cloud providers it is the recognition profile.",
+    llm_provider_label: "LLM provider",
+    help_llm_provider:
+      "This is the service that answers in chat and builds tables, JSON, and other outputs from files.",
+    llm_api_base_label: "LLM API URL",
+    llm_api_base_placeholder: "https://...",
+    help_llm_api_base:
+      "Paste the model service URL here. For a local server, use its local address.",
+    llm_api_key_label: "LLM API key",
+    llm_api_key_placeholder: "Leave empty to keep the saved key",
+    llm_api_key_placeholder_saved: "A key is already saved. Leave empty to keep it",
+    help_llm_api_key:
+      "This is the access key for the model service. If a key is already saved and you do not want to change it, leave this empty.",
     llm_model_label: "LLM model",
     help_llm:
-      "LLM is used in chat to generate formats from attached files. TXT transcript itself is built by STT without LLM.",
+      "This model is used for chat, tables, and other outputs from files. It is not needed to build the transcript itself.",
+    embedding_provider_label: "Embeddings provider",
+    help_embedding_provider:
+      "This service is used for meaning-based search in RAG. It helps find the right places in text.",
+    embedding_api_base_label: "Embeddings API URL",
+    embedding_api_base_placeholder: "https://...",
+    help_embedding_api_base:
+      "Paste the URL of the service that builds meaning vectors for text search.",
+    embedding_api_key_label: "Embeddings API key",
+    embedding_api_key_placeholder: "Leave empty to keep the saved key",
+    embedding_api_key_placeholder_saved: "A key is already saved. Leave empty to keep it",
+    help_embedding_api_key:
+      "This is the access key for the embeddings service. If a key is already saved, you can leave this field empty.",
     embedding_model_label: "Embeddings model",
     help_embeddings_model:
-      "Separate model for semantic RAG retrieval (embeddings). Used for search/compare across interviews. If unavailable, local hashing fallback is used.",
+      "This model helps find the right places in text by meaning, not only by exact words.",
     help_llm_schema:
-      "Optional. If provided, LLM should return valid JSON that follows this schema guide. Leave empty for plain text output.",
+      "If you give a response template here, the model will try to follow it. If not needed, leave it empty.",
     help_transcript_raw:
-      "Raw: direct STT transcript as-is, including fillers, pauses, and noisy fragments.",
+      "Raw is the text exactly as it was recognized. It may contain repeats, pauses, and mistakes.",
     help_transcript_clean:
-      "Clean: user-facing cleaned transcript for reading and reports. Usually built from raw via normalization and optional LLM cleanup.",
+      "Clean is a neater version of the text that is easier to read and use in reports.",
     help_transcript_sources:
-      "Raw = original STT text. Normalized = internal deterministic cleanup without LLM (removes noise/repeats, preserves meaning). Clean = user-facing text after normalizer + optional LLM cleanup.",
+      "Raw = first recognized text. Normalized = lightly cleaned text. Clean = the easiest version to read.",
+    help_rag_topk:
+      "How many text pieces to use for the answer. Lower values are shorter and cleaner, higher values cover more.",
     help_llm_chat_any_format:
-      "LLM in this block works only with attached TXT/CSV/JSON/MD files and generates requested output format.",
+      "Attach files here and ask the model to make a table, JSON, CSV, or any other output you need.",
     help_rag_chat_any_format:
-      "RAG chat compares selected interviews and returns citation-backed answers. You can attach files for extra context.",
+      "This mode searches only inside the attached text files and answers with links to the exact text pieces it used.",
+    help_rag_files:
+      "Attach ready TXT transcripts here. RAG will search and compare only these files.",
+    stt_verify_btn: "Verify STT",
     stt_scan_btn: "Scan",
     stt_apply_btn: "Switch model",
+    provider_apply_btn: "Save",
     llm_scan_btn: "Scan",
     llm_apply_btn: "Switch model",
     embedding_scan_btn: "Scan",
     embedding_apply_btn: "Switch model",
     stt_status_loading: "Loading STT settings...",
+    stt_status_verifying: "Checking STT connection...",
     stt_status_ready: "STT ready. Current model: {model}.",
+    stt_status_on_demand:
+      "STT is configured. Model {model} will load when you start transcript generation.",
     stt_status_scanning: "Scanning STT models...",
     stt_status_scan_done: "STT models found: {count}. Current: {model}.",
     stt_status_scan_empty: "No STT models found. Current: {model}.",
     stt_status_applied: "STT model switched: {model}.",
     stt_status_apply_failed: "Failed to switch STT model.",
     stt_status_unavailable: "STT API is unavailable. Check local backend.",
+    stt_config_applied: "STT settings saved.",
     stt_model_placeholder: "Select STT model",
     stt_model_missing: "Select an STT model first.",
     llm_status_loading: "Loading LLM settings...",
@@ -1072,8 +1228,8 @@ const i18n = {
     llm_status_scan_empty: "No models found. Current: {model}.",
     llm_status_applied: "Model switched: {model}.",
     llm_status_apply_failed: "Failed to switch model.",
-    llm_status_unavailable:
-      "LLM API is unavailable. Check Ollama/OPENAI_API_BASE.",
+    llm_status_unavailable: "LLM API is unavailable. Check the service URL and key.",
+    llm_config_applied: "LLM settings saved.",
     llm_model_placeholder: "Select model",
     llm_model_missing: "Select a model first.",
     embedding_status_loading: "Loading embeddings settings...",
@@ -1085,6 +1241,7 @@ const i18n = {
     embedding_status_apply_failed: "Failed to switch embedding model.",
     embedding_status_unavailable:
       "Embeddings API unavailable. RAG will use hashing fallback.",
+    embedding_config_applied: "Embeddings settings saved.",
     embedding_model_placeholder: "Select embedding model",
     embedding_model_missing: "Select an embedding model first.",
     device_label: "Audio source",
@@ -1123,7 +1280,7 @@ const i18n = {
     stop_btn: "Stop",
     capture_mode_label: "Capture mode",
     help_capture_method:
-      "Shows currently active capture method. Switch mode in the Work mode section.",
+      "Shows where the recording is coming from right now.",
     capture_mode_system: "System audio",
     capture_mode_screen: "Screen + audio",
     capture_mode_hint: "For screen + audio enable “Share audio” in the browser dialog.",
@@ -1131,21 +1288,21 @@ const i18n = {
       "Important: in “System audio” mode microphone is added automatically to capture both voice and system track.",
     include_mic_label: "Include microphone in recording",
     help_mic:
-      "Adds interviewer microphone so questions/comments are also present in recording.",
+      "If enabled, your voice will also be included in the recording.",
     recording_stt_moved_hint:
       "STT settings were moved to Results and are used for report generation from MP3.",
     mic_input_label: "Microphone",
     mic_input_auto: "Auto (recommended)",
     language_profile_label: "Interview language",
     help_language_profile:
-      "STT language hint. Correct choice improves recognition of terms and names.",
+      "Tell the agent which language is being spoken. This usually improves text accuracy.",
     language_profile_mixed: "Mixed (RU + EN)",
     language_profile_ru: "Russian",
     language_profile_en: "English",
     language_profile_hint: "STT hint: choose interview language for better term accuracy.",
     diag_title: "MP3 capture preflight checks",
     help_diagnostics:
-      "Optional preflight: audio access, system/mic levels, and MP3 stream readiness.",
+      "Quick check before start: can the agent hear sound and is recording ready?",
     diag_run_btn: "Run checks",
     diag_hint_idle: "Run this check only if you suspect capture issues.",
     diag_hint_running: "Running diagnostics...",
@@ -1185,7 +1342,7 @@ const i18n = {
     monitor_state_pause: "pause",
     monitor_last_never: "not detected yet",
     help_live_monitor:
-      "This block does not transcribe text. It confirms MP3 capture health only.",
+      "This block does not turn speech into text. It only shows whether sound is reaching the recording.",
     signal_check_running: "Checking capture...",
     signal_check_blocked_recording: "Capture check is available only before recording starts.",
     signal_check_ok: "Capture is working: audio level detected.",
@@ -1343,29 +1500,31 @@ const i18n = {
     llm_chat_role_user: "You",
     llm_chat_role_assistant: "LLM",
     llm_chat_preview_error: "Failed to load artifact preview.",
-    rag_title: "RAG chat / interview comparison",
-    rag_refresh_meetings: "Refresh list",
-    rag_index_selected: "Index selected",
-    rag_run_btn: "Run query",
-    rag_hint_idle: "Select interviews, enter a query, and get an answer with transcript citations.",
-    rag_hint_indexing: "Building RAG index for selected interviews...",
+    rag_title: "RAG",
+    rag_refresh_meetings: "Refresh",
+    rag_index_selected: "Index",
+    rag_run_btn: "Run",
+    rag_hint_idle: "Attach ready TXT files and ask a question. RAG will search only inside these texts.",
+    rag_hint_indexing: "Preparing attached files for search...",
     rag_hint_querying: "Searching relevant chunks and composing the answer...",
     rag_hint_done: "RAG query completed.",
     rag_hint_query_empty: "Enter a RAG question or task.",
     rag_hint_index_no_selection: "Select at least one recording to build an index.",
+    rag_hint_files_required: "Attach at least one TXT file before running RAG.",
     rag_hint_failed: "RAG query failed.",
     rag_hint_no_results: "No relevant transcript chunks were found.",
     rag_hint_export_empty: "Run a RAG query first.",
-    rag_meeting_picker_title: "Interviews for comparison",
+    rag_meeting_picker_title: "Records",
     rag_meeting_picker_hint: "If nothing is selected, search runs on recent recordings.",
     rag_picker_empty: "No recordings yet. Create or import a recording first.",
     rag_select_current: "Current record",
     rag_select_all: "Select all",
     rag_clear_selection: "Clear",
-    rag_saved_set_none: "Saved sets",
-    rag_saved_set_save: "Save set",
-    rag_saved_set_load: "Load",
+    rag_saved_set_none: "Sets",
+    rag_saved_set_save: "Save",
+    rag_saved_set_load: "Open",
     rag_saved_set_delete: "Delete",
+    rag_sets_title: "Sets and extra actions",
     rag_saved_set_prompt_name: "Enter a name for this RAG compare set:",
     rag_saved_set_hint_saved: "Set saved.",
     rag_saved_set_hint_loaded: "Set loaded.",
@@ -1383,34 +1542,36 @@ const i18n = {
     rag_index_status_invalid: "invalid",
     rag_index_status_orphaned: "orphaned",
     rag_index_status_unknown: "unknown",
-    rag_topk_label: "Top-K citations",
-    rag_query_title: "Query across selected interviews (compare)",
-    rag_chat_send_btn: "Send",
-    rag_chat_hint_idle: "RAG chat compares selected interviews and answers with citations.",
+    rag_files_label: "Files for search",
+    rag_topk_label: "Top-K",
+    rag_query_title: "Query",
+    rag_chat_send_btn: "Run",
+    rag_chat_hint_idle: "RAG compares attached files and answers from the text it finds.",
     rag_chat_hint_running: "RAG is processing your request...",
     rag_chat_hint_done: "RAG response received.",
     rag_chat_hint_failed: "Failed to get a RAG response.",
     rag_chat_history_empty: "RAG chat history will appear here.",
     rag_chat_role_user: "You",
     rag_chat_role_assistant: "RAG",
-    rag_use_llm_answer: "Generate an LLM answer from retrieved citations",
-    rag_auto_index: "Auto-index selected interviews before query",
-    rag_force_reindex: "Force rebuild index",
+    rag_use_llm_answer: "Build final answer",
+    rag_auto_index: "Auto-index",
+    rag_force_reindex: "Rebuild file search",
     rag_query_input_label: "Question / task",
     rag_query_input_placeholder:
       "Compare candidates on backend/system design and build a table of strengths and weaknesses.",
-    rag_answer_prompt_label: "Extra answer instruction (optional)",
+    rag_answer_prompt_label: "Answer instruction",
     rag_answer_prompt_placeholder: "Answer briefly, then list evidence with [n] citations.",
-    rag_export_json: "Export JSON",
-    rag_export_csv: "Export citations CSV",
-    rag_export_txt: "Export answer TXT",
+    rag_export_json: "JSON",
+    rag_export_csv: "CSV",
+    rag_export_txt: "TXT",
     rag_answer_title: "Answer (LLM/RAG)",
-    rag_hits_title: "Citations / retrieved chunks",
+    rag_hits_title: "Matched chunks",
     rag_result_meta_none: "No results",
     rag_result_meta_template:
-      "Meetings: {meetings}, indexed: {indexed}, chunks: {chunks}, top hits: {hits}, mode: {mode}",
+      "Files: {documents}, indexed: {indexed}, chunks: {chunks}, hits: {hits}, mode: {mode}",
     rag_hit_meta_score: "Score",
     rag_hit_meta_meeting: "Record",
+    rag_hit_meta_document: "File",
     rag_hit_meta_candidate: "Candidate",
     rag_hit_meta_vacancy: "Vacancy",
     rag_hit_meta_level: "Level",
@@ -1418,12 +1579,12 @@ const i18n = {
     rag_hit_meta_time: "Time",
     rag_hit_meta_speakers: "Speakers",
     rag_hits_empty: "Retrieved chunks with citations will appear here.",
-    rag_result_files_title: "RAG result files",
+    rag_result_files_title: "Answer files",
     rag_result_file_download: "Download {fmt}",
     busy_rag_query_title: "RAG query",
-    busy_rag_query_text: "Searching selected interviews and preparing an answer with citations.",
+    busy_rag_query_text: "Reading attached files, finding the right text chunks, and preparing an answer with citations.",
     busy_rag_index_title: "RAG indexing",
-    busy_rag_index_text: "Building chunks and citations for selected transcripts.",
+    busy_rag_index_text: "Preparing attached files for search.",
     choose_folder: "Choose folder",
     folder_not_selected: "Folder not selected",
     folder_selected: "Folder selected",
@@ -1490,7 +1651,7 @@ const i18n = {
     quick_record_title: "Meeting link (browser capture)",
     quick_record_url_label: "Meeting URL",
     help_quick_url:
-      "Meeting URL. On Start, app opens this URL and records selected tab with Share audio.",
+      "Paste the meeting link here. On Start, the agent opens it and begins recording through the browser.",
     quick_record_url_placeholder: "https://...",
     quick_record_duration_label: "Duration (sec)",
     help_quick_duration:
@@ -1606,14 +1767,34 @@ const els = {
   metaVacancy: document.getElementById("metaVacancy"),
   metaLevel: document.getElementById("metaLevel"),
   metaInterviewer: document.getElementById("metaInterviewer"),
+  sttProviderSelect: document.getElementById("sttProviderSelect"),
+  applySttConfig: document.getElementById("applySttConfig"),
+  verifySttConnectionBtn: document.getElementById("verifySttConnectionBtn"),
+  sttGoogleFields: document.getElementById("sttGoogleFields"),
+  sttGoogleServiceAccountInput: document.getElementById("sttGoogleServiceAccountInput"),
+  sttGoogleRecognizeUrlInput: document.getElementById("sttGoogleRecognizeUrlInput"),
+  sttSaluteFields: document.getElementById("sttSaluteFields"),
+  sttSaluteClientIdInput: document.getElementById("sttSaluteClientIdInput"),
+  sttSaluteClientSecretInput: document.getElementById("sttSaluteClientSecretInput"),
+  sttSaluteAuthUrlInput: document.getElementById("sttSaluteAuthUrlInput"),
+  sttSaluteRecognizeUrlInput: document.getElementById("sttSaluteRecognizeUrlInput"),
+  sttSaluteScopeInput: document.getElementById("sttSaluteScopeInput"),
   sttModelSelect: document.getElementById("sttModelSelect"),
   scanSttModels: document.getElementById("scanSttModels"),
   applySttModel: document.getElementById("applySttModel"),
   sttModelStatusText: document.getElementById("sttModelStatusText"),
+  llmProviderSelect: document.getElementById("llmProviderSelect"),
+  llmApiBaseInput: document.getElementById("llmApiBaseInput"),
+  llmApiKeyInput: document.getElementById("llmApiKeyInput"),
+  applyLlmConfig: document.getElementById("applyLlmConfig"),
   llmModelSelect: document.getElementById("llmModelSelect"),
   scanLlmModels: document.getElementById("scanLlmModels"),
   applyLlmModel: document.getElementById("applyLlmModel"),
   llmStatusText: document.getElementById("llmStatusText"),
+  embeddingProviderSelect: document.getElementById("embeddingProviderSelect"),
+  embeddingApiBaseInput: document.getElementById("embeddingApiBaseInput"),
+  embeddingApiKeyInput: document.getElementById("embeddingApiKeyInput"),
+  applyEmbeddingConfig: document.getElementById("applyEmbeddingConfig"),
   embeddingModelSelect: document.getElementById("embeddingModelSelect"),
   scanEmbeddingModels: document.getElementById("scanEmbeddingModels"),
   applyEmbeddingModel: document.getElementById("applyEmbeddingModel"),
@@ -2062,6 +2243,7 @@ const updateI18n = () => {
     if (dict[key]) el.setAttribute("placeholder", dict[key]);
   });
   renderHelpTips();
+  refreshSttSecretPlaceholders();
   setDriverStatus(state.driverStatusKey, state.driverStatusStyle);
   setFolderStatus(state.folderStatusKey, state.folderStatusStyle);
   renderDeviceStatus();
@@ -2755,6 +2937,25 @@ const _attachmentContextBlock = async (files = []) => {
     }
   }
   return lines.join("\n");
+};
+
+const _ragDocumentsFromAttachments = async (files = []) => {
+  const list = Array.isArray(files) ? files.filter(Boolean).slice(0, 8) : [];
+  const docs = [];
+  for (const file of list) {
+    if (!_attachmentIsTextLike(file)) continue;
+    try {
+      const text = String((await file.text()) || "").trim();
+      if (!text) continue;
+      docs.push({
+        name: String((file && file.name) || "document.txt"),
+        text,
+      });
+    } catch (err) {
+      // ignore unreadable files
+    }
+  }
+  return docs;
 };
 
 const renderLlmChatAttachments = () => {
@@ -3862,9 +4063,11 @@ const renderRagResults = () => {
       els.ragResultMeta.className = "pill muted";
     } else {
       const mode = String(resp.llm_used ? "llm" : "retrieval_only");
+      const searchedCount = Number(resp.documents_count || resp.indexed_documents || resp.searched_meetings || 0);
+      const indexedCount = Number(resp.indexed_documents || resp.indexed_meetings || 0);
       const txt = formatText(dict.rag_result_meta_template || "", {
-        meetings: Number(resp.searched_meetings || 0),
-        indexed: Number(resp.indexed_meetings || 0),
+        documents: searchedCount,
+        indexed: indexedCount,
         chunks: Number(resp.total_chunks_scanned || 0),
         hits: hits.length,
         mode,
@@ -3904,7 +4107,11 @@ const renderRagResults = () => {
 
         const title = document.createElement("div");
         title.className = "rag-hit-title";
-        title.textContent = `${dict.rag_hit_meta_meeting || "Record"}: ${String(hit.meeting_id || "")}`;
+        const sourceName = String(hit.document_name || hit.meeting_id || hit.document_id || "").trim();
+        const sourceLabel = hit.document_name
+          ? dict.rag_hit_meta_document || "Файл"
+          : dict.rag_hit_meta_meeting || "Запись";
+        title.textContent = sourceName ? `${sourceLabel}: ${sourceName}` : sourceLabel;
 
         const meta = document.createElement("div");
         meta.className = "rag-hit-meta";
@@ -4190,51 +4397,37 @@ const runRagQuery = async () => {
     return;
   }
   _syncRagControlsToState();
-  const selectedIds = _ragSelectedMeetingIds();
   const attachments = Array.isArray(state.rag.chatAttachments) ? state.rag.chatAttachments : [];
-  const attachmentContext = await _attachmentContextBlock(attachments);
+  const documents = await _ragDocumentsFromAttachments(attachments);
+  if (!documents.length) {
+    setRagHint("rag_hint_files_required", "bad");
+    setRagChatHint("rag_hint_files_required", "bad");
+    return;
+  }
   const answerPromptBase = String((els.ragAnswerPromptInput && els.ragAnswerPromptInput.value) || "").trim();
-  const mergedAnswerPrompt = [answerPromptBase, attachmentContext].filter(Boolean).join("\n\n");
   const payload = {
     query,
-    transcript_variant: state.rag.source || "clean",
-    meeting_ids: selectedIds,
+    documents,
     top_k: _ragTopKValue(),
-    auto_index: Boolean(state.rag.autoIndex),
     force_reindex: Boolean(state.rag.forceReindex),
     answer_mode: state.rag.useLlmAnswer ? "llm" : "none",
-    answer_prompt: mergedAnswerPrompt,
+    answer_prompt: answerPromptBase || null,
   };
   const userMetaParts = [];
-  if (selectedIds.length) userMetaParts.push(`meetings=${selectedIds.length}`);
-  if (attachments.length) userMetaParts.push(`files=${attachments.length}`);
+  userMetaParts.push(`files=${documents.length}`);
   _ragChatPushMessage({ role: "user", text: query, meta: userMetaParts.join(" • ") });
 
   state.rag.queryBusy = true;
   renderRagWorkspace();
-  if (selectedIds.length && state.rag.autoIndex) {
-    state.rag.indexBusy = true;
-  }
+  state.rag.indexBusy = false;
   renderRagWorkspace();
-  setRagHint(selectedIds.length && state.rag.autoIndex ? "rag_hint_indexing" : "rag_hint_querying", "muted");
+  setRagHint("rag_hint_querying", "muted");
   setRagChatHint("rag_chat_hint_running", "muted");
   const busySignal = showBusyOverlay("busy_rag_query_title", "busy_rag_query_text", { cancelable: true });
   updateBusyOverlayProgress(8);
   try {
-    if (selectedIds.length && state.rag.autoIndex) {
-      const indexJob = await _runRagIndexJobForMeetings(selectedIds, busySignal || null);
-      const okMeetings = Number((indexJob && indexJob.ok_meetings) || 0);
-      const totalMeetings = Number((indexJob && indexJob.total_meetings) || selectedIds.length || 0);
-      if (okMeetings <= 0 && totalMeetings > 0) {
-        throw new Error("rag_query_preindex_failed_all");
-      }
-      // Avoid duplicate synchronous indexing on query request when selection was pre-indexed asynchronously.
-      payload.auto_index = false;
-      setRagHint("rag_hint_querying", "muted");
-      updateBusyOverlayProgress(62);
-    }
-    updateBusyOverlayProgress(70);
-    const res = await fetch("/v1/rag/query", {
+    updateBusyOverlayProgress(64);
+    const res = await fetch("/v1/rag/files/query", {
       method: "POST",
       headers: _ragJsonHeaders(),
       body: JSON.stringify(payload),
@@ -4307,6 +4500,8 @@ const _ragCsvEscape = (value) => {
 const _ragResponseToCsv = (resp) => {
   const hits = Array.isArray(resp && resp.hits) ? resp.hits : [];
   const headers = [
+    "document_id",
+    "document_name",
     "meeting_id",
     "chunk_id",
     "score",
@@ -4328,6 +4523,8 @@ const _ragResponseToCsv = (resp) => {
   hits.forEach((hit) => {
     rows.push(
       [
+        hit.document_id,
+        hit.document_name,
         hit.meeting_id,
         hit.chunk_id,
         hit.score,
@@ -4357,9 +4554,8 @@ const _ragResponseToTxt = (resp) => {
   const hits = Array.isArray(body.hits) ? body.hits : [];
   const lines = [];
   lines.push(`Query: ${String(body.query || "")}`);
-  lines.push(`Transcript source: ${String(body.transcript_variant || "")}`);
   lines.push(
-    `Meetings: searched=${Number(body.searched_meetings || 0)}, indexed=${Number(body.indexed_meetings || 0)}`
+    `Files: attached=${Number(body.documents_count || 0)}, indexed=${Number(body.indexed_documents || 0)}`
   );
   lines.push(`Chunks scanned: ${Number(body.total_chunks_scanned || 0)}`);
   lines.push(`LLM used: ${Boolean(body.llm_used)}`);
@@ -4372,8 +4568,10 @@ const _ragResponseToTxt = (resp) => {
   lines.push("");
   lines.push("Hits:");
   hits.forEach((hit, idx) => {
+    const sourceName = String(hit.document_name || hit.meeting_id || hit.document_id || "").trim();
+    const sourceKind = hit.document_name ? "file" : "meeting";
     lines.push(
-      `[${idx + 1}] meeting=${String(hit.meeting_id || "")} chunk=${String(hit.chunk_id || "")} score=${String(hit.score || "")}`
+      `[${idx + 1}] ${sourceKind}=${sourceName} chunk=${String(hit.chunk_id || "")} score=${String(hit.score || "")}`
     );
     lines.push(
       `lines=${String(hit.line_start ?? "?")}-${String(hit.line_end ?? "?")} time=${String(hit.timestamp_start || "?")}..${String(hit.timestamp_end || "?")}`
@@ -4460,6 +4658,78 @@ const setSttStatus = (
   renderSttStatus();
 };
 
+const setSelectValueWithFallback = (selectEl, value, fallback = "") => {
+  if (!selectEl) return;
+  const next = String(value || "").trim();
+  const has = Array.from(selectEl.options || []).some((option) => String(option.value || "") === next);
+  if (has) {
+    selectEl.value = next;
+    return;
+  }
+  selectEl.value = String(fallback || "").trim();
+};
+
+const updateSecretPlaceholder = (inputEl, isSaved, savedTextKey) => {
+  if (!inputEl) return;
+  if (String(inputEl.value || "").trim()) return;
+  const dict = i18n[state.lang] || {};
+  if (isSaved) {
+    inputEl.setAttribute("placeholder", dict[savedTextKey] || "Saved key is kept");
+    return;
+  }
+  const key = inputEl.getAttribute("data-i18n-placeholder");
+  if (key && dict[key]) {
+    inputEl.setAttribute("placeholder", dict[key]);
+  }
+};
+
+const sttCatalogForProvider = (provider) => {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized === "google") {
+    return ["latest_long", "latest_short", "telephony", "default"];
+  }
+  if (normalized === "salutespeech") {
+    return ["general", "callcenter"];
+  }
+  if (normalized === "mock") {
+    return ["mock"];
+  }
+  return ["tiny", "base", "small", "medium", "large-v3"];
+};
+
+const refreshSttSecretPlaceholders = () => {
+  updateSecretPlaceholder(
+    els.sttGoogleServiceAccountInput,
+    Boolean(state.sttGoogleServiceAccountSet),
+    "stt_google_service_account_placeholder_saved"
+  );
+  updateSecretPlaceholder(
+    els.sttSaluteClientSecretInput,
+    Boolean(state.sttSaluteClientSecretSet),
+    "stt_salute_client_secret_placeholder_saved"
+  );
+};
+
+const renderSttProviderFields = (options = {}) => {
+  const { syncCatalog = false } = options;
+  const provider = String((els.sttProviderSelect && els.sttProviderSelect.value) || "").trim() || "whisper_local";
+  if (els.sttGoogleFields) {
+    els.sttGoogleFields.classList.toggle("hidden", provider !== "google");
+  }
+  if (els.sttSaluteFields) {
+    els.sttSaluteFields.classList.toggle("hidden", provider !== "salutespeech");
+  }
+  refreshSttSecretPlaceholders();
+  if (!syncCatalog || !els.sttModelSelect) {
+    return;
+  }
+  const currentValue = String(els.sttModelSelect.value || "").trim();
+  const currentCatalog = sttCatalogForProvider(provider);
+  const preferred =
+    currentCatalog.includes(currentValue) || !currentValue ? currentValue : currentCatalog[0] || currentValue;
+  setSttModelOptions(currentCatalog, preferred);
+};
+
 const setSttModelOptions = (models = [], preferredModel = "") => {
   if (!els.sttModelSelect) return;
   const incoming = Array.isArray(models) ? models : [];
@@ -4501,6 +4771,47 @@ const setSttModelOptions = (models = [], preferredModel = "") => {
   }
 };
 
+const fetchSttConfig = async () => {
+  if (!els.sttProviderSelect) return;
+  try {
+    const res = await fetch("/v1/stt/config", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`stt_config_failed_${res.status}`);
+    }
+    const data = await res.json();
+    setSelectValueWithFallback(els.sttProviderSelect, data.provider, "whisper_local");
+    state.sttGoogleServiceAccountSet = Boolean(data.google_service_account_set);
+    state.sttSaluteClientSecretSet = Boolean(data.salutespeech_client_secret_set);
+    if (els.sttGoogleServiceAccountInput) {
+      els.sttGoogleServiceAccountInput.value = "";
+    }
+    if (els.sttGoogleRecognizeUrlInput) {
+      els.sttGoogleRecognizeUrlInput.value = String(data.google_recognize_url || "").trim();
+    }
+    if (els.sttSaluteClientIdInput) {
+      els.sttSaluteClientIdInput.value = String(data.salutespeech_client_id || "").trim();
+    }
+    if (els.sttSaluteClientSecretInput) {
+      els.sttSaluteClientSecretInput.value = "";
+    }
+    if (els.sttSaluteAuthUrlInput) {
+      els.sttSaluteAuthUrlInput.value = String(data.salutespeech_auth_url || "").trim();
+    }
+    if (els.sttSaluteRecognizeUrlInput) {
+      els.sttSaluteRecognizeUrlInput.value = String(data.salutespeech_recognize_url || "").trim();
+    }
+    if (els.sttSaluteScopeInput) {
+      els.sttSaluteScopeInput.value = String(data.salutespeech_scope || "").trim();
+    }
+    renderSttProviderFields();
+    if (data.model_id) {
+      setSttModelOptions([data.model_id], data.model_id);
+    }
+  } catch (err) {
+    console.warn("stt config fetch failed", err);
+  }
+};
+
 const fetchSttStatus = async (options = {}) => {
   const { scanAfter = false } = options;
   if (!els.sttModelSelect) return;
@@ -4511,6 +4822,10 @@ const fetchSttStatus = async (options = {}) => {
       throw new Error(`stt_status_failed_${res.status}`);
     }
     const data = await res.json();
+    if (els.sttProviderSelect) {
+      setSelectValueWithFallback(els.sttProviderSelect, data.provider, "whisper_local");
+      renderSttProviderFields();
+    }
     const currentModel = String(data.model_id || "").trim();
     if (currentModel) {
       setSttModelOptions([currentModel], currentModel);
@@ -4522,13 +4837,80 @@ const fetchSttStatus = async (options = {}) => {
       setSttStatus(warmupError, "bad", {}, true);
       return;
     }
-    setSttStatus("stt_status_ready", "good", { model: currentModel || "—" });
+    const message = String(data.message || "").trim();
+    if (message && String(data.provider || "") !== "whisper_local") {
+      setSttStatus(message, Boolean(data.provider_ready) ? "good" : "bad", {}, true);
+      if (scanAfter) {
+        await scanSttModels({ silentErrors: true });
+      }
+      return;
+    }
+    const providerInitialized = Boolean(data.provider_initialized);
+    setSttStatus(providerInitialized ? "stt_status_ready" : "stt_status_on_demand", "good", {
+      model: currentModel || "—",
+    });
     if (scanAfter) {
       await scanSttModels({ silentErrors: true });
     }
   } catch (err) {
     console.warn("stt status fetch failed", err);
     setSttStatus("stt_status_unavailable", "bad");
+  }
+};
+
+const applySttConfig = async () => {
+  if (!els.sttProviderSelect) return;
+  const provider = String(els.sttProviderSelect.value || "").trim() || "whisper_local";
+  const modelId = String((els.sttModelSelect && els.sttModelSelect.value) || "").trim();
+  const googleServiceAccountJson = String(
+    (els.sttGoogleServiceAccountInput && els.sttGoogleServiceAccountInput.value) || ""
+  ).trim();
+  const googleRecognizeUrl = String(
+    (els.sttGoogleRecognizeUrlInput && els.sttGoogleRecognizeUrlInput.value) || ""
+  ).trim();
+  const saluteClientId = String(
+    (els.sttSaluteClientIdInput && els.sttSaluteClientIdInput.value) || ""
+  ).trim();
+  const saluteClientSecret = String(
+    (els.sttSaluteClientSecretInput && els.sttSaluteClientSecretInput.value) || ""
+  ).trim();
+  const saluteAuthUrl = String(
+    (els.sttSaluteAuthUrlInput && els.sttSaluteAuthUrlInput.value) || ""
+  ).trim();
+  const saluteRecognizeUrl = String(
+    (els.sttSaluteRecognizeUrlInput && els.sttSaluteRecognizeUrlInput.value) || ""
+  ).trim();
+  const saluteScope = String((els.sttSaluteScopeInput && els.sttSaluteScopeInput.value) || "").trim();
+  if (els.applySttConfig) els.applySttConfig.disabled = true;
+  try {
+    const res = await fetch("/v1/stt/config", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({
+        provider,
+        model_id: modelId,
+        google_service_account_json: googleServiceAccountJson,
+        google_recognize_url: googleRecognizeUrl,
+        salutespeech_client_id: saluteClientId,
+        salutespeech_client_secret: saluteClientSecret,
+        salutespeech_auth_url: saluteAuthUrl,
+        salutespeech_recognize_url: saluteRecognizeUrl,
+        salutespeech_scope: saluteScope,
+      }),
+    });
+    if (!res.ok) {
+      const detail = await readApiErrorMessage(res, `stt_config_update_failed_${res.status}`);
+      throw new Error(detail);
+    }
+    await fetchSttConfig();
+    await fetchSttStatus({ scanAfter: true });
+    setSttStatus("stt_config_applied", "good");
+  } catch (err) {
+    console.warn("stt config apply failed", err);
+    const detail = String((err && err.message) || "").trim();
+    setSttStatus(detail || "stt_status_apply_failed", "bad", {}, Boolean(detail));
+  } finally {
+    if (els.applySttConfig) els.applySttConfig.disabled = false;
   }
 };
 
@@ -4599,6 +4981,38 @@ const applySttModel = async () => {
     }
   } finally {
     if (els.applySttModel) els.applySttModel.disabled = false;
+  }
+};
+
+const verifySttConnection = async () => {
+  if (!els.verifySttConnectionBtn) return;
+  setSttStatus("stt_status_verifying", "muted");
+  els.verifySttConnectionBtn.disabled = true;
+  try {
+    const res = await fetch("/v1/stt/verify", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) {
+      const detail = await readApiErrorMessage(res, `stt_verify_failed_${res.status}`);
+      throw new Error(detail);
+    }
+    const data = await res.json();
+    await fetchSttStatus();
+    const message = String(data.message || "").trim();
+    setSttStatus(
+      message || (Boolean(data.ok) ? "stt_status_ready" : "stt_status_unavailable"),
+      Boolean(data.ok) ? "good" : "bad",
+      {},
+      Boolean(message)
+    );
+  } catch (err) {
+    console.warn("stt verify failed", err);
+    const detail = String((err && err.message) || "").trim();
+    setSttStatus(detail || "stt_status_unavailable", "bad", {}, Boolean(detail));
+  } finally {
+    els.verifySttConnectionBtn.disabled = false;
   }
 };
 
@@ -5178,6 +5592,30 @@ const listDevices = async (options = {}) => {
   }
 };
 
+const fetchLlmConfig = async () => {
+  if (!els.llmProviderSelect) return;
+  try {
+    const res = await fetch("/v1/llm/config", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`llm_config_failed_${res.status}`);
+    }
+    const data = await res.json();
+    setSelectValueWithFallback(els.llmProviderSelect, data.provider, "openai_compat");
+    if (els.llmApiBaseInput) {
+      els.llmApiBaseInput.value = String(data.api_base || "").trim();
+    }
+    if (els.llmApiKeyInput) {
+      els.llmApiKeyInput.value = "";
+      updateSecretPlaceholder(els.llmApiKeyInput, Boolean(data.api_key_set), "llm_api_key_placeholder_saved");
+    }
+    if (data.model_id) {
+      setLlmModelOptions([data.model_id], data.model_id);
+    }
+  } catch (err) {
+    console.warn("llm config fetch failed", err);
+  }
+};
+
 const fetchLlmStatus = async (options = {}) => {
   const { scanAfter = false } = options;
   if (!els.llmModelSelect) return;
@@ -5198,6 +5636,9 @@ const fetchLlmStatus = async (options = {}) => {
       setLlmStatus("llm_status_disabled", "bad");
       return;
     }
+    if (els.llmProviderSelect) {
+      setSelectValueWithFallback(els.llmProviderSelect, data.provider, "openai_compat");
+    }
     setLlmStatus("llm_status_ready", "good", { model: currentModel || "—" });
     if (scanAfter) {
       await scanLlmModels({ silentErrors: true });
@@ -5205,6 +5646,35 @@ const fetchLlmStatus = async (options = {}) => {
   } catch (err) {
     console.warn("llm status fetch failed", err);
     setLlmStatus("llm_status_unavailable", "bad");
+  }
+};
+
+const applyLlmConfig = async () => {
+  if (!els.llmProviderSelect) return;
+  const provider = String(els.llmProviderSelect.value || "").trim() || "openai_compat";
+  const apiBase = String((els.llmApiBaseInput && els.llmApiBaseInput.value) || "").trim();
+  const apiKey = String((els.llmApiKeyInput && els.llmApiKeyInput.value) || "").trim();
+  const modelId = String((els.llmModelSelect && els.llmModelSelect.value) || "").trim();
+  if (els.applyLlmConfig) els.applyLlmConfig.disabled = true;
+  try {
+    const res = await fetch("/v1/llm/config", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({ provider, api_base: apiBase, api_key: apiKey, model_id: modelId }),
+    });
+    if (!res.ok) {
+      const detail = await readApiErrorMessage(res, `llm_config_update_failed_${res.status}`);
+      throw new Error(detail);
+    }
+    await fetchLlmConfig();
+    await fetchLlmStatus({ scanAfter: true });
+    setLlmStatus("llm_config_applied", "good");
+  } catch (err) {
+    console.warn("llm config apply failed", err);
+    const detail = String((err && err.message) || "").trim();
+    setLlmStatus(detail || "llm_status_apply_failed", "bad", {}, Boolean(detail));
+  } finally {
+    if (els.applyLlmConfig) els.applyLlmConfig.disabled = false;
   }
 };
 
@@ -5375,6 +5845,34 @@ const setEmbeddingModelOptions = (models = [], preferredModel = "") => {
   }
 };
 
+const fetchEmbeddingConfig = async () => {
+  if (!els.embeddingProviderSelect) return;
+  try {
+    const res = await fetch("/v1/llm/embeddings/config", { headers: buildHeaders() });
+    if (!res.ok) {
+      throw new Error(`embedding_config_failed_${res.status}`);
+    }
+    const data = await res.json();
+    setSelectValueWithFallback(els.embeddingProviderSelect, data.provider, "auto");
+    if (els.embeddingApiBaseInput) {
+      els.embeddingApiBaseInput.value = String(data.api_base || "").trim();
+    }
+    if (els.embeddingApiKeyInput) {
+      els.embeddingApiKeyInput.value = "";
+      updateSecretPlaceholder(
+        els.embeddingApiKeyInput,
+        Boolean(data.api_key_set),
+        "embedding_api_key_placeholder_saved"
+      );
+    }
+    if (data.model_id) {
+      setEmbeddingModelOptions([data.model_id], data.model_id);
+    }
+  } catch (err) {
+    console.warn("embedding config fetch failed", err);
+  }
+};
+
 const fetchEmbeddingStatus = async (options = {}) => {
   const { scanAfter = false } = options;
   if (!els.embeddingModelSelect) return;
@@ -5393,6 +5891,9 @@ const fetchEmbeddingStatus = async (options = {}) => {
     }
     const available = Boolean(data.available);
     const message = String(data.message || "").trim();
+    if (els.embeddingProviderSelect) {
+      setSelectValueWithFallback(els.embeddingProviderSelect, data.provider_requested || "", "auto");
+    }
     if (available) {
       if (message) {
         setEmbeddingStatus(message, "good", {}, true);
@@ -5408,6 +5909,35 @@ const fetchEmbeddingStatus = async (options = {}) => {
   } catch (err) {
     console.warn("embedding status fetch failed", err);
     setEmbeddingStatus("embedding_status_unavailable", "bad");
+  }
+};
+
+const applyEmbeddingConfig = async () => {
+  if (!els.embeddingProviderSelect) return;
+  const provider = String(els.embeddingProviderSelect.value || "").trim() || "auto";
+  const apiBase = String((els.embeddingApiBaseInput && els.embeddingApiBaseInput.value) || "").trim();
+  const apiKey = String((els.embeddingApiKeyInput && els.embeddingApiKeyInput.value) || "").trim();
+  const modelId = String((els.embeddingModelSelect && els.embeddingModelSelect.value) || "").trim();
+  if (els.applyEmbeddingConfig) els.applyEmbeddingConfig.disabled = true;
+  try {
+    const res = await fetch("/v1/llm/embeddings/config", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({ provider, api_base: apiBase, api_key: apiKey, model_id: modelId }),
+    });
+    if (!res.ok) {
+      const detail = await readApiErrorMessage(res, `embedding_config_update_failed_${res.status}`);
+      throw new Error(detail);
+    }
+    await fetchEmbeddingConfig();
+    await fetchEmbeddingStatus({ scanAfter: true });
+    setEmbeddingStatus("embedding_config_applied", "good");
+  } catch (err) {
+    console.warn("embedding config apply failed", err);
+    const detail = String((err && err.message) || "").trim();
+    setEmbeddingStatus(detail || "embedding_status_apply_failed", "bad", {}, Boolean(detail));
+  } finally {
+    if (els.applyEmbeddingConfig) els.applyEmbeddingConfig.disabled = false;
   }
 };
 
@@ -8376,6 +8906,36 @@ const updateCaptureUi = () => {
   if (els.languageProfileSelect) {
     els.languageProfileSelect.disabled = sttControlsLocked;
   }
+  if (els.sttProviderSelect) {
+    els.sttProviderSelect.disabled = sttControlsLocked;
+  }
+  if (els.applySttConfig) {
+    els.applySttConfig.disabled = sttControlsLocked;
+  }
+  if (els.verifySttConnectionBtn) {
+    els.verifySttConnectionBtn.disabled = sttControlsLocked;
+  }
+  if (els.sttGoogleServiceAccountInput) {
+    els.sttGoogleServiceAccountInput.disabled = sttControlsLocked;
+  }
+  if (els.sttGoogleRecognizeUrlInput) {
+    els.sttGoogleRecognizeUrlInput.disabled = sttControlsLocked;
+  }
+  if (els.sttSaluteClientIdInput) {
+    els.sttSaluteClientIdInput.disabled = sttControlsLocked;
+  }
+  if (els.sttSaluteClientSecretInput) {
+    els.sttSaluteClientSecretInput.disabled = sttControlsLocked;
+  }
+  if (els.sttSaluteAuthUrlInput) {
+    els.sttSaluteAuthUrlInput.disabled = sttControlsLocked;
+  }
+  if (els.sttSaluteRecognizeUrlInput) {
+    els.sttSaluteRecognizeUrlInput.disabled = sttControlsLocked;
+  }
+  if (els.sttSaluteScopeInput) {
+    els.sttSaluteScopeInput.disabled = sttControlsLocked;
+  }
   if (els.sttModelSelect) {
     els.sttModelSelect.disabled = sttControlsLocked;
   }
@@ -8384,6 +8944,30 @@ const updateCaptureUi = () => {
   }
   if (els.applySttModel) {
     els.applySttModel.disabled = sttControlsLocked;
+  }
+  if (els.llmProviderSelect) {
+    els.llmProviderSelect.disabled = false;
+  }
+  if (els.llmApiBaseInput) {
+    els.llmApiBaseInput.disabled = false;
+  }
+  if (els.llmApiKeyInput) {
+    els.llmApiKeyInput.disabled = false;
+  }
+  if (els.applyLlmConfig) {
+    els.applyLlmConfig.disabled = false;
+  }
+  if (els.embeddingProviderSelect) {
+    els.embeddingProviderSelect.disabled = false;
+  }
+  if (els.embeddingApiBaseInput) {
+    els.embeddingApiBaseInput.disabled = false;
+  }
+  if (els.embeddingApiKeyInput) {
+    els.embeddingApiKeyInput.disabled = false;
+  }
+  if (els.applyEmbeddingConfig) {
+    els.applyEmbeddingConfig.disabled = false;
   }
   if (els.runDiagnostics && !state.signalCheckInProgress) {
     els.runDiagnostics.disabled = !(realtimeEnabled || Boolean(cfg.supportsQuick));
@@ -9330,9 +9914,29 @@ if (els.scanLlmModels) {
     void scanLlmModels();
   });
 }
+if (els.applyLlmConfig) {
+  els.applyLlmConfig.addEventListener("click", () => {
+    void applyLlmConfig();
+  });
+}
 if (els.scanSttModels) {
   els.scanSttModels.addEventListener("click", () => {
     void scanSttModels();
+  });
+}
+if (els.applySttConfig) {
+  els.applySttConfig.addEventListener("click", () => {
+    void applySttConfig();
+  });
+}
+if (els.verifySttConnectionBtn) {
+  els.verifySttConnectionBtn.addEventListener("click", () => {
+    void verifySttConnection();
+  });
+}
+if (els.sttProviderSelect) {
+  els.sttProviderSelect.addEventListener("change", () => {
+    renderSttProviderFields({ syncCatalog: true });
   });
 }
 if (els.applySttModel) {
@@ -9348,6 +9952,11 @@ if (els.applyLlmModel) {
 if (els.scanEmbeddingModels) {
   els.scanEmbeddingModels.addEventListener("click", () => {
     void scanEmbeddingModels();
+  });
+}
+if (els.applyEmbeddingConfig) {
+  els.applyEmbeddingConfig.addEventListener("click", () => {
+    void applyEmbeddingConfig();
   });
 }
 if (els.applyEmbeddingModel) {
@@ -9822,9 +10431,15 @@ setDiagHint("diag_hint_idle", "muted");
 pruneStaleCaptureLock();
 clearCaptureLock();
 listDevices();
-fetchSttStatus({ scanAfter: true });
-fetchLlmStatus({ scanAfter: true });
-fetchEmbeddingStatus({ scanAfter: true });
+fetchSttConfig().finally(() => {
+  void fetchSttStatus({ scanAfter: true });
+});
+fetchLlmConfig().finally(() => {
+  void fetchLlmStatus({ scanAfter: true });
+});
+fetchEmbeddingConfig().finally(() => {
+  void fetchEmbeddingStatus({ scanAfter: true });
+});
 updateCaptureUi();
 fetchRecords();
 setRecordingButtons(false);

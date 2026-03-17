@@ -80,10 +80,10 @@ class Settings(BaseSettings):
     # Storage
     # -------------------------------------------------------------------------
     postgres_dsn: str = Field(
-        default="postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>",
+        default="sqlite:///./data/agent.db",
         alias="POSTGRES_DSN",
     )
-    redis_url: str = Field(default="redis://<REDIS_HOST>:<REDIS_PORT>/<REDIS_DB>", alias="REDIS_URL")
+    redis_url: str = Field(default="redis://127.0.0.1:6379/0", alias="REDIS_URL")
     queue_mode: str = Field(default="redis", alias="QUEUE_MODE")  # redis|inline
 
     chunks_dir: str = Field(default="./data/chunks", alias="CHUNKS_DIR")
@@ -130,6 +130,36 @@ class Settings(BaseSettings):
     stt_provider: str = Field(
         default="whisper_local", alias="STT_PROVIDER"
     )  # whisper_local|google|salutespeech
+    stt_model_id: str | None = Field(default=None, alias="STT_MODEL_ID")
+    google_stt_service_account_json: str | None = Field(
+        default=None, alias="GOOGLE_STT_SERVICE_ACCOUNT_JSON"
+    )
+    google_stt_token_uri: str = Field(
+        default="https://oauth2.googleapis.com/token",
+        alias="GOOGLE_STT_TOKEN_URI",
+    )
+    google_stt_recognize_url: str = Field(
+        default="https://speech.googleapis.com/v1/speech:recognize",
+        alias="GOOGLE_STT_RECOGNIZE_URL",
+    )
+    google_stt_timeout_sec: float = Field(default=45.0, alias="GOOGLE_STT_TIMEOUT_SEC")
+    salutespeech_client_id: str | None = Field(default=None, alias="SALUTESPEECH_CLIENT_ID")
+    salutespeech_client_secret: str | None = Field(
+        default=None, alias="SALUTESPEECH_CLIENT_SECRET"
+    )
+    salutespeech_auth_url: str = Field(
+        default="https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+        alias="SALUTESPEECH_AUTH_URL",
+    )
+    salutespeech_recognize_url: str = Field(
+        default="https://smartspeech.sber.ru/rest/v1/speech:recognize",
+        alias="SALUTESPEECH_RECOGNIZE_URL",
+    )
+    salutespeech_scope: str = Field(
+        default="SALUTE_SPEECH_PERS", alias="SALUTESPEECH_SCOPE"
+    )
+    salutespeech_timeout_sec: float = Field(default=45.0, alias="SALUTESPEECH_TIMEOUT_SEC")
+    salutespeech_verify_tls: bool = Field(default=True, alias="SALUTESPEECH_VERIFY_TLS")
 
     # Локальный Whisper (faster-whisper)
     whisper_model_size: str = Field(
@@ -146,7 +176,7 @@ class Settings(BaseSettings):
     whisper_beam_size: int = Field(default=3, alias="WHISPER_BEAM_SIZE")
     whisper_beam_size_live: int = Field(default=4, alias="WHISPER_BEAM_SIZE_LIVE")
     whisper_beam_size_final: int = Field(default=7, alias="WHISPER_BEAM_SIZE_FINAL")
-    whisper_warmup_on_start: bool = Field(default=True, alias="WHISPER_WARMUP_ON_START")
+    whisper_warmup_on_start: bool = Field(default=False, alias="WHISPER_WARMUP_ON_START")
     whisper_audio_hpf_enabled: bool = Field(default=True, alias="WHISPER_AUDIO_HPF_ENABLED")
     whisper_audio_hpf_cutoff_hz: int = Field(default=80, alias="WHISPER_AUDIO_HPF_CUTOFF_HZ")
     whisper_audio_noise_suppress_enabled: bool = Field(
@@ -247,10 +277,13 @@ class Settings(BaseSettings):
     reconciliation_limit: int = Field(default=200, alias="RECONCILIATION_LIMIT")
 
     # -------------------------------------------------------------------------
-    # LLM (OpenAI-compatible)
+    # LLM / provider config
     # -------------------------------------------------------------------------
     llm_enabled: bool = Field(default=True, alias="LLM_ENABLED")
     llm_live_enabled: bool = Field(default=False, alias="LLM_LIVE_ENABLED")
+    llm_provider: str = Field(default="openai_compat", alias="LLM_PROVIDER")
+    llm_api_base: str | None = Field(default=None, alias="LLM_API_BASE")
+    llm_api_key: str | None = Field(default=None, alias="LLM_API_KEY")
     openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     llm_model_id: str = Field(default="llama3:8b", alias="LLM_MODEL_ID")
@@ -271,6 +304,7 @@ class Settings(BaseSettings):
     llm_cleanup_probe_timeout_sec: float = Field(
         default=2.0, alias="LLM_CLEANUP_PROBE_TIMEOUT_SEC"
     )
+    embedding_provider: str = Field(default="auto", alias="EMBEDDING_PROVIDER")
     embedding_model_id: str = Field(default="nomic-embed-text", alias="EMBEDDING_MODEL_ID")
     embedding_api_base: str | None = Field(default=None, alias="EMBEDDING_API_BASE")
     embedding_api_key: str | None = Field(default=None, alias="EMBEDDING_API_KEY")

@@ -2,15 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
-
-import requests
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.api_gateway.deps import auth_dep
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.logging import get_project_logger
+from interview_analytics_agent.common.provider_settings import (
+    provider_display_name,
+    resolve_embedding_endpoint,
+    resolve_embedding_provider,
+    resolve_llm_endpoint,
+    resolve_llm_provider,
+)
+from interview_analytics_agent.llm.factory import list_models_for_endpoint
 from interview_analytics_agent.services.local_pipeline import stt_runtime_status
 
 router = APIRouter()
@@ -60,70 +65,63 @@ class DiagnosticsUiEventRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-def _is_local_base(api_base: str) -> bool:
-    value = (api_base or "").strip()
-    if not value:
-        return False
-    try:
-        host = (urlparse(value).hostname or "").strip().lower()
-    except Exception:
-        host = ""
-    return host in {"127.0.0.1", "localhost"}
-
-
 def _llm_status() -> DiagnosticsLLMStatus:
     s = get_settings()
     enabled = bool(getattr(s, "llm_enabled", False))
-    model_id = str(getattr(s, "llm_model_id", "") or "").strip()
-    api_base = str(getattr(s, "openai_api_base", "") or "").strip()
-    api_key = str(getattr(s, "openai_api_key", "") or "").strip()
-    provider = "openai_compat" if api_base else "mock"
+    endpoint = resolve_llm_endpoint(s)
+    provider = resolve_llm_provider(s)
     if not enabled:
         return DiagnosticsLLMStatus(
             enabled=False,
             available=False,
-            provider=provider,
-            model_id=model_id,
+            provider=provider_display_name(provider),
+            model_id=endpoint.model_id,
             message="LLM disabled",
         )
-    if not api_base:
+    if provider != "mock" and not endpoint.api_base:
         return DiagnosticsLLMStatus(
             enabled=True,
             available=False,
-            provider=provider,
-            model_id=model_id,
-            message="OPENAI_API_BASE is not configured",
+            provider=provider_display_name(provider),
+            model_id=endpoint.model_id,
+            message="LLM endpoint is not configured",
         )
-
-    bearer = api_key or ("ollama" if _is_local_base(api_base) else "")
-    headers = {"Content-Type": "application/json"}
-    if bearer:
-        headers["Authorization"] = f"Bearer {bearer}"
-    url = api_base.rstrip("/") + "/models"
+    if provider == "mock":
+        return DiagnosticsLLMStatus(
+            enabled=True,
+            available=True,
+            provider=provider_display_name(provider),
+            model_id=endpoint.model_id or "mock",
+            message="Mock LLM is active",
+        )
     try:
-        resp = requests.get(url, headers=headers, timeout=3.5)
-    except requests.RequestException as err:
+        models = list_models_for_endpoint(
+            provider=provider,
+            api_base=endpoint.api_base,
+            api_key=endpoint.api_key,
+            timeout_s=min(5, int(getattr(s, "llm_request_timeout_sec", 5) or 5)),
+        )
+    except Exception as err:
         return DiagnosticsLLMStatus(
             enabled=True,
             available=False,
-            provider=provider,
-            model_id=model_id,
+            provider=provider_display_name(provider),
+            model_id=endpoint.model_id,
             message=f"LLM unavailable: {err}",
         )
-    if resp.status_code >= 400:
-        text = (resp.text or "").strip()[:180]
+    if endpoint.model_id and endpoint.model_id not in models:
         return DiagnosticsLLMStatus(
             enabled=True,
             available=False,
-            provider=provider,
-            model_id=model_id,
-            message=f"LLM HTTP {resp.status_code}: {text}",
+            provider=provider_display_name(provider),
+            model_id=endpoint.model_id,
+            message=f"Model '{endpoint.model_id}' is not available in provider",
         )
     return DiagnosticsLLMStatus(
         enabled=True,
         available=True,
-        provider=provider,
-        model_id=model_id,
+        provider=provider_display_name(provider),
+        model_id=endpoint.model_id,
         message="LLM ready",
     )
 
@@ -131,16 +129,14 @@ def _llm_status() -> DiagnosticsLLMStatus:
 def _embeddings_status() -> DiagnosticsEmbeddingsStatus:
     s = get_settings()
     enabled = bool(getattr(s, "rag_vector_enabled", True))
-    requested = str(getattr(s, "rag_embedding_provider", "auto") or "auto").strip().lower()
-    model_id = str(getattr(s, "embedding_model_id", "") or "").strip()
-    api_base = str(getattr(s, "embedding_api_base", "") or getattr(s, "openai_api_base", "") or "").strip()
-    api_key = str(getattr(s, "embedding_api_key", "") or getattr(s, "openai_api_key", "") or "").strip()
+    requested = resolve_embedding_provider(s)
+    endpoint = resolve_embedding_endpoint(s)
     if not enabled:
         return DiagnosticsEmbeddingsStatus(
             enabled=False,
             available=False,
             provider="disabled",
-            model_id=model_id,
+            model_id=endpoint.model_id,
             message="RAG vector retrieval disabled",
         )
     if requested == "hashing":
@@ -148,68 +144,45 @@ def _embeddings_status() -> DiagnosticsEmbeddingsStatus:
             enabled=True,
             available=True,
             provider="hashing_local",
-            model_id=model_id or "hashing_local",
+            model_id=endpoint.model_id or "hashing_local",
             message="Local hashing embeddings fallback",
         )
-    if not api_base or not model_id:
+    if not endpoint.api_base or not endpoint.model_id:
         return DiagnosticsEmbeddingsStatus(
             enabled=True,
             available=True,
             provider="hashing_local",
-            model_id=model_id or "nomic-embed-text",
+            model_id=endpoint.model_id or "embedding model not set",
             message="Embeddings config incomplete, hashing fallback will be used",
         )
-
-    bearer = api_key or ("ollama" if _is_local_base(api_base) else "")
-    headers = {"Content-Type": "application/json"}
-    if bearer:
-        headers["Authorization"] = f"Bearer {bearer}"
-    url = api_base.rstrip("/") + "/models"
-    provider_name = "ollama_openai_compat" if _is_local_base(api_base) else "openai_compat"
     try:
-        resp = requests.get(url, headers=headers, timeout=3.5)
-    except requests.RequestException as err:
+        models = list_models_for_endpoint(
+            provider=requested,
+            api_base=endpoint.api_base,
+            api_key=endpoint.api_key,
+            timeout_s=min(5, int(getattr(s, "rag_embedding_request_timeout_sec", 5) or 5)),
+        )
+    except Exception as err:
         return DiagnosticsEmbeddingsStatus(
             enabled=True,
             available=False,
-            provider=provider_name,
-            model_id=model_id,
+            provider=provider_display_name(requested),
+            model_id=endpoint.model_id,
             message=f"Embeddings provider unavailable: {err}; hashing fallback",
         )
-    if resp.status_code >= 400:
-        text = (resp.text or "").strip()[:180]
+    if endpoint.model_id not in models:
         return DiagnosticsEmbeddingsStatus(
             enabled=True,
             available=False,
-            provider=provider_name,
-            model_id=model_id,
-            message=f"Embeddings HTTP {resp.status_code}: {text}; hashing fallback",
-        )
-    try:
-        body = resp.json()
-    except Exception:
-        body = {}
-    rows = body.get("data") if isinstance(body, dict) else []
-    models: list[str] = []
-    if isinstance(rows, list):
-        for row in rows:
-            if isinstance(row, dict):
-                model = str(row.get("id") or "").strip()
-                if model:
-                    models.append(model)
-    if model_id and model_id not in models:
-        return DiagnosticsEmbeddingsStatus(
-            enabled=True,
-            available=False,
-            provider=provider_name,
-            model_id=model_id,
-            message=f"Embeddings model '{model_id}' is not installed; hashing fallback",
+            provider=provider_display_name(requested),
+            model_id=endpoint.model_id,
+            message=f"Embeddings model '{endpoint.model_id}' is not available; hashing fallback",
         )
     return DiagnosticsEmbeddingsStatus(
         enabled=True,
         available=True,
-        provider=provider_name,
-        model_id=model_id,
+        provider=provider_display_name(requested),
+        model_id=endpoint.model_id,
         message="Embeddings provider ready",
     )
 

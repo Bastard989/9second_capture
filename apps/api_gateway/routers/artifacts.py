@@ -21,6 +21,11 @@ from pydantic import BaseModel, Field
 from apps.api_gateway.deps import auth_dep
 from interview_analytics_agent.common.config import get_settings
 from interview_analytics_agent.common.logging import get_project_logger
+from interview_analytics_agent.common.provider_settings import (
+    provider_display_name,
+    resolve_embedding_endpoint,
+    resolve_embedding_provider,
+)
 from interview_analytics_agent.common.utils import sha256_hex
 from interview_analytics_agent.common.metrics import (
     record_rag_answer_quality,
@@ -42,6 +47,7 @@ from interview_analytics_agent.processing.enhancer import (
 )
 from interview_analytics_agent.rag.embeddings import (
     cosine_similarity_dense,
+    embed_texts_gemini,
     embed_text_hashing,
     embed_texts_openai_compat,
     hashing_embedding_model_id,
@@ -218,6 +224,8 @@ class RAGIndexJobStatusResponse(BaseModel):
 
 class RAGHit(BaseModel):
     meeting_id: str
+    document_id: str = ""
+    document_name: str = ""
     chunk_id: str
     transcript_variant: TranscriptVariant
     score: float = 0.0
@@ -278,6 +286,8 @@ class RAGQueryResponse(BaseModel):
     embedding_model: str = ""
     searched_meetings: int = 0
     indexed_meetings: int = 0
+    documents_count: int = 0
+    indexed_documents: int = 0
     total_chunks_scanned: int = 0
     hits: list[RAGHit] = Field(default_factory=list)
     retrieval_metrics: RAGRetrievalMetrics = Field(default_factory=RAGRetrievalMetrics)
@@ -289,6 +299,26 @@ class RAGQueryResponse(BaseModel):
     hallucination_rate: float = 0.0
     warnings: list[str] = Field(default_factory=list)
     files: list[RAGResultFileRef] = Field(default_factory=list)
+
+
+class RAGFileDocumentInput(BaseModel):
+    name: str = Field(min_length=1, max_length=240)
+    text: str = Field(min_length=1, max_length=1_500_000)
+    document_id: str | None = Field(default=None, max_length=120)
+    candidate_name: str = Field(default="", max_length=120)
+    candidate_id: str = Field(default="", max_length=120)
+    vacancy: str = Field(default="", max_length=160)
+    level: str = Field(default="", max_length=80)
+    interviewer: str = Field(default="", max_length=120)
+
+
+class RAGFilesQueryRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=4000)
+    documents: list[RAGFileDocumentInput] = Field(default_factory=list, min_length=1, max_length=12)
+    top_k: int = Field(default=8, ge=1, le=50)
+    force_reindex: bool = False
+    answer_mode: RAGAnswerMode = "none"
+    answer_prompt: str | None = None
 
 
 class ReportRequest(BaseModel):
@@ -684,15 +714,16 @@ def _build_llm_artifact_orchestrator():
     if not bool(s.llm_enabled):
         return None
 
+    from interview_analytics_agent.common.provider_settings import resolve_llm_endpoint, resolve_llm_provider
+    from interview_analytics_agent.llm.factory import build_llm_provider
     from interview_analytics_agent.llm.mock import MockLLMProvider
-    from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
     from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
 
-    has_api_base = bool((s.openai_api_base or "").strip())
-    has_api_key = bool((s.openai_api_key or "").strip())
-    if not has_api_base and not has_api_key:
+    endpoint = resolve_llm_endpoint(s)
+    provider = resolve_llm_provider(s)
+    if provider == "mock" and not endpoint.api_base and not endpoint.api_key:
         return LLMOrchestrator(MockLLMProvider())
-    return LLMOrchestrator(OpenAICompatProvider())
+    return LLMOrchestrator(build_llm_provider(s))
 
 
 def _generic_table_json_to_csv(payload: dict[str, Any]) -> bytes:
@@ -1770,7 +1801,7 @@ def _rag_embedding_cache_key(text: str, *, vector_cfg: dict[str, Any]) -> str:
         "model": str(vector_cfg.get("model") or ""),
         "dim": int(vector_cfg.get("dim") or 0),
         "char_ngrams": bool(vector_cfg.get("char_ngrams", True)),
-        "api_base": base if provider == "openai_compat" else "",
+        "api_base": base if provider in {"openai_compat", "gemini"} else "",
         "text_sha256": sha256_hex(str(text or "").encode("utf-8")),
     }
     return sha256_hex(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
@@ -1779,28 +1810,25 @@ def _rag_embedding_cache_key(text: str, *, vector_cfg: dict[str, Any]) -> str:
 def _rag_vector_config() -> dict[str, Any]:
     s = get_settings()
     enabled = bool(getattr(s, "rag_vector_enabled", True))
-    provider_requested = str(getattr(s, "rag_embedding_provider", "auto") or "auto").strip().lower()
-    if provider_requested not in {"auto", "hashing", "openai_compat", "ollama"}:
-        provider_requested = "auto"
+    provider_requested = resolve_embedding_provider(s)
     dim_raw = int(getattr(s, "rag_embedding_dim", 96) or 96)
     dim = max(16, min(dim_raw, 1024))
     char_ngrams = bool(getattr(s, "rag_embedding_char_ngrams", True))
-    embedding_model = str(getattr(s, "embedding_model_id", "nomic-embed-text") or "nomic-embed-text").strip()
-    embedding_api_base = str(
-        getattr(s, "embedding_api_base", "") or getattr(s, "openai_api_base", "") or ""
-    ).strip()
-    embedding_api_key = str(
-        getattr(s, "embedding_api_key", "") or getattr(s, "openai_api_key", "") or ""
-    ).strip()
+    endpoint = resolve_embedding_endpoint(s)
+    embedding_model = endpoint.model_id or "nomic-embed-text"
+    embedding_api_base = endpoint.api_base
+    embedding_api_key = endpoint.api_key
     embedding_timeout_s = max(1.0, float(getattr(s, "rag_embedding_request_timeout_sec", 8.0) or 8.0))
-    can_use_openai_compat = bool(embedding_api_base and embedding_model)
+    can_use_remote = bool(embedding_api_base and embedding_model)
     if provider_requested == "hashing":
         resolved_provider = "hashing_local"
-    elif provider_requested in {"openai_compat", "ollama"}:
-        resolved_provider = "openai_compat" if can_use_openai_compat else "hashing_local"
+    elif provider_requested == "gemini":
+        resolved_provider = "gemini" if can_use_remote else "hashing_local"
+    elif provider_requested in {"openai_compat", "openai", "auto"}:
+        resolved_provider = "openai_compat" if can_use_remote else "hashing_local"
     else:
-        resolved_provider = "openai_compat" if can_use_openai_compat else "hashing_local"
-    provider_label = resolved_provider
+        resolved_provider = "openai_compat" if can_use_remote else "hashing_local"
+    provider_label = provider_requested if resolved_provider != "hashing_local" else "hashing_local"
     if resolved_provider == "openai_compat" and is_local_openai_compat_base(embedding_api_base):
         provider_label = "ollama_openai_compat"
     return {
@@ -1810,11 +1838,15 @@ def _rag_vector_config() -> dict[str, Any]:
         "provider_label": provider_label,
         "model": (
             embedding_model
-            if resolved_provider == "openai_compat"
+            if resolved_provider in {"openai_compat", "gemini"}
             else hashing_embedding_model_id(dim=dim, char_ngrams=char_ngrams)
         ),
         "dim": dim,
         "char_ngrams": char_ngrams,
+        "api_base": embedding_api_base if resolved_provider in {"openai_compat", "gemini"} else "",
+        "api_key": embedding_api_key if resolved_provider in {"openai_compat", "gemini"} else "",
+        "timeout_s": embedding_timeout_s if resolved_provider in {"openai_compat", "gemini"} else 0.0,
+        # legacy keys for backward-compatible cache/index payloads
         "openai_api_base": embedding_api_base if resolved_provider == "openai_compat" else "",
         "openai_api_key": embedding_api_key if resolved_provider == "openai_compat" else "",
         "openai_timeout_s": embedding_timeout_s if resolved_provider == "openai_compat" else 0.0,
@@ -1914,12 +1946,20 @@ def _rag_embed_texts(texts: list[str] | tuple[str, ...], *, vector_cfg: dict[str
                 missing_vectors.extend(
                     embed_texts_openai_compat(
                         batch,
-                        api_base=str(vector_cfg.get("openai_api_base") or ""),
-                        api_key=str(vector_cfg.get("openai_api_key") or ""),
+                        api_base=str(vector_cfg.get("api_base") or vector_cfg.get("openai_api_base") or ""),
+                        api_key=str(vector_cfg.get("api_key") or vector_cfg.get("openai_api_key") or ""),
                         model_id=str(vector_cfg.get("model") or ""),
-                        timeout_s=float(vector_cfg.get("openai_timeout_s") or 8.0),
+                        timeout_s=float(vector_cfg.get("timeout_s") or vector_cfg.get("openai_timeout_s") or 8.0),
                     )
                 )
+        elif provider == "gemini":
+            missing_vectors = embed_texts_gemini(
+                missing_texts,
+                api_base=str(vector_cfg.get("api_base") or ""),
+                api_key=str(vector_cfg.get("api_key") or ""),
+                model_id=str(vector_cfg.get("model") or ""),
+                timeout_s=float(vector_cfg.get("timeout_s") or 8.0),
+            )
         else:
             missing_vectors = [
                 embed_text_hashing(
@@ -1974,9 +2014,9 @@ def _rag_index_has_compatible_vector_config(index_payload: dict[str, Any], vecto
     target_provider = str(vector_cfg.get("provider") or "")
     if current_provider != target_provider:
         return False
-    if current_provider == "openai_compat":
-        current_base = str(current.get("openai_api_base") or "").rstrip("/")
-        target_base = str(vector_cfg.get("openai_api_base") or "").rstrip("/")
+    if current_provider in {"openai_compat", "gemini"}:
+        current_base = str(current.get("api_base") or current.get("openai_api_base") or "").rstrip("/")
+        target_base = str(vector_cfg.get("api_base") or vector_cfg.get("openai_api_base") or "").rstrip("/")
         return (
             str(current.get("model") or "") == str(vector_cfg.get("model") or "")
             and current_base == target_base
@@ -2000,7 +2040,7 @@ def _rag_chunk_embedding(chunk: dict[str, Any], *, vector_cfg: dict[str, Any]) -
     try:
         return _rag_embed_text(str(chunk.get("text") or ""), vector_cfg=vector_cfg)
     except Exception:
-        if str(vector_cfg.get("provider") or "") == "openai_compat":
+        if str(vector_cfg.get("provider") or "") in {"openai_compat", "gemini"}:
             fallback = _rag_hashing_fallback_vector_config(vector_cfg, reason="chunk_embed_fallback")
             return _rag_embed_text(str(chunk.get("text") or ""), vector_cfg=fallback)
         return []
@@ -2328,6 +2368,185 @@ def _ensure_rag_index(
         record_rag_index_latency_ms(service="api_gateway", elapsed_ms=(time.perf_counter() - started) * 1000.0)
 
 
+def _rag_file_index_relpath(document_hash: str) -> str:
+    key = str(document_hash or "").strip().lower()
+    if not key or "/" in key or "\\" in key or ".." in key:
+        raise ValueError("invalid_document_hash")
+    return f"artifacts/rag_files/{key[:2]}/{key}.json"
+
+
+def _rag_read_file_index(document_hash: str) -> dict[str, Any]:
+    path = records.artifact_path(LLM_FILES_WORKSPACE_ID, _rag_file_index_relpath(document_hash))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="rag_file_index_not_found")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="rag_file_index_invalid") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="rag_file_index_invalid")
+    return payload
+
+
+def _rag_write_file_index(document_hash: str, payload: dict[str, Any]) -> None:
+    path = records.artifact_path(LLM_FILES_WORKSPACE_ID, _rag_file_index_relpath(document_hash))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _rag_safe_document_name(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    text = text[:240].strip()
+    return text or "document.txt"
+
+
+def _rag_safe_optional_document_id(value: str | None) -> str:
+    raw = re.sub(r"[^0-9A-Za-zА-Яа-я._-]+", "_", str(value or "").strip())
+    raw = raw.strip("._-")[:120]
+    return raw
+
+
+def _rag_normalize_file_document(doc: RAGFileDocumentInput) -> dict[str, Any]:
+    text = str(doc.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="rag_document_text_required")
+    meta = {
+        "candidate_name": _safe_text(doc.candidate_name, limit=120),
+        "candidate_id": _safe_text(doc.candidate_id, limit=120),
+        "vacancy": _safe_text(doc.vacancy, limit=160),
+        "level": _safe_text(doc.level, limit=80),
+        "interviewer": _safe_text(doc.interviewer, limit=120),
+    }
+    name = _rag_safe_document_name(doc.name)
+    fingerprint_payload = {
+        "name": name,
+        "text": text,
+        "meta": meta,
+    }
+    document_hash = sha256_hex(_json_canonical_bytes(fingerprint_payload))
+    explicit_id = _rag_safe_optional_document_id(doc.document_id)
+    document_id = explicit_id or f"doc_{document_hash[:12]}"
+    return {
+        "document_id": document_id,
+        "document_name": name,
+        "document_hash": document_hash,
+        "document_sha256": sha256_hex(text.encode("utf-8")),
+        "text": text,
+        "text_chars": len(text),
+        "meta": meta,
+    }
+
+
+def _ensure_rag_file_index(
+    document: dict[str, Any],
+    *,
+    force_rebuild: bool = False,
+    max_lines_per_chunk: int = 6,
+    overlap_lines: int = 1,
+    max_chars_per_chunk: int = 1200,
+) -> tuple[dict[str, Any], bool]:
+    started = time.perf_counter()
+    document_hash = str(document.get("document_hash") or "").strip().lower()
+    document_id = str(document.get("document_id") or "").strip()
+    document_name = str(document.get("document_name") or "").strip() or "document.txt"
+    document_text = str(document.get("text") or "")
+    document_sha = str(document.get("document_sha256") or "").strip() or sha256_hex(document_text.encode("utf-8"))
+    document_meta = dict(document.get("meta") or {})
+    chunking = {
+        "max_lines_per_chunk": int(max_lines_per_chunk),
+        "overlap_lines": int(overlap_lines),
+        "max_chars_per_chunk": int(max_chars_per_chunk),
+    }
+    try:
+        vector_cfg = _rag_vector_config()
+        if not force_rebuild:
+            try:
+                current = _rag_read_file_index(document_hash)
+                same_sha = str(current.get("document_sha256") or "") == document_sha
+                same_chunking = isinstance(current.get("chunking"), dict) and current.get("chunking") == chunking
+                same_vector = _rag_index_has_compatible_vector_config(current, vector_cfg)
+                if same_sha and same_chunking and same_vector:
+                    return current, True
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+
+        line_items = _rag_build_line_items(transcript_text=document_text, seg_meta=[])
+        meeting_meta = {
+            "display_name": document_name,
+            "candidate_name": str(document_meta.get("candidate_name") or ""),
+            "candidate_id": str(document_meta.get("candidate_id") or ""),
+            "vacancy": str(document_meta.get("vacancy") or ""),
+            "level": str(document_meta.get("level") or ""),
+            "interviewer": str(document_meta.get("interviewer") or ""),
+        }
+        chunks = _rag_chunk_line_items(
+            line_items,
+            meeting_id=document_id,
+            source="clean",
+            max_lines_per_chunk=max_lines_per_chunk,
+            overlap_lines=overlap_lines,
+            max_chars_per_chunk=max_chars_per_chunk,
+            meeting_meta=meeting_meta,
+        )
+        for chunk in chunks:
+            chunk["document_id"] = document_id
+            chunk["document_name"] = document_name
+
+        active_vector_cfg = dict(vector_cfg)
+        if bool(active_vector_cfg.get("enabled", False)):
+            try:
+                chunk_embeddings = _rag_embed_texts(
+                    [str(chunk.get("text") or "") for chunk in chunks],
+                    vector_cfg=active_vector_cfg,
+                )
+                for chunk, emb in zip(chunks, chunk_embeddings):
+                    chunk["embedding"] = emb
+            except Exception as exc:
+                if str(active_vector_cfg.get("provider") or "") == "openai_compat":
+                    log.warning(
+                        "rag_file_embeddings_fallback_hashing",
+                        extra={
+                            "payload": {
+                                "document_id": document_id,
+                                "document_name": document_name,
+                                "provider": str(active_vector_cfg.get("provider_label") or "openai_compat"),
+                                "model": str(active_vector_cfg.get("model") or ""),
+                                "err": str(exc),
+                            }
+                        },
+                    )
+                    active_vector_cfg = _rag_hashing_fallback_vector_config(
+                        active_vector_cfg, reason="file_index_embed_failed"
+                    )
+                    chunk_embeddings = _rag_embed_texts(
+                        [str(chunk.get("text") or "") for chunk in chunks],
+                        vector_cfg=active_vector_cfg,
+                    )
+                    for chunk, emb in zip(chunks, chunk_embeddings):
+                        chunk["embedding"] = emb
+                else:
+                    raise
+
+        payload = {
+            "schema_version": "rag_file_index_v1",
+            "document_id": document_id,
+            "document_name": document_name,
+            "document_sha256": document_sha,
+            "document_chars": len(document_text),
+            "chunking": chunking,
+            "chunk_count": len(chunks),
+            "indexed_at": _utc_now_iso(),
+            "meeting_meta": meeting_meta,
+            "vector": active_vector_cfg,
+            "chunks": chunks,
+        }
+        _rag_write_file_index(document_hash, payload)
+        return payload, False
+    finally:
+        record_rag_index_latency_ms(service="api_gateway", elapsed_ms=(time.perf_counter() - started) * 1000.0)
+
+
 def _safe_meeting_ids(values: list[str] | None) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -2537,6 +2756,8 @@ def _rag_hits_to_csv_bytes(hits: list[RAGHit]) -> bytes:
         "score",
         "keyword_score",
         "semantic_score",
+        "document_id",
+        "document_name",
         "meeting_id",
         "candidate_name",
         "interviewer",
@@ -2555,6 +2776,8 @@ def _rag_hits_to_csv_bytes(hits: list[RAGHit]) -> bytes:
                 "score": hit.score,
                 "keyword_score": hit.keyword_score,
                 "semantic_score": hit.semantic_score,
+                "document_id": hit.document_id,
+                "document_name": hit.document_name,
                 "meeting_id": hit.meeting_id,
                 "candidate_name": hit.candidate_name,
                 "interviewer": hit.interviewer,
@@ -2580,13 +2803,15 @@ def _rag_answer_text_file(*, query: str, answer: str, hits: list[RAGHit]) -> str
         lines.append("no_hits")
     else:
         for idx, hit in enumerate(hits, start=1):
+            source_value = str(hit.document_name or hit.meeting_id or hit.document_id or "").strip()
+            source_kind = "file" if str(hit.document_name or "").strip() else "meeting"
             line_span = (
                 f"lines={hit.line_start}-{hit.line_end}"
                 if hit.line_start is not None and hit.line_end is not None
                 else "lines=?-?"
             )
             time_span = f"time={hit.timestamp_start or '?'}..{hit.timestamp_end or '?'}"
-            lines.append(f"[{idx}] meeting={hit.meeting_id} chunk={hit.chunk_id} {line_span} {time_span}")
+            lines.append(f"[{idx}] {source_kind}={source_value} chunk={hit.chunk_id} {line_span} {time_span}")
             lines.append(hit.text)
             lines.append("")
     return "\n".join(lines).strip() + "\n"
@@ -2612,6 +2837,8 @@ def _rag_store_query_result_files(
                 {
                     "query": query_resp.query,
                     "meeting_ids": query_resp.meeting_ids,
+                    "documents_count": query_resp.documents_count,
+                    "indexed_documents": query_resp.indexed_documents,
                     "top_k": query_resp.top_k,
                     "retrieval_mode": query_resp.retrieval_mode,
                     "hits": [item.model_dump(mode="json") for item in query_resp.hits],
@@ -2808,6 +3035,8 @@ def _rag_rank_hits(
         meeting_meta = chunk.get("meeting_meta") if isinstance(chunk.get("meeting_meta"), dict) else {}
         meta_text = " ".join(
             [
+                str(chunk.get("document_name") or ""),
+                str(meeting_meta.get("display_name") or ""),
                 str(meeting_meta.get("candidate_name") or ""),
                 str(meeting_meta.get("vacancy") or ""),
                 str(meeting_meta.get("level") or ""),
@@ -2919,9 +3148,13 @@ def _rag_rank_hits(
     hits: list[RAGHit] = []
     for final_score, keyword_score, semantic_score, chunk in ranked[: max(1, min(top_k, 50))]:
         meeting_meta = chunk.get("meeting_meta") if isinstance(chunk.get("meeting_meta"), dict) else {}
+        document_id = str(chunk.get("document_id") or chunk.get("meeting_id") or "")
+        document_name = str(chunk.get("document_name") or meeting_meta.get("display_name") or "")
         hits.append(
             RAGHit(
                 meeting_id=str(chunk.get("meeting_id") or ""),
+                document_id=document_id,
+                document_name=document_name,
                 chunk_id=str(chunk.get("chunk_id") or ""),
                 transcript_variant=transcript_variant,
                 score=round(float(final_score), 6),
@@ -2975,7 +3208,18 @@ def _rag_answer_from_hits(
         time_label = ""
         if hit.timestamp_start or hit.timestamp_end:
             time_label = f"time={hit.timestamp_start or '?'}..{hit.timestamp_end or '?'}"
-        meta_parts = [p for p in [lines_label, time_label, f"meeting={hit.meeting_id}", f"chunk={hit.chunk_id}"] if p]
+        source_label = str(hit.document_name or hit.meeting_id or hit.document_id or "").strip()
+        source_kind = "file" if str(hit.document_name or "").strip() else "meeting"
+        meta_parts = [
+            p
+            for p in [
+                lines_label,
+                time_label,
+                f"{source_kind}={source_label}" if source_label else "",
+                f"chunk={hit.chunk_id}",
+            ]
+            if p
+        ]
         header = f"[{idx}] " + " ".join(meta_parts)
         citations_blocks.append(header + "\n" + hit.text)
 
@@ -3073,6 +3317,116 @@ def _rag_query(req: RAGQueryRequest) -> RAGQueryResponse:
             embedding_model=embedding_model,
             searched_meetings=len(meeting_ids),
             indexed_meetings=len(indexes),
+            total_chunks_scanned=total_chunks,
+            hits=hits,
+            retrieval_metrics=retrieval_metrics,
+            answer=answer,
+            llm_used=llm_used,
+            answer_quality=answer_quality,
+            citation_coverage=round(_rag_clamp01(citation_coverage), 6),
+            unsupported_claim_rate=round(_rag_clamp01(unsupported_claim_rate), 6),
+            hallucination_rate=round(_rag_clamp01(hallucination_rate), 6),
+            warnings=warnings,
+            files=[],
+        )
+
+        try:
+            files = _rag_store_query_result_files(
+                request_id=request_id,
+                generated_at=generated_at,
+                query_resp=response,
+            )
+            response.files = files
+        except Exception:
+            record_rag_export_error(reason="write_failed")
+            response.warnings.append("export_write_failed")
+        return response
+    except HTTPException as exc:
+        record_rag_query_error(reason=str(exc.detail or "http_error"))
+        raise
+    except Exception:
+        record_rag_query_error(reason="unhandled_error")
+        raise
+    finally:
+        record_rag_query_latency_ms(service="api_gateway", elapsed_ms=(time.perf_counter() - started) * 1000.0)
+
+
+def _rag_files_query(req: RAGFilesQueryRequest) -> RAGQueryResponse:
+    started = time.perf_counter()
+    request_id = f"ragf_{uuid.uuid4().hex[:16]}"
+    generated_at = _utc_now_iso()
+    warnings: list[str] = []
+    try:
+        documents = [_rag_normalize_file_document(doc) for doc in list(req.documents or [])]
+        indexes: list[dict[str, Any]] = []
+        if not documents:
+            warnings.append("no_documents_attached")
+        else:
+            for document in documents:
+                try:
+                    index, _cached = _ensure_rag_file_index(
+                        document,
+                        force_rebuild=bool(req.force_reindex),
+                    )
+                    indexes.append(index)
+                except Exception:
+                    doc_label = str(document.get("document_name") or document.get("document_id") or "").strip()
+                    warnings.append(f"index_failed:{doc_label or 'document'}")
+                    record_rag_query_error(reason="file_index_failed")
+                    continue
+
+        index_version, vector_provider, embedding_model = _rag_vector_meta_from_indexes(indexes)
+        hits, total_chunks, retrieval_mode, retrieval_metrics = _rag_rank_hits(
+            query=req.query,
+            indexes=indexes,
+            transcript_variant="clean",
+            top_k=req.top_k,
+        )
+        if not hits:
+            record_rag_no_hits()
+
+        answer = ""
+        llm_used = False
+        if req.answer_mode == "llm":
+            llm_started = time.perf_counter()
+            answer, llm_used, answer_warnings = _rag_answer_from_hits(
+                query=req.query,
+                hits=hits,
+                prompt_override=req.answer_prompt,
+            )
+            record_rag_llm_latency_ms(service="api_gateway", elapsed_ms=(time.perf_counter() - llm_started) * 1000.0)
+            warnings.extend(answer_warnings)
+
+        answer_quality, citation_coverage, unsupported_claim_rate, hallucination_rate, quality_warnings = _rag_answer_quality(
+            answer_text=answer,
+            llm_used=llm_used,
+            hits_count=len(hits),
+        )
+        warnings.extend(quality_warnings)
+        quality_score = 1.0 - max(unsupported_claim_rate, hallucination_rate)
+        record_rag_answer_quality(
+            citation_coverage=citation_coverage,
+            answer_quality_score=quality_score,
+            recall_at_k=retrieval_metrics.recall_at_k,
+            mrr=retrieval_metrics.mrr,
+            ndcg_at_k=retrieval_metrics.ndcg_at_k,
+        )
+
+        response = RAGQueryResponse(
+            request_id=request_id,
+            generated_at=generated_at,
+            query=req.query,
+            transcript_variant="clean",
+            meeting_ids=[],
+            top_k=int(req.top_k),
+            retrieval_mode=retrieval_mode,
+            index_version=index_version,
+            vector_provider=vector_provider,
+            embedding_model=embedding_model,
+            searched_meetings=0,
+            indexed_meetings=0,
+            documents_count=len(documents),
+            indexed_documents=len(indexes),
             total_chunks_scanned=total_chunks,
             hits=hits,
             retrieval_metrics=retrieval_metrics,
@@ -3987,6 +4341,14 @@ def rag_query(
     _=Depends(auth_dep),
 ) -> RAGQueryResponse:
     return _rag_query(req)
+
+
+@router.post("/rag/files/query", response_model=RAGQueryResponse)
+def rag_files_query(
+    req: RAGFilesQueryRequest,
+    _=Depends(auth_dep),
+) -> RAGQueryResponse:
+    return _rag_files_query(req)
 
 
 @router.get("/rag/query/export")

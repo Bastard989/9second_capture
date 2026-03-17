@@ -37,7 +37,10 @@ from interview_analytics_agent.common.metrics import setup_metrics_endpoint
 from interview_analytics_agent.common.observability import setup_observability
 from interview_analytics_agent.common.otel import maybe_setup_otel
 from interview_analytics_agent.common.tracing import current_trace_id, start_trace
-from interview_analytics_agent.services.local_pipeline import warmup_stt_provider_async
+from interview_analytics_agent.services.local_pipeline import (
+    shutdown_stt_provider_runtime,
+    warmup_stt_provider_async,
+)
 from interview_analytics_agent.services.readiness_service import enforce_startup_readiness
 
 log = get_project_logger()
@@ -72,13 +75,16 @@ def _cors_params() -> tuple[list[str], bool]:
 async def _app_lifespan(_app: FastAPI):
     settings = get_settings()
     queue_mode = (settings.queue_mode or "").strip().lower()
-    if (
-        queue_mode == "inline"
-        and (settings.stt_provider or "").strip().lower() == "whisper_local"
-        and bool(getattr(settings, "whisper_warmup_on_start", True))
-    ):
-        warmup_stt_provider_async()
-    yield
+    try:
+        if (
+            queue_mode == "inline"
+            and (settings.stt_provider or "").strip().lower() == "whisper_local"
+            and bool(getattr(settings, "whisper_warmup_on_start", False))
+        ):
+            warmup_stt_provider_async()
+        yield
+    finally:
+        shutdown_stt_provider_runtime()
 
 
 def _create_app() -> FastAPI:
@@ -114,9 +120,25 @@ def _create_app() -> FastAPI:
     def health() -> dict[str, Any]:
         return {"ok": True}
 
+    @app.get("/api/preflight")
+    def api_preflight() -> dict[str, Any]:
+        settings = get_settings()
+        return {
+            "ok": True,
+            "service": "api-gateway",
+            "app_env": settings.app_env,
+            "queue_mode": settings.queue_mode,
+            "stt_provider": settings.stt_provider,
+            "llm_enabled": bool(settings.llm_enabled),
+        }
+
     ui_dir = Path(__file__).parent / "ui"
     if ui_dir.exists():
         app.mount("/ui", StaticFiles(directory=ui_dir), name="ui")
+
+        @app.get("/favicon.ico", include_in_schema=False)
+        def favicon() -> FileResponse:
+            return FileResponse(ui_dir / "favicon.svg", media_type="image/svg+xml")
 
         @app.get("/")
         def ui_index() -> FileResponse:

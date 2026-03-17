@@ -52,6 +52,17 @@ def _agent_pid_file() -> Path:
     return _state_dir() / "agent.pid"
 
 
+def _read_agent_pid_payload() -> dict:
+    path = _agent_pid_file()
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
 def _write_agent_pid(port: int) -> None:
     try:
         payload = {"pid": os.getpid(), "port": int(port)}
@@ -65,17 +76,33 @@ def _cleanup_agent_pid() -> None:
     path = _agent_pid_file()
     if not path.exists():
         return
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        raw = {}
+    raw = _read_agent_pid_payload()
     file_pid = None
     if isinstance(raw, dict):
         try:
             file_pid = int(raw.get("pid"))
         except Exception:
             file_pid = None
-    if file_pid and file_pid != os.getpid():
+    if file_pid and file_pid != os.getpid() and _pid_exists(file_pid):
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        return
+
+
+def _cleanup_stale_agent_pid() -> None:
+    path = _agent_pid_file()
+    if not path.exists():
+        return
+    raw = _read_agent_pid_payload()
+    file_pid = None
+    if isinstance(raw, dict):
+        try:
+            file_pid = int(raw.get("pid"))
+        except Exception:
+            file_pid = None
+    if file_pid and _pid_exists(file_pid):
         return
     try:
         path.unlink(missing_ok=True)
@@ -131,8 +158,25 @@ def _apply_runtime_overrides() -> None:
     if not isinstance(raw, dict):
         return
     allowed_keys = {
+        "LLM_PROVIDER",
+        "LLM_API_BASE",
+        "LLM_API_KEY",
         "LLM_MODEL_ID",
+        "EMBEDDING_PROVIDER",
         "EMBEDDING_MODEL_ID",
+        "STT_PROVIDER",
+        "STT_MODEL_ID",
+        "GOOGLE_STT_SERVICE_ACCOUNT_JSON",
+        "GOOGLE_STT_TOKEN_URI",
+        "GOOGLE_STT_RECOGNIZE_URL",
+        "GOOGLE_STT_TIMEOUT_SEC",
+        "SALUTESPEECH_CLIENT_ID",
+        "SALUTESPEECH_CLIENT_SECRET",
+        "SALUTESPEECH_AUTH_URL",
+        "SALUTESPEECH_RECOGNIZE_URL",
+        "SALUTESPEECH_SCOPE",
+        "SALUTESPEECH_TIMEOUT_SEC",
+        "SALUTESPEECH_VERIFY_TLS",
         "LLM_ENABLED",
         "LLM_LIVE_ENABLED",
         "OPENAI_API_BASE",
@@ -255,10 +299,16 @@ def main() -> None:
     os.environ.setdefault("CHUNKS_DIR", str(agent_root / "chunks"))
     os.environ.setdefault("LLM_ENABLED", "true")
     os.environ.setdefault("LLM_LIVE_ENABLED", "false")
+    os.environ.setdefault("LLM_PROVIDER", "openai_compat")
     os.environ.setdefault("OPENAI_API_BASE", "http://127.0.0.1:11434/v1")
     os.environ.setdefault("OPENAI_API_KEY", "ollama")
+    os.environ.setdefault("LLM_API_BASE", os.environ.get("OPENAI_API_BASE", "http://127.0.0.1:11434/v1"))
+    os.environ.setdefault("LLM_API_KEY", os.environ.get("OPENAI_API_KEY", "ollama"))
     os.environ.setdefault("LLM_MODEL_ID", "llama3.1:8b")
+    os.environ.setdefault("EMBEDDING_PROVIDER", "auto")
     os.environ.setdefault("EMBEDDING_MODEL_ID", "nomic-embed-text")
+    os.environ.setdefault("EMBEDDING_API_BASE", os.environ.get("LLM_API_BASE", ""))
+    os.environ.setdefault("EMBEDDING_API_KEY", os.environ.get("LLM_API_KEY", ""))
     os.environ.setdefault("RAG_EMBEDDING_PROVIDER", "auto")
     os.environ.setdefault("RAG_VECTOR_ENABLED", "true")
     # 0 means "no hard limit" for local Ollama:
@@ -285,8 +335,9 @@ def main() -> None:
     os.environ.setdefault("WHISPER_LOW_SIGNAL_TRACK_LEVEL_THRESHOLD", "0.015")
     os.environ.setdefault("WHISPER_AUDIO_NOISE_GATE_DB", "-48")
     os.environ.setdefault("WHISPER_AUDIO_SPECTRAL_DENOISE_STRENGTH", "0.22")
-    os.environ.setdefault("WHISPER_WARMUP_ON_START", "true")
+    os.environ.setdefault("WHISPER_WARMUP_ON_START", "false")
     _state_dir().mkdir(parents=True, exist_ok=True)
+    _cleanup_stale_agent_pid()
 
     url = f"http://127.0.0.1:{port}"
     print(f"[local-agent] UI: {url}")

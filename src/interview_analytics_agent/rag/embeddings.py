@@ -202,3 +202,69 @@ def embed_texts_openai_compat(
             raise RuntimeError(f"embeddings_invalid_vector:{exc}") from exc
         out.append(_normalize_dense_embedding(values))
     return out
+
+
+def embed_text_gemini(
+    text: str,
+    *,
+    api_base: str,
+    api_key: str,
+    model_id: str,
+    timeout_s: float = 8.0,
+) -> list[float]:
+    items = embed_texts_gemini(
+        [text],
+        api_base=api_base,
+        api_key=api_key,
+        model_id=model_id,
+        timeout_s=timeout_s,
+    )
+    return items[0] if items else []
+
+
+def embed_texts_gemini(
+    texts: list[str] | tuple[str, ...],
+    *,
+    api_base: str,
+    api_key: str,
+    model_id: str,
+    timeout_s: float = 8.0,
+) -> list[list[float]]:
+    base = str(api_base or "").strip()
+    model = str(model_id or "").strip().removeprefix("models/")
+    key = str(api_key or "").strip()
+    if not base:
+        raise ValueError("api_base is required")
+    if not model:
+        raise ValueError("model_id is required")
+    if not key:
+        raise ValueError("api_key is required")
+    items = [str(text or "") for text in list(texts or [])]
+    if not items:
+        return []
+
+    out: list[list[float]] = []
+    url = base.rstrip("/") + f"/models/{model}:embedContent?key={key}"
+    headers = {"Content-Type": "application/json"}
+    for text in items:
+        payload = {
+            "content": {"parts": [{"text": text}]},
+            "taskType": "RETRIEVAL_DOCUMENT",
+        }
+        resp = requests.post(url, headers=headers, json=payload, timeout=max(1.0, float(timeout_s or 8.0)))
+        if resp.status_code >= 400:
+            raise RuntimeError(f"embeddings_http_{resp.status_code}:{(resp.text or '')[:180]}")
+        try:
+            body = resp.json()
+        except Exception as exc:
+            raise RuntimeError(f"embeddings_invalid_json:{exc}") from exc
+        embedding = body.get("embedding") if isinstance(body, dict) else None
+        values = embedding.get("values") if isinstance(embedding, dict) else None
+        if not isinstance(values, list) or not values:
+            raise RuntimeError("embeddings_missing_vector")
+        try:
+            dense = [float(v or 0.0) for v in values]
+        except Exception as exc:
+            raise RuntimeError(f"embeddings_invalid_vector:{exc}") from exc
+        out.append(_normalize_dense_embedding(dense))
+    return out

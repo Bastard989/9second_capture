@@ -57,16 +57,16 @@ def _build_orchestrator():
     if not s.llm_enabled:
         return None
 
+    from interview_analytics_agent.common.provider_settings import resolve_llm_endpoint, resolve_llm_provider
+    from interview_analytics_agent.llm.factory import build_llm_provider
     from interview_analytics_agent.llm.mock import MockLLMProvider
-    from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
     from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
 
-    has_api_base = bool((s.openai_api_base or "").strip())
-    has_api_key = bool((s.openai_api_key or "").strip())
-    if not has_api_base and not has_api_key:
+    endpoint = resolve_llm_endpoint(s)
+    provider = resolve_llm_provider(s)
+    if provider == "mock" and not endpoint.api_base and not endpoint.api_key:
         return LLMOrchestrator(MockLLMProvider())
-
-    return LLMOrchestrator(OpenAICompatProvider())
+    return LLMOrchestrator(build_llm_provider(s))
 
 
 def _to_str_list(value: Any, *, limit: int = 8) -> list[str]:

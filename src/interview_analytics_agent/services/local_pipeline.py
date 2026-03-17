@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import re
 import threading
 from typing import Any
@@ -26,6 +27,7 @@ _stt_warmup_started = False
 _stt_warmup_ready = False
 _stt_warmup_error = ""
 _stt_warmup_lock = threading.Lock()
+_stt_warmup_thread: threading.Thread | None = None
 _TRACK_SPEAKERS = {"system", "mic", "mixed"}
 _FINAL_PASS_SENTENCE_SPLIT_RE = re.compile(r"(?<=[\.\!\?…])\s+")
 _SPACE_RE = re.compile(r"\s+")
@@ -151,10 +153,10 @@ def _split_final_pass_text(transcript: str) -> list[str]:
 
 def warmup_stt_provider_async() -> None:
     """
-    Прогревает модель STT в фоне, чтобы первый live-чанк не зависал
-    на ленивой загрузке модели.
+    Прогревает модель STT в фоне, чтобы первый запуск транскрибации
+    не зависал на ленивой загрузке модели.
     """
-    global _stt_warmup_started
+    global _stt_warmup_started, _stt_warmup_thread
     with _stt_warmup_lock:
         if _stt_warmup_started:
             return
@@ -175,7 +177,9 @@ def warmup_stt_provider_async() -> None:
                 extra={"payload": {"err": str(e)[:200]}},
             )
 
-    threading.Thread(target=_worker, name="stt-warmup", daemon=True).start()
+    thread = threading.Thread(target=_worker, name="stt-warmup", daemon=True)
+    _stt_warmup_thread = thread
+    thread.start()
 
 
 def _build_stt_provider():
@@ -215,18 +219,73 @@ def _get_stt_provider():
     return _stt_provider
 
 
-def reset_stt_provider_runtime(*, restart_warmup: bool = True) -> None:
+def shutdown_stt_provider_runtime(*, join_timeout_sec: float = 1.5) -> None:
+    """
+    Аккуратно очищает in-memory STT runtime при shutdown процесса.
+    """
+    global _stt_provider, _stt_warmup_started, _stt_warmup_ready, _stt_warmup_error, _stt_warmup_thread
+    with _stt_warmup_lock:
+        provider = _stt_provider
+        warmup_thread = _stt_warmup_thread
+        _stt_provider = None
+        _stt_warmup_started = False
+        _stt_warmup_ready = False
+        _stt_warmup_error = ""
+        _stt_warmup_thread = None
+
+    if warmup_thread and warmup_thread.is_alive() and warmup_thread is not threading.current_thread():
+        warmup_thread.join(timeout=max(0.0, float(join_timeout_sec)))
+
+    if provider is None:
+        return
+
+    close_error = None
+    close_fn = getattr(provider, "close", None)
+    if callable(close_fn):
+        try:
+            close_fn()
+        except Exception as err:  # pragma: no cover - defensive shutdown path
+            close_error = err
+
+    model = getattr(provider, "model", None)
+    if model is not None:
+        for attr in ("close", "unload"):
+            cleanup_fn = getattr(model, attr, None)
+            if not callable(cleanup_fn):
+                continue
+            try:
+                cleanup_fn()
+            except Exception as err:  # pragma: no cover - defensive shutdown path
+                close_error = close_error or err
+            break
+        try:
+            setattr(provider, "model", None)
+        except Exception:
+            pass
+
+    if close_error is not None:
+        log.warning(
+            "stt_provider_shutdown_cleanup_failed",
+            extra={"payload": {"err": str(close_error)[:200]}},
+        )
+
+    del provider
+    gc.collect()
+
+
+def reset_stt_provider_runtime(*, restart_warmup: bool = False) -> None:
     """
     Сбрасывает in-memory STT provider, чтобы применить новые runtime-настройки
     (например, смену WHISPER_MODEL_SIZE) без перезапуска процесса.
     """
-    global _stt_provider, _stt_warmup_started, _stt_warmup_ready, _stt_warmup_error
+    global _stt_provider, _stt_warmup_started, _stt_warmup_ready, _stt_warmup_error, _stt_warmup_thread
     with _stt_warmup_lock:
         _stt_provider = None
         _stt_warmup_started = False
         _stt_warmup_ready = False
         _stt_warmup_error = ""
-    if restart_warmup and bool(getattr(get_settings(), "whisper_warmup_on_start", True)):
+        _stt_warmup_thread = None
+    if restart_warmup and bool(getattr(get_settings(), "whisper_warmup_on_start", False)):
         warmup_stt_provider_async()
 
 
@@ -243,6 +302,38 @@ def stt_runtime_status() -> dict[str, object]:
         "warmup_error": str(_stt_warmup_error or ""),
         "provider_initialized": _stt_provider is not None,
     }
+
+
+def verify_stt_provider_connection() -> dict[str, object]:
+    settings = get_settings()
+    provider_name = str(getattr(settings, "stt_provider", "whisper_local") or "whisper_local").strip().lower()
+    try:
+        provider = _get_stt_provider()
+        verify_fn = getattr(provider, "verify_connection", None)
+        if callable(verify_fn):
+            message = str(verify_fn() or "").strip()
+        elif provider_name == "whisper_local":
+            model = str(
+                getattr(settings, "whisper_model_size", "")
+                or getattr(settings, "stt_model_id", "")
+                or "small"
+            ).strip()
+            message = f"Whisper local готов. Модель {model} загружается без ошибок."
+        elif provider_name == "mock":
+            message = "Mock STT готов. Это тестовый режим без реального распознавания."
+        else:
+            message = "STT провайдер инициализирован."
+        return {
+            "ok": True,
+            "provider": provider_name,
+            "message": message,
+        }
+    except Exception as err:
+        return {
+            "ok": False,
+            "provider": provider_name,
+            "message": str(err)[:300],
+        }
 
 
 def process_chunk_inline(

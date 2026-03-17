@@ -136,16 +136,20 @@ def enhance_text(raw_text: str) -> tuple[str, dict]:
     # 0) LLM live (опционально)
     if settings.llm_enabled and settings.llm_live_enabled:
         try:
+            from interview_analytics_agent.common.provider_settings import (
+                resolve_llm_endpoint,
+                resolve_llm_provider,
+            )
+            from interview_analytics_agent.llm.factory import build_llm_provider
             from interview_analytics_agent.llm.mock import MockLLMProvider
-            from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
             from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
 
-            has_api_base = bool((settings.openai_api_base or "").strip())
-            has_api_key = bool((settings.openai_api_key or "").strip())
+            endpoint = resolve_llm_endpoint(settings)
+            provider_name = resolve_llm_provider(settings)
             provider = (
-                OpenAICompatProvider()
-                if (has_api_base or has_api_key)
-                else MockLLMProvider()
+                MockLLMProvider()
+                if provider_name == "mock" and not endpoint.api_base and not endpoint.api_key
+                else build_llm_provider(settings)
             )
             orch = LLMOrchestrator(provider)
             system = (
@@ -201,23 +205,23 @@ def _build_transcript_cleanup_orchestrator():
     s = get_settings()
     if not s.llm_enabled or not bool(getattr(s, "llm_transcript_cleanup_enabled", True)):
         return None
-    has_api_base = bool((s.openai_api_base or "").strip())
-    has_api_key = bool((s.openai_api_key or "").strip())
-    if not has_api_base and not has_api_key:
+    from interview_analytics_agent.common.provider_settings import resolve_llm_endpoint, resolve_llm_provider
+    from interview_analytics_agent.llm.factory import build_llm_provider
+    endpoint = resolve_llm_endpoint(s)
+    provider_name = resolve_llm_provider(s)
+    if provider_name == "mock" and not endpoint.api_base and not endpoint.api_key:
         return None
-
-    from interview_analytics_agent.llm.openai_compat import OpenAICompatProvider
     from interview_analytics_agent.llm.orchestrator import LLMOrchestrator
 
-    provider = OpenAICompatProvider()
+    provider = build_llm_provider(s)
     probe_timeout = min(
         2.8,
         max(1.0, float(getattr(s, "llm_cleanup_probe_timeout_sec", 2.0) or 2.0)),
     )
-    if not provider.is_available(timeout_s=probe_timeout):
+    if hasattr(provider, "is_available") and not provider.is_available(timeout_s=probe_timeout):
         log.warning(
             "llm_transcript_cleanup_unavailable",
-            extra={"payload": {"api_base": str(s.openai_api_base or ""), "timeout_sec": probe_timeout}},
+            extra={"payload": {"api_base": endpoint.api_base, "provider": provider_name, "timeout_sec": probe_timeout}},
         )
         return None
     return LLMOrchestrator(provider)
