@@ -22,6 +22,22 @@
 - RAG-поиск по готовым TXT-файлам;
 - локальная работа без обязательной привязки к одному провайдеру.
 
+## Архитектура репозитория
+
+Репозиторий организован как monorepo с разделением по runtime-ролям:
+
+- `apps/` — runtime сервисы и точки входа
+- `src/interview_analytics_agent/` — общее ядро, доменная логика и shared code
+- `scripts/` — совместимые обертки запуска и dev-команды
+- `deploy/`, `ops/`, `configs/` — инфраструктурный слой
+- `tools/` — guardrails, packaging, smoke и вспомогательные инструменты
+- `docs/`, `diagrams/` — документация и архитектурные решения
+
+Подробно:
+
+- [apps/README.md](/Users/kirill/Documents/New%20project/9second_capture/apps/README.md)
+- [docs/adr/0011-runtime-role-repo-layout.md](/Users/kirill/Documents/New%20project/9second_capture/docs/adr/0011-runtime-role-repo-layout.md)
+
 ## Универсальная модель провайдеров
 
 Агент больше не привязан к одному стеку. У него три независимых слоя:
