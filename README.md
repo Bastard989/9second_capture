@@ -35,8 +35,8 @@
 
 Подробно:
 
-- [apps/README.md](/Users/kirill/Documents/New%20project/9second_capture/apps/README.md)
-- [docs/adr/0011-runtime-role-repo-layout.md](/Users/kirill/Documents/New%20project/9second_capture/docs/adr/0011-runtime-role-repo-layout.md)
+- `apps/README.md`
+- `docs/adr/0011-runtime-role-repo-layout.md`
 
 ## Универсальная модель провайдеров
 
@@ -141,13 +141,13 @@ RAG работает по готовым TXT-файлам:
 1. Клонируйте репозиторий:
 
 ```bash
-git clone git@github.com:Bastard989/9second_capture.git
+git clone <repository-url>
 ```
 
 2. Перейдите в папку проекта:
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 ```
 
 3. Создайте и активируйте виртуальное окружение:
@@ -181,7 +181,7 @@ python3 scripts/launcher.py
 ## Быстрый запуск без мастера
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 python3 scripts/run_local_agent.py
 ```
 
@@ -286,22 +286,22 @@ STT_MODEL_ID='general'
 ## Сборка macOS приложения
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 bash tools/packaging/build_mac.sh
-open -n "/Users/kirill/Documents/New project/9second_capture/dist/9second_capture.app"
+open -n <project-directory>/dist/9second_capture.app
 ```
 
 ## Тесты
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 pytest -q tests/unit
 ```
 
 RAG benchmark:
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 python3 tools/rag_benchmark.py \
   --api-base http://127.0.0.1:8010 \
   --dataset "интеграция rag/benchmark_dataset.sample.json" \

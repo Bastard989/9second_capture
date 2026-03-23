@@ -32,6 +32,6 @@
 ## Запуск
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 python3 scripts/run_local_agent.py
 ```

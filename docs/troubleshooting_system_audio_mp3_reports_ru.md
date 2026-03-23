@@ -46,7 +46,7 @@
 Проверка:
 1. В `LLM модель` выбрать chat-модель (например `llama3.1:8b`).
 2. В `Embeddings модель` выбрать embedding-модель отдельно.
-3. Проверить доступность провайдера (`ollama serve`, `OPENAI_API_BASE`).
+3. Проверить доступность выбранного LLM-провайдера и его API URL.
 
 ## 5. Пустая/плохая таблица из LLM
 
@@ -70,11 +70,11 @@
 ## 7. Полезные команды
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 python3 scripts/launcher.py
 ```
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 python3 scripts/run_local_agent.py
 ```

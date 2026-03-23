@@ -7,7 +7,7 @@
 1. Установите зависимости:
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 pip install -r requirements.txt
 ```
 
@@ -17,7 +17,7 @@ pip install -r requirements.txt
 brew install ffmpeg
 ```
 
-3. Для локальной LLM (Ollama):
+3. Для локального LLM/embeddings-провайдера (например, Ollama):
 
 ```bash
 brew install --cask ollama
@@ -28,11 +28,11 @@ ollama pull llama3.1:8b
 ## 2. Запуск
 
 ```bash
-cd "/Users/kirill/Documents/New project/9second_capture"
+cd <project-directory>
 python3 scripts/run_local_agent.py
 ```
 
-Откройте UI по адресу из логов запуска (обычно `http://127.0.0.1:8010`).
+Откройте UI по адресу из логов запуска или из мастера установки.
 
 ## 3. Режим записи
 

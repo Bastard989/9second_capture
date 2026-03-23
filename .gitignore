@@ -41,3 +41,9 @@ reports/*.json
 reports/cycle_*.md
 Dockerfile.bak.*
 docker-compose.yml.bak.*
+
+# Release publication pack generated artifacts
+release/publication_pack/artifacts/
+release/publication_pack/docs_docx/
+release/publication_pack/docs_html/
+release/publication_pack/docs_rtf/
